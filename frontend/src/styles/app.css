@@ -133,6 +133,16 @@ body {
   margin: 0;
 }
 
+.page-alert {
+  margin-bottom: 16px;
+}
+
+.problem-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .workspace-grid h2.ant-typography {
   margin-bottom: 16px;
 }
@@ -146,10 +156,18 @@ body {
 }
 
 .workspace-pane h3 {
-  margin: 0;
+  margin: 0 0 12px;
   color: #344034;
   font-size: 15px;
   font-weight: 650;
+}
+
+.markdown-statement {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #243027;
+  font: inherit;
 }
 
 @media (max-width: 760px) {

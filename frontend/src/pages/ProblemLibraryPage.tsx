@@ -1,32 +1,103 @@
-import { Table, Tag, Typography } from 'antd'
+import { useQuery } from '@tanstack/react-query'
+import { Alert, Space, Table, Tag, Typography } from 'antd'
+import { Link } from 'react-router-dom'
 
-const rows = [
-  {
-    key: 'two-sum',
-    id: 1,
-    title: 'Two Sum',
-    difficulty: 'Easy',
-    status: '未开始',
-  },
-]
+import { getProblems, type ProblemListItem } from '../api/problems'
+
+function difficultyColor(difficulty: ProblemListItem['difficulty']) {
+  if (difficulty === 'Easy') {
+    return 'success'
+  }
+  if (difficulty === 'Medium') {
+    return 'warning'
+  }
+  return 'error'
+}
 
 export function ProblemLibraryPage() {
+  const { data, isError, isLoading } = useQuery({
+    queryKey: ['problems'],
+    queryFn: getProblems,
+  })
+
   return (
     <section className="page-section">
       <div className="page-heading">
         <Typography.Title level={2}>题库列表</Typography.Title>
-        <Tag color="default">foundation</Tag>
+        <Tag color="default">{data?.total ?? 0} 题</Tag>
       </div>
+
+      {isError ? (
+        <Alert
+          showIcon
+          type="error"
+          message="题库加载失败"
+          className="page-alert"
+        />
+      ) : null}
+
       <Table
-        rowKey="key"
+        rowKey="slug"
         size="middle"
-        pagination={false}
-        dataSource={rows}
+        loading={isLoading}
+        pagination={{
+          current: data?.page ?? 1,
+          pageSize: data?.page_size ?? 20,
+          total: data?.total ?? 0,
+          showSizeChanger: false,
+        }}
+        dataSource={data?.items ?? []}
         columns={[
-          { title: '题号', dataIndex: 'id', width: 88 },
-          { title: '标题', dataIndex: 'title' },
-          { title: '难度', dataIndex: 'difficulty', width: 120 },
-          { title: '状态', dataIndex: 'status', width: 120 },
+          { title: '题号', dataIndex: 'frontend_id', width: 88 },
+          {
+            title: '标题',
+            key: 'title',
+            render: (_, row: ProblemListItem) => (
+              <Link to={`/workspace/${row.slug}`}>
+                <Space direction="vertical" size={0}>
+                  <span>{row.title}</span>
+                  <Typography.Text type="secondary">
+                    {row.translated_title}
+                  </Typography.Text>
+                </Space>
+              </Link>
+            ),
+          },
+          {
+            title: '难度',
+            dataIndex: 'difficulty',
+            width: 120,
+            render: (difficulty: ProblemListItem['difficulty']) => (
+              <Tag color={difficultyColor(difficulty)}>{difficulty}</Tag>
+            ),
+          },
+          {
+            title: '标签',
+            key: 'tags',
+            render: (_, row: ProblemListItem) => (
+              <div className="problem-tags">
+                {row.tags.map((tag) => (
+                  <Tag key={tag.slug}>
+                    {tag.translated_name || tag.name || tag.slug}
+                  </Tag>
+                ))}
+              </div>
+            ),
+          },
+          {
+            title: '分类',
+            key: 'categories',
+            width: 180,
+            render: (_, row: ProblemListItem) => (
+              <div className="problem-tags">
+                {row.categories.map((category) => (
+                  <Tag key={category.slug} color="blue">
+                    {category.name}
+                  </Tag>
+                ))}
+              </div>
+            ),
+          },
         ]}
       />
     </section>
