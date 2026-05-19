@@ -62,59 +62,264 @@
 7. **画像增量可审计**：用户画像当前值和每次训练带来的 `profile_delta` 分开保存，便于解释“为什么推荐下一题”。
 8. **Trace 是观测层，不是业务主状态**：`agent_trace` 和 `retrieval_trace` 用于调试和评估，业务页面读取应优先依赖 session、summary、profile 和 recommendation 表。
 
-## 全局 ASCII 图
+## 数据流程 ASCII 图
+
+本节按开发任务的数据流转来读表关系。箭头表示一次业务流程中主要的读写方向，不表示数据库外键的完整集合；完整字段和外键见后续分表说明。
+
+读图约定：
 
 ```text
-app_user
-  |
-  +-- auth_session
-  |
-  +-- llm_credential
-  |      ^                         +-------------------------+
-  |      |                         |                         |
-  |      +-------------------- coach_turn               agent_trace
-  |                                                            ^
-  +-- goal_calibration_draft                                  |
-  |        |                                                   |
-  +-- user_learning_goal -- study_plan -- study_plan_item -- problem
-  |                              |              |              |
-  |                              |              +--------------+
-  |                              |
-  +-- practice_session ----------+
-  |        | problem_id / goal_id / plan_id / plan_item_id
-  |        |
-  |        +-- practice_event
-  |        +-- code_snapshot
-  |        +-- submission_feedback
-  |        +-- coach_turn
-  |        +-- tool_run -- generated_test_case
-  |        +-- agent_thread
-  |        +-- session_summary -- profile_delta
-  |        |                         |
-  |        |                         +-- user_skill_profile
-  |        |                         +-- user_stuck_point_profile
-  |        |
-  |        +-- mock_interview_summary
-  |        +-- agent_trace
-  |        +-- retrieval_trace -- knowledge_chunk -- knowledge_doc -- knowledge_source
-  |
-  +-- recommendation_batch -- recommendation_item -- problem
-  |
-  +-- dashboard_metric_snapshot
-
-problem_category -- problem_category_item -- problem
-
-eval_run -- eval_case_result
+[table]                 表或核心数据对象
+read [table]            读取表
+write [table]           写入或更新表
+append [table]          追加事件、日志或 trace
+derive [table]          从上游结果派生写入
+reuse [table]           复用既有训练主链路表
+search [table]          检索表或向量索引
 ```
 
-说明：
+### 流程 1：注册、登录与 API 资产配置
 
-- `practice_session` 是训练闭环的中心表，连接用户、题目、目标、计划项和后续所有过程数据。
-- `practice_event` 保存用户消息、教练回复、状态变化和关键操作；`coach_turn` 保存 AI 教练单轮结构化输出。
-- `tool_run` 记录工具执行，`generated_test_case` 只保存需要复用或展示的测试用例。
-- `session_summary` 是单题复盘结果；`profile_delta` 把复盘结果转化为画像增量。
-- `knowledge_doc` 和 `knowledge_chunk` 是 RAG 知识库核心；`retrieval_trace` 记录某次检索实际拿到和使用了哪些 chunk。
-- `agent_trace`、`retrieval_trace`、`eval_run`、`eval_case_result` 属于观测和评估域，不承担主业务状态。
+```text
+用户注册
+  -> write [app_user]
+  -> write [auth_session]
+  -> 浏览器收到 HttpOnly session cookie
+
+用户登录
+  -> read  [app_user] by username/email
+  -> write [auth_session]
+  -> update [app_user.last_login_at]
+
+进入应用
+  -> read [auth_session] from cookie token hash
+  -> read [app_user]
+  -> read [llm_credential] where user_id = current user
+      |
+      +-- no enabled/preferred credential
+      |     -> redirect /settings/api-keys
+      |
+      +-- has enabled/preferred credential
+            -> continue to goal calibration / study plan / workspace
+
+新增或更新 API 资产
+  -> encrypt api_key
+  -> write [llm_credential.api_key_ciphertext]
+  -> write [llm_credential.api_key_mask]
+  -> update [llm_credential.is_enabled / is_preferred / is_active]
+
+后续 LLM 调用
+  -> read [llm_credential] using sticky routing
+  -> update [llm_credential.failure_count / status / last_used_at / last_error]
+```
+
+为什么这样设计：
+
+- `app_user` 是所有用户私有数据的根，目标、计划、训练、画像和模型资产都从它隔离。
+- `auth_session` 独立于用户表，便于多设备登录、退出、过期和撤销；数据库只保存 token hash。
+- `llm_credential` 绑定用户而不是全局配置，避免后续目标生成、AI 教练和 RAG 总结共享同一个服务端 key。
+- API key 密文、mask、启用状态、首选状态和当前通讯状态放在同一表，方便后端一次选择当前可用资产。
+
+### 流程 2：目标校准与学习计划生成
+
+```text
+用户提交目标校准表单
+  -> read  [auth_session] -> current user
+  -> read  [llm_credential] choose active/preferred model asset
+  -> read  [problem] and [problem_category_item] for candidate problem pool
+  -> write [goal_calibration_draft.input_json]
+
+调用 LLM 生成目标和计划草稿
+  -> update [goal_calibration_draft.draft_goal_json]
+  -> update [goal_calibration_draft.draft_plan_json]
+  -> update [goal_calibration_draft.prompt_version / model_name / status]
+  -> append [agent_trace] for prompt/model/token/latency
+
+用户确认草稿
+  -> archive old active [user_learning_goal]
+  -> archive old active [study_plan]
+  -> write [user_learning_goal] from confirmed draft
+  -> write [study_plan] linked to user_learning_goal
+  -> write [study_plan_item] linked to study_plan + problem
+  -> update [goal_calibration_draft.confirmed_goal_id / confirmed_plan_id / status]
+
+学习计划页
+  -> read [study_plan] where user_id + status = active
+  -> read [study_plan_item] ordered by order_index
+  -> read [problem] for title/difficulty/tags
+```
+
+为什么这样设计：
+
+- `goal_calibration_draft` 保存“用户提交、LLM 生成、用户确认”之间的中间态，避免 LLM 草稿一生成就污染正式目标和计划。
+- `user_learning_goal` 和 `study_plan` 分开，是因为目标回答“为什么练”，计划回答“接下来练什么、按什么顺序练”。
+- `study_plan_item` 引用 `problem`，计划只保存推荐理由、排序、建议模式和状态，不复制题面。
+- 旧 active 目标和计划归档而不是覆盖，后续可以解释用户训练路线如何变化。
+
+### 流程 3：进入工作台与训练会话恢复
+
+```text
+用户从计划项进入工作台
+  -> read [auth_session] -> current user
+  -> read [study_plan_item]
+  -> read [problem]
+  -> find active [practice_session] by user_id + problem_id + plan_item_id
+      |
+      +-- not found
+      |     -> write [practice_session]
+      |          user_id, problem_id, goal_id, study_plan_id, plan_item_id
+      |          training_mode, phase, current_hint_level
+      |     -> append [practice_event] event_type = session_started
+      |     -> update [study_plan_item.status] = in_progress
+      |
+      +-- found
+            -> read [practice_session]
+            -> read latest [code_snapshot]
+            -> read recent [practice_event]
+
+工作台页面渲染
+  -> read [problem.statement_md / metadata_json]
+  -> read [practice_session] for mode/phase/hint gear/status
+  -> read [code_snapshot] for editor content
+  -> read [practice_event] for conversation timeline
+```
+
+为什么这样设计：
+
+- `practice_session` 保存工作台当前状态，支持刷新页面后恢复训练模式、阶段、提示档位和最终结果。
+- `practice_event` 保存发生过什么，支持会话回放、复盘、Trace 排查和后续 LangGraph 状态重建。
+- `code_snapshot` 单独建表，是因为代码会频繁变化，不能塞进 session 主表，也不能只放在事件 payload 里。
+- `study_plan_item.status` 只保存计划进度摘要；真实过程仍以 session 和 event 为准。
+
+### 流程 4：AI 教练对话、RAG 检索与 Trace
+
+```text
+用户发送思路/问题/代码片段
+  -> append [practice_event] role = user
+  -> read [practice_session] for phase/mode/hint_level
+  -> read [problem] for safe problem context
+  -> read [user_learning_goal] and [study_plan_item] for training intent
+  -> read [user_skill_profile] and [user_stuck_point_profile] for memory context
+
+需要 RAG 教练知识
+  -> read [knowledge_doc] by problem/tags/phase/stuck_point
+  -> search [knowledge_chunk] by vector
+  -> filter by hint_level_min/max and has_full_solution
+  -> append [retrieval_trace]
+        query, retrieved_doc_ids, selected_chunk_ids,
+        filtered_out_chunk_ids, used_in_prompt
+
+调用 LLM 教练
+  -> read [llm_credential] using sticky routing
+  -> write [coach_turn]
+        diagnosed_stuck_point, next_action, hint_level,
+        visible_hint_gear, should_reveal_solution, response_json
+  -> append [practice_event] role = assistant
+  -> update [practice_session.phase / current_hint_level / max_hint_level_used]
+  -> append [agent_trace]
+        node_name, prompt_version, model_name, tokens, latency, tool_calls
+```
+
+为什么这样设计：
+
+- `practice_event` 面向对话时间线；`coach_turn` 面向 AI 结构化结果。两者分开后，前端展示和后端评估都更直接。
+- RAG 先查 `knowledge_doc` / `knowledge_chunk`，再写 `retrieval_trace`，可以解释某次回复引用了什么、过滤了什么。
+- `has_full_solution` 和 hint level 过滤放在知识表与检索 trace 中，直接服务“AI 教练不能低层级泄题”的产品约束。
+- `agent_trace` 不承担业务状态，只记录图节点、模型、token、latency 和工具调用，方便调试和 Eval。
+
+### 流程 5：代码运行、提交回填、复盘、画像与推荐
+
+```text
+用户保存或运行代码
+  -> write [code_snapshot]
+  -> append [practice_event] event_type = code_saved / run_requested
+
+运行 Python 代码
+  -> read [code_snapshot]
+  -> call code-runner container
+  -> write [tool_run]
+        tool_name = run_python_code,
+        input_json, output_json, status, elapsed_ms
+  -> optional write [generated_test_case]
+  -> append [practice_event] role = tool
+
+用户回填 LeetCode 提交结果
+  -> write [submission_feedback]
+  -> update [practice_session.final_result / attempt_count]
+  -> append [practice_event] event_type = submission_feedback
+
+用户结束训练并生成复盘
+  -> read [practice_session]
+  -> read [practice_event]
+  -> read [coach_turn]
+  -> read [code_snapshot]
+  -> read [tool_run]
+  -> read [submission_feedback]
+  -> write [session_summary]
+
+画像更新
+  -> derive [profile_delta] from session_summary
+  -> update [user_skill_profile]
+  -> update [user_stuck_point_profile]
+
+下一题或下一组推荐
+  -> read [user_learning_goal]
+  -> read [study_plan_item]
+  -> read [user_skill_profile]
+  -> read [user_stuck_point_profile]
+  -> read recent [session_summary]
+  -> write [recommendation_batch]
+  -> write [recommendation_item] linked to problem
+
+学习仪表盘
+  -> read summary/profile/recommendation tables
+  -> optional write [dashboard_metric_snapshot]
+```
+
+为什么这样设计：
+
+- `tool_run` 统一记录工具调用，后续增加静态分析、错误归因、测试用例生成时不需要新增一套日志表。
+- `submission_feedback` 独立保存用户手动回填，明确第一版不自动提交 LeetCode，也不假装本地运行等价于官方判题。
+- `session_summary` 是复盘页的稳定读取模型，避免每次打开复盘都重新扫描完整事件流。
+- `profile_delta` 保存画像变化证据；`user_skill_profile` 和 `user_stuck_point_profile` 保存当前画像快照，分别服务解释性和查询效率。
+- 推荐用 `recommendation_batch` / `recommendation_item`，避免把“训练后的动态推荐”混进原始学习计划。
+
+### 流程 6：面试模拟与 Eval
+
+```text
+面试模拟开始
+  -> write [practice_session] training_mode = mock_interview
+  -> append [practice_event] event_type = session_started
+
+面试过程中
+  -> reuse [practice_event]
+  -> reuse [coach_turn]
+  -> reuse [code_snapshot]
+  -> reuse [tool_run]
+  -> append [agent_trace]
+
+面试结束
+  -> read transcript from [practice_event]
+  -> read final [code_snapshot]
+  -> read tool outputs from [tool_run]
+  -> write [mock_interview_summary]
+  -> write [session_summary]
+  -> derive [profile_delta]
+  -> update [user_skill_profile] and [user_stuck_point_profile]
+
+离线 Eval
+  -> write [eval_run]
+  -> run cases against prompt/graph/retriever
+  -> write [eval_case_result]
+  -> update [eval_run.metrics_json / status]
+```
+
+为什么这样设计：
+
+- 面试模拟是训练会话的高压模式，不重新发明一套 session、event、code 和 tool 表。
+- `mock_interview_summary` 只保存面试特有评分维度，例如沟通清晰度、复杂度表达和推进节奏。
+- Eval 表独立于用户业务数据，既可以评估真实 session，也可以跑离线 case。
+- `eval_run` 聚合一次评估的版本和指标，`eval_case_result` 保存单 case 结果，方便回归比较。
 
 ## 表清单
 
