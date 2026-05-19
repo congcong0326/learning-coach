@@ -11,3 +11,9 @@ wheels/
 
 # Local environment variables
 .env
+
+# Local third-party datasets and generated seed data
+data/sources/
+data/seed/*.jsonl
+data/seed/manifest.json
+!data/seed/.gitkeep
