@@ -76,6 +76,23 @@ user_learning_goal
 - updated_at
 ```
 
+字段用途：
+
+| 字段 | 用途 |
+| --- | --- |
+| `id` | 目标校准记录主键，供计划表通过 `goal_id` 关联。 |
+| `user_id` | 标识目标属于哪个用户；T1 固定为 `local-user`，后续接入登录后替换为真实用户 ID。 |
+| `goal_type` | 用户本轮训练的主要目标，决定计划策略、默认训练模式和推荐理由。 |
+| `target_timeline` | 用户准备周期，用于估算计划长度和计划结束日期。 |
+| `weekly_days` | 用户每周可训练天数，用于估算首批推荐题目数量。 |
+| `session_minutes` | 用户单次训练时长，用于后续 session、面试模拟和计划节奏；T1 先保存和展示。 |
+| `preferred_language` | 用户首选代码语言；第一版固定为 `python`，后续扩展多语言代码运行时复用。 |
+| `self_reported_weaknesses` | 用户自评薄弱点，用于补充推荐理由、默认提示偏好和后续画像初始化。 |
+| `default_training_mode` | 根据目标推导出的默认训练模式，后续创建训练会话时作为初始值。 |
+| `default_hint_gear` | 根据目标推导出的默认提示档位，后续 AI 教练和工作台展示复用。 |
+| `created_at` | 记录目标创建时间，用于读取最新目标和展示校准时间。 |
+| `updated_at` | 记录目标更新时间，用于审计和后续目标编辑能力。 |
+
 约束和索引：
 
 - `goal_type`、`target_timeline`、`preferred_language`、`default_training_mode`、`default_hint_gear` 使用字符串枚举约束。
@@ -102,6 +119,21 @@ study_plan
 - updated_at
 ```
 
+字段用途：
+
+| 字段 | 用途 |
+| --- | --- |
+| `id` | 学习计划主键，供计划项和后续训练会话关联。 |
+| `user_id` | 标识计划属于哪个用户；T1 固定为 `local-user`。 |
+| `goal_id` | 关联生成该计划的目标校准记录，用于解释计划来源。 |
+| `title` | 面向用户展示的计划名称，例如“刷题入门基础训练计划”。 |
+| `status` | 标识计划生命周期；当前使用 `active` 和 `archived`，后续可由完成流程写入 `completed`。 |
+| `start_date` | 计划开始日期，默认使用创建目标当天。 |
+| `end_date` | 计划结束日期，根据时间线和计划策略生成，用于前端展示计划周期。 |
+| `strategy` | 计划生成策略，解释推荐题单来自入门路径、面试冲刺、专项补弱还是保持手感。 |
+| `created_at` | 记录计划创建时间，用于审计和排序。 |
+| `updated_at` | 记录计划更新时间，用于审计、重排和状态变更追踪。 |
+
 约束和索引：
 
 - `goal_id` 外键引用 `user_learning_goal.id`。
@@ -127,6 +159,22 @@ study_plan_item
 - created_at
 - updated_at
 ```
+
+字段用途：
+
+| 字段 | 用途 |
+| --- | --- |
+| `id` | 计划项主键，供前端更新状态、重排和后续训练会话关联。 |
+| `plan_id` | 关联所属学习计划。 |
+| `problem_slug` | 关联题库中的题目 slug，也是跳转 `/workspace/:slug` 的路由参数。 |
+| `skill_tags` | 本计划项用于训练的算法标签，来自题目 metadata，用于推荐解释和后续画像沉淀。 |
+| `difficulty` | 冗余保存计划生成时的题目难度，便于计划展示和后续分析；源数据来自 `problem.difficulty`。 |
+| `suggested_mode` | 建议用户用哪种训练模式做这道题，后续创建 session 时作为默认模式。 |
+| `recommendation_reason` | 面向用户展示的推荐理由，解释为什么这道题适合当前目标。 |
+| `status` | 计划项进度状态；T1 支持 `pending` 和 `skipped`，后续由训练流程写入 `in_progress` 和 `completed`。 |
+| `order_index` | 题目在计划中的排序位置，用于稳定展示和用户手动重排。 |
+| `created_at` | 记录计划项创建时间，用于审计。 |
+| `updated_at` | 记录计划项更新时间，用于审计、跳过和重排追踪。 |
 
 约束和索引：
 
@@ -169,6 +217,41 @@ visible_hint_gear:
 - direction
 - key_hint
 ```
+
+枚举用途：
+
+| 枚举 | 值 | 用途说明 |
+| --- | --- | --- |
+| `goal_type` | `beginner` | 刷题入门，推荐 Easy 和基础题型，默认入门引导模式。 |
+| `goal_type` | `interview_sprint` | 面试冲刺，优先高频题集或高频基础标签，默认独立训练模式。 |
+| `goal_type` | `strengthen_weakness` | 专项补弱，根据用户自评弱项生成更聚焦的推荐理由，默认入门引导模式。 |
+| `goal_type` | `maintain` | 保持手感，推荐 Easy/Medium 混合题，默认独立训练模式。 |
+| `target_timeline` | `none` | 没有明确时间线，生成默认周期计划。 |
+| `target_timeline` | `within_1_month` | 1 个月内冲刺，生成较密集的首批推荐。 |
+| `target_timeline` | `one_to_three_months` | 1 到 3 个月准备周期，生成中等规模计划。 |
+| `target_timeline` | `over_three_months` | 3 个月以上长期准备，生成节奏更平缓的计划。 |
+| `self_reported_weakness` | `problem_understanding` | 题意理解弱项，后续教练应更关注题意澄清。 |
+| `self_reported_weakness` | `pattern` | 题型识别弱项，推荐理由和后续提示应强调模式识别。 |
+| `self_reported_weakness` | `complexity` | 复杂度优化弱项，后续教练应关注暴力到优化的推导。 |
+| `self_reported_weakness` | `implementation` | 代码实现弱项，推荐理由应提示实现细节训练。 |
+| `self_reported_weakness` | `edge_case` | 边界条件弱项，推荐理由应提示边界条件覆盖。 |
+| `self_reported_weakness` | `interview_expression` | 面试表达弱项，后续复盘和面试模拟应关注表达结构。 |
+| `training_mode` | `guided` | 入门引导模式，AI 教练可以更主动地拆解和提示。 |
+| `training_mode` | `independent` | 独立训练模式，AI 教练更克制，优先追问。 |
+| `visible_hint_gear` | `questioning` | 追问档，只追问和澄清，不提示题型或数据结构。 |
+| `visible_hint_gear` | `direction` | 方向档，允许提示题型方向或关键数据结构。 |
+| `visible_hint_gear` | `key_hint` | 关键档，允许提示核心不变量或伪代码框架。 |
+| `study_plan.status` | `active` | 当前正在使用的学习计划，同一用户同时只保留一个 active 计划。 |
+| `study_plan.status` | `completed` | 已完成的学习计划，T1 不写入，后续闭环完成后使用。 |
+| `study_plan.status` | `archived` | 被新目标或新计划替换的历史计划。 |
+| `study_plan.strategy` | `beginner_path` | 入门路径策略，优先 Easy 和基础高频标签。 |
+| `study_plan.strategy` | `interview_sprint` | 面试冲刺策略，优先高频题集或高频基础标签。 |
+| `study_plan.strategy` | `weakness_based` | 专项补弱策略，根据自评弱项生成推荐说明。 |
+| `study_plan.strategy` | `maintenance` | 保持手感策略，覆盖 Easy/Medium 常见题型。 |
+| `study_plan_item.status` | `pending` | 计划项待训练，是 T1 创建计划项后的默认状态。 |
+| `study_plan_item.status` | `in_progress` | 计划项训练中，T1 不写入，后续训练会话接入。 |
+| `study_plan_item.status` | `completed` | 计划项已完成，T1 不写入，后续复盘闭环接入。 |
+| `study_plan_item.status` | `skipped` | 用户暂时跳过该题，T1 支持用户写入和取消。 |
 
 ## 后端模块
 
@@ -324,6 +407,22 @@ docs/project-todolist.md
   ]
 }
 ```
+
+计划项响应字段用途：
+
+| 字段 | 用途 |
+| --- | --- |
+| `id` | 计划项 ID，用于跳过、取消跳过、重排和后续创建训练会话。 |
+| `problem_slug` | 题目 slug，用于跳转工作台和关联题库详情。 |
+| `frontend_id` | LeetCode 题号，用于计划页列表展示。 |
+| `title` | 英文题名，用于计划页列表展示。 |
+| `translated_title` | 中文题名，用于计划页列表展示。 |
+| `difficulty` | 题目难度，用于计划页筛读和解释推荐顺序。 |
+| `skill_tags` | 推荐训练的算法标签，用于说明这道题训练什么能力。 |
+| `suggested_mode` | 建议训练模式，后续进入工作台或创建 session 时作为默认值。 |
+| `recommendation_reason` | 推荐理由，必须能解释当前目标和该题之间的关系。 |
+| `status` | 计划项当前状态，用于展示待训练、已跳过等进度。 |
+| `order_index` | 当前排序，用于稳定渲染和重排后保存顺序。 |
 
 没有 active 计划时返回 404：
 
