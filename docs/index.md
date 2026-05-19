@@ -40,6 +40,7 @@
 - `docs/architecture/makefile.md`：根目录 `Makefile` 命令契约。
 - `docs/dev-setup.md`：WSL Ubuntu 本地开发环境和常用流程。
 - `docs/prd/prd.md`：产品需求、AI Coach 行为、RAG、工具层和里程碑。
+- `docs/project-todolist.md`：从 PRD 拆分出的总体阶段、当前进度和后续任务追踪。
 
 ## 代码变更后的文档维护映射
 
