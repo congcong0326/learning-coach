@@ -13,9 +13,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
 
 
 class Base(DeclarativeBase):
@@ -26,7 +30,7 @@ class Problem(Base):
     __tablename__ = "problem"
 
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        ID_TYPE,
         primary_key=True,
         autoincrement=True,
     )
@@ -50,12 +54,12 @@ class Problem(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
 
     category_items: Mapped[list[ProblemCategoryItem]] = relationship(
@@ -68,7 +72,7 @@ class ProblemCategory(Base):
     __tablename__ = "problem_category"
 
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        ID_TYPE,
         primary_key=True,
         autoincrement=True,
     )
@@ -78,12 +82,12 @@ class ProblemCategory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
 
     problem_items: Mapped[list[ProblemCategoryItem]] = relationship(
@@ -103,7 +107,7 @@ class ProblemCategoryItem(Base):
     )
 
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        ID_TYPE,
         primary_key=True,
         autoincrement=True,
     )
@@ -119,12 +123,12 @@ class ProblemCategoryItem(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=func.now(),
     )
 
     category: Mapped[ProblemCategory] = relationship(back_populates="problem_items")

@@ -65,9 +65,13 @@ logs: ## Follow development Docker logs
 db-migrate: ## Run Alembic migrations in backend container
 	$(COMPOSE_DEV) exec backend uv run --no-sync alembic upgrade head
 
+.PHONY: prepare-problem-seed
+prepare-problem-seed: ## Prepare local problem seed files from ignored source data
+	uv run python scripts/prepare_problem_seed.py --source data/sources/leetcode-problemset --output data/seed
+
 .PHONY: db-seed
-db-seed: ## Placeholder for future seed command
-	@echo "No seed command is defined yet"
+db-seed: ## Import generated problem seed data into the database
+	uv run python -m backend.app.cli.problem_seed
 
 .PHONY: smoke
 smoke: ## Run development smoke checks against running services

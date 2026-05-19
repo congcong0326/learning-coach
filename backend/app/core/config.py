@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +11,8 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://learning_coach:learning_coach"
         "@localhost:5432/learning_coach"
     )
+    problem_seed_path: Path = Path("data/seed")
+    seed_problems_on_startup: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
