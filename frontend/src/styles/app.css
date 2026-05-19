@@ -1,0 +1,182 @@
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #f4f5f2;
+  color: #202420;
+  font-family:
+    Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+    sans-serif;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f4f5f2;
+}
+
+.app-sider {
+  border-right: 1px solid #d7d9d2;
+  background: #fcfcf8 !important;
+}
+
+.brand-block {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid #d7d9d2;
+}
+
+.brand-block h1.ant-typography {
+  margin: 0 0 10px;
+  color: #1d2a22;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.environment-label {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid #c7cbc2;
+  border-radius: 4px;
+  color: #566052;
+  font-size: 12px;
+  line-height: 22px;
+  background: #eef0ea;
+}
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 10px;
+}
+
+.side-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: #374037;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.side-nav-link:hover {
+  color: #0a5f5a;
+  background: #eef5f1;
+}
+
+.side-nav-link-active {
+  color: #064b47;
+  background: #dfeee8;
+  font-weight: 600;
+}
+
+.side-nav-icon {
+  display: inline-flex;
+  width: 18px;
+  justify-content: center;
+  color: inherit;
+}
+
+.app-header {
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 1px solid #d7d9d2;
+  background: #ffffff;
+}
+
+.header-content {
+  width: 100%;
+  height: 56px;
+  justify-content: space-between;
+}
+
+.header-title {
+  color: #2f382f;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.app-content {
+  padding: 24px;
+}
+
+.page-section {
+  width: 100%;
+}
+
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.page-section h2.ant-typography {
+  margin: 0 0 16px;
+  color: #1f2b23;
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.page-heading h2.ant-typography {
+  margin: 0;
+}
+
+.workspace-grid h2.ant-typography {
+  margin-bottom: 16px;
+}
+
+.workspace-pane {
+  min-height: 360px;
+  padding: 16px;
+  border: 1px solid #d7d9d2;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.workspace-pane h3 {
+  margin: 0;
+  color: #344034;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-sider {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .brand-block {
+    padding: 16px;
+  }
+
+  .side-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-header {
+    padding: 0 16px;
+  }
+
+  .app-content {
+    padding: 16px;
+  }
+}

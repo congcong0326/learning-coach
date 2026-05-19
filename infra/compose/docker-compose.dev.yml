@@ -1,0 +1,95 @@
+name: learning-coach-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: learning-coach-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-learning_coach}
+      POSTGRES_USER: ${POSTGRES_USER:-learning_coach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learning_coach}
+    ports:
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-learning_coach} -d ${POSTGRES_DB:-learning_coach}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/backend.Dockerfile
+    container_name: learning-coach-backend
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://learning_coach:learning_coach@postgres:5432/learning_coach}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_ID: ${LLM_MODEL_ID:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+    command:
+      [
+        "uv",
+        "run",
+        "--no-sync",
+        "uvicorn",
+        "backend.app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ../../backend:/app/backend
+      - ../../alembic.ini:/app/alembic.ini:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/frontend.Dockerfile
+      target: dev
+    container_name: learning-coach-frontend
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    command: ["pnpm", "dev", "--host", "0.0.0.0"]
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ../../frontend:/app/frontend
+      - frontend_node_modules:/app/frontend/node_modules
+    depends_on:
+      - backend
+
+  code-runner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/code-runner.Dockerfile
+    container_name: learning-coach-code-runner
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
+
+volumes:
+  postgres_data:
+  frontend_node_modules:

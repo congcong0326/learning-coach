@@ -1,0 +1,37 @@
+name: learning-coach-test
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-learning_coach_test}
+      POSTGRES_USER: ${POSTGRES_TEST_USER:-learning_coach}
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:-learning_coach}
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=512m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_TEST_USER:-learning_coach} -d ${POSTGRES_TEST_DB:-learning_coach_test}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend-test:
+    build:
+      context: ../..
+      dockerfile: infra/docker/backend.Dockerfile
+    environment:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_TEST_USER:-learning_coach}:${POSTGRES_TEST_PASSWORD:-learning_coach}@postgres:5432/${POSTGRES_TEST_DB:-learning_coach_test}
+      OPENAI_API_KEY: ""
+      LLM_API_KEY: ""
+      LLM_MODEL_ID: ""
+      LLM_BASE_URL: ""
+      SERPAPI_API_KEY: ""
+    command: ["uv", "run", "--no-sync", "pytest", "-q"]
+    depends_on:
+      postgres:
+        condition: service_healthy

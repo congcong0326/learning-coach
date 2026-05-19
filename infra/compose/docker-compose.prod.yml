@@ -1,0 +1,72 @@
+name: learning-coach-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: learning-coach-prod-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-learning_coach}
+      POSTGRES_USER: ${POSTGRES_USER:-learning_coach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learning_coach}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-learning_coach} -d ${POSTGRES_DB:-learning_coach}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/backend.Dockerfile
+    container_name: learning-coach-prod-backend
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://learning_coach:learning_coach@postgres:5432/learning_coach}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_ID: ${LLM_MODEL_ID:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/frontend.Dockerfile
+      target: runtime
+    container_name: learning-coach-prod-frontend
+    ports:
+      - "${FRONTEND_HTTP_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  code-runner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/code-runner.Dockerfile
+    container_name: learning-coach-prod-code-runner
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
