@@ -458,7 +458,6 @@ keyword
 difficulty
 tag
 category
-status
 sort
 page
 page_size
@@ -470,7 +469,6 @@ page_size
 - `difficulty` 支持 `Easy`、`Medium`、`Hard`。
 - `tag` 匹配 `metadata_json.topic_tags[].slug`。
 - `category` 通过 `problem_category.slug` 过滤；没有分类数据时返回空集合。
-- `status` 预留，第一版没有训练记录时忽略或固定返回未开始。
 - `sort` 支持 `frontend_id`、`difficulty`、`title`。
 
 响应示例：
@@ -492,10 +490,7 @@ page_size
           "translated_name": "数组"
         }
       ],
-      "categories": [],
-      "status": "not_started",
-      "last_practiced_at": null,
-      "avg_hint_level": null
+      "categories": []
     }
   ],
   "total": 1,
@@ -551,14 +546,14 @@ page_size
 
 页面能力：
 
-- 展示题号、标题、难度、标签、分类、用户状态、最近训练时间、平均提示等级。
+- 展示题号、标题、难度、标签、分类和 LeetCode 原题入口。
 - 支持关键词搜索。
 - 支持难度筛选。
 - 支持标签筛选。
 - 支持分类筛选；无分类数据时分类筛选为空。
 - 点击题目进入工作台。
 
-用户状态字段第一版可以由后端固定返回 `not_started`，后续训练会话实现后再接真实状态。
+第一版题库列表不展示用户状态、最近训练时间、平均提示等级，也不提供已完成、进行中、待复盘等训练状态筛选。这些字段依赖 `practice_session`、`practice_event` 和用户画像，后续训练会话设计完成后，再通过扩展题库列表 API 或新增用户题目进度 API 接入。
 
 ### 做题工作台
 
