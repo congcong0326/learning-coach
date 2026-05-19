@@ -2,21 +2,24 @@
 
 ## 目标
 
-完成 Agentic Coding Learning Coach 的第一块产品数据底座：从本地参考仓库导入 LeetCode 题库，保存题目主数据，严格隔离题面和题解，并让前端题库列表和做题工作台可以读取真实题目数据。
+完成 Agentic Coding Learning Coach 的第一块产品数据底座：把第三方 LeetCode 题库材料在数据准备阶段清洗成结构化 seed 文件，再由应用导入数据库，让前端题库列表和做题工作台可以读取真实题目数据。
 
-这个设计只覆盖题库导入、题目浏览、单题详情和分类模型。不实现 AI 教练、训练会话、RAG、代码执行、复盘画像和 LangGraph 状态机。
+这个设计只覆盖题库数据准备、数据库 seed、题目浏览、单题详情和分类模型。不实现 AI 教练、训练会话、RAG、代码执行、复盘画像和 LangGraph 状态机。
 
 ## 已确认决策
 
-- 第一版主数据源使用 `https://github.com/fishjar/leetcode-problemset`。
-- 参考仓库应拉到本地忽略目录，例如 `data/sources/leetcode-problemset/`，不得提交题库原文。
-- 导入逻辑只提交代码、migration、测试和文档，不提交第三方题库 Markdown 或 JSON 数据。
-- 题目主数据存入 `problem` 表。
-- 题面和题解必须隔离：`statement_md` 可用于前端展示和低风险 AI 上下文，`solution_md` 默认不得进入 AI 上下文。
+- 第一版原始数据参考 `https://github.com/fishjar/leetcode-problemset`。
+- 原始参考仓库只用于数据准备阶段，放在本地忽略目录，例如 `data/sources/leetcode-problemset/`，不得提交。
+- 使用 Python 脚本把原始 Markdown / JSON 清洗为结构化 seed 文件。
+- 应用运行时和 Docker 打包只依赖 seed 文件，不依赖原始参考仓库，也不在运行时解析第三方仓库结构。
+- seed 文件包含题面内容，默认不提交到公开 Git 仓库；本地或私有 Docker 镜像可以把 seed 文件打包进去。
+- 题目主数据存入 `problem` 表，表中只保留应用运行需要的字段。
+- 第一版不把题解入库；准备脚本会丢弃 `## solution 题解` 之后的内容。
 - 不在 `problem` 表上增加 `is_hot100`、`hot100_order` 这类特定题单字段。
 - 分类采用通用关联表设计：`problem_category` + `problem_category_item`。
-- 当前导入全量题库时不写默认分类数据；有明确分类时才写分类和关联数据。
-- 题库同步入口接入 `make db-seed`，替换当前占位输出。
+- 当前全量题库导入时不写默认分类数据；有明确分类时才写分类和关联数据。
+- `make db-seed` 从结构化 seed 文件导入数据库，替换当前占位输出。
+- Docker packaged mode 可以通过启动前 seed 或 one-shot seed 服务导入 seed 文件，但导入必须幂等。
 
 ## 参考仓库检查结果
 
@@ -54,17 +57,18 @@ problemset.json
 
 ## 非目标
 
-- 不自动从远程 GitHub 拉取最新题库。
-- 不把第三方题库数据提交进当前仓库。
+- 不在应用启动时从 GitHub 拉取题库。
+- 不把原始第三方题库仓库提交进当前仓库。
+- 不把包含完整题面的 seed 文件提交到公开 Git 仓库。
 - 不解析或存储 LeetCode 隐藏测试。
 - 不实现 Hot 100 的具体题单导入。
 - 不实现用户训练状态、平均提示等级、最近训练时间等学习记录字段。
 - 不实现完整搜索引擎；第一版使用数据库筛选和关键词匹配。
-- 不把 `solution_md` 接入任何 AI prompt。
+- 不把题解内容导入 `problem` 表，也不接入任何 AI prompt。
 
-## 本地数据源目录
+## 数据准备目录
 
-实现时在仓库根目录约定本地数据源目录：
+仓库根目录约定两个本地数据目录：
 
 ```text
 data/
@@ -74,53 +78,159 @@ data/
       problemset/
       directory.md
       problemset.json
+  seed/
+    .gitkeep
+    manifest.json
+    problems.jsonl
+    problem_categories.jsonl
+    problem_category_items.jsonl
 ```
+
+`data/sources/` 保存原始第三方仓库，必须被 Git 忽略。
+
+`data/seed/` 保存清洗后的 seed 文件。由于 `problems.jsonl` 包含完整题面，默认也不提交到公开 Git 仓库；如果当前仓库和 Docker 镜像只在本地或私有环境使用，可以在构建前生成并打包进镜像。
+
+`data/seed/.gitkeep` 可以提交，用于保证 Docker build context 中目录存在；具体 seed 数据文件仍保持忽略。
 
 `.gitignore` 需要加入：
 
 ```gitignore
-# Local third-party datasets
+# Local third-party datasets and generated seed data
 data/sources/
+data/seed/*.jsonl
+data/seed/manifest.json
+!data/seed/.gitkeep
 ```
 
-导入命令默认读取：
+`.dockerignore` 不应忽略 `data/seed/`，这样本地执行 Docker package 时可以把已生成的 seed 文件复制进镜像。
+
+## 数据准备脚本
+
+新增数据准备脚本：
 
 ```text
-data/sources/leetcode-problemset
+scripts/prepare_problem_seed.py
 ```
 
-后端配置允许通过环境变量覆盖：
+推荐命令：
 
-```text
-LEETCODE_PROBLEMSET_PATH=/absolute/path/to/leetcode-problemset
+```bash
+uv run python scripts/prepare_problem_seed.py \
+  --source data/sources/leetcode-problemset \
+  --output data/seed
 ```
 
-如果路径不存在，导入命令应失败并输出清晰错误，提示用户先 clone 参考仓库到本地数据源目录。
+脚本职责：
+
+- 检查原始参考仓库目录是否存在。
+- 扫描 `problemset_md/` 和 `problemset/`。
+- 按 slug 配对 Markdown 和 JSON。
+- 从 Markdown 中截断 `## solution 题解` 之前的内容作为 `statement_md`。
+- 丢弃 `## solution 题解` 及之后的题解内容。
+- 从 JSON 中提取标题、难度、标签、样例、函数签名和 Python3 代码模板。
+- 生成 `data/seed/problems.jsonl`。
+- 生成空的 `problem_categories.jsonl` 和 `problem_category_items.jsonl`，为后续 Hot 100 等题单预留。
+- 生成 `manifest.json`，记录生成时间、参考仓库 commit、题目数量和脚本版本。
+
+准备阶段失败策略：
+
+- 原始数据目录不存在：直接失败。
+- 单题缺少 Markdown 或 JSON：跳过该题并记录错误。
+- JSON 解析失败：跳过该题并记录错误。
+- 任一题失败时最终返回非零退出码，避免悄悄生成不完整数据。
+
+## Seed 文件格式
+
+### manifest.json
+
+`manifest.json` 保存整个 seed 数据集的来源和生成信息。来源信息放在 manifest 中，不重复写入每道题。
+
+```json
+{
+  "dataset": "leetcode-problemset",
+  "source_repo": "https://github.com/fishjar/leetcode-problemset",
+  "source_commit": "6bd9323f1a542eac6997f9f76656842333d96c45",
+  "generated_at": "2026-05-19T00:00:00Z",
+  "problem_count": 1828,
+  "category_count": 0,
+  "category_item_count": 0,
+  "schema_version": 1
+}
+```
+
+### problems.jsonl
+
+一行一个题目对象。使用 JSONL 而不是 CSV，是因为 Markdown 题面包含换行、HTML、代码块和转义字符，JSONL 更稳定。
+
+```json
+{
+  "frontend_id": "1",
+  "slug": "two-sum",
+  "title": "Two Sum",
+  "translated_title": "两数之和",
+  "difficulty": "Easy",
+  "statement_md": "# Two Sum 两数之和\n\n...",
+  "leetcode_url": "https://leetcode-cn.com/problems/two-sum/",
+  "is_paid_only": false,
+  "metadata": {
+    "topic_tags": [
+      {
+        "name": "Array",
+        "slug": "array",
+        "translated_name": "数组"
+      }
+    ],
+    "similar_questions": [],
+    "sample_test_case": "[2,7,11,15]\n9",
+    "function_meta": {},
+    "python3_snippet": "class Solution:\n    def twoSum(...)"
+  }
+}
+```
+
+`problems.jsonl` 不包含题解字段。
+
+### problem_categories.jsonl
+
+第一版可以是空文件。后续新增题单时一行一个分类对象。
+
+```json
+{
+  "slug": "hot_100",
+  "name": "Hot 100",
+  "description": "LeetCode Hot 100 题单"
+}
+```
+
+### problem_category_items.jsonl
+
+第一版可以是空文件。后续新增题单时一行一个题目分类关系。
+
+```json
+{
+  "category_slug": "hot_100",
+  "problem_slug": "two-sum",
+  "sort_order": 1
+}
+```
 
 ## 数据模型
 
 ### problem
 
-`problem` 是题目主表，只保存题目本身稳定属性和来源信息。
+`problem` 是题目主表，只保存应用运行时需要的稳定字段。
 
 ```text
 problem
 - id
-- problem_id
 - frontend_id
+- slug
 - title
 - translated_title
-- slug
 - difficulty
 - statement_md
-- solution_md
 - metadata_json
 - leetcode_url
-- source_repo
-- source_path
-- source_commit
-- content_hash
-- priority
 - is_paid_only
 - created_at
 - updated_at
@@ -128,22 +238,18 @@ problem
 
 字段说明：
 
-- `problem_id`：LeetCode 内部 questionId，数字字符串可转整数时按整数保存。
-- `frontend_id`：展示用题号，例如 `1`。
+- `id`：数据库内部主键。
+- `frontend_id`：LeetCode 展示题号，例如 `1`。
+- `slug`：题目 slug，例如 `two-sum`，全局唯一。
 - `title`：英文标题，例如 `Two Sum`。
 - `translated_title`：中文标题，例如 `两数之和`。
-- `slug`：题目 slug，例如 `two-sum`，全局唯一。
-- `difficulty`：`Easy`、`Medium`、`Hard`。
-- `statement_md`：不含 `## solution 题解` 的题面 Markdown。
-- `solution_md`：从 `## solution 题解` 开始的题解、代码模板或解法内容。
-- `metadata_json`：标签、相似题、代码片段、样例、函数签名等结构化补充数据。
+- `difficulty`：题目难度，取值为 `Easy`、`Medium`、`Hard`。
+- `statement_md`：清洗后的题面 Markdown，不包含 `## solution 题解` 之后的内容。
+- `metadata_json`：标签、相似题、样例、函数签名和 Python3 模板等结构化补充数据。
 - `leetcode_url`：原题链接。
-- `source_repo`：固定为 `https://github.com/fishjar/leetcode-problemset`。
-- `source_path`：源文件相对路径，例如 `problemset_md/0000001.two-sum.md`。
-- `source_commit`：导入时参考仓库 commit。
-- `content_hash`：基于 Markdown 和 JSON 关键内容生成，用于判断是否需要更新。
-- `priority`：第一版保留字段，默认 `0`，后续推荐排序可使用。
 - `is_paid_only`：是否 Plus 题。
+- `created_at`：数据库创建时间。
+- `updated_at`：数据库更新时间。
 
 唯一约束：
 
@@ -156,9 +262,10 @@ problem.frontend_id
 
 ```text
 problem.difficulty
-problem.priority
 problem.updated_at
 ```
+
+第一版不在 `problem` 表保存来源仓库、来源路径、来源 commit、内容 hash、题解、Hot 100 标记或推荐权重。来源信息属于 seed 数据集级别，保存在 `manifest.json` 或 `app_metadata`。
 
 ### problem_category
 
@@ -170,19 +277,18 @@ problem_category
 - slug
 - name
 - description
-- source
-- metadata_json
 - created_at
 - updated_at
 ```
 
-示例：
+字段说明：
 
-```text
-slug: hot_100
-name: Hot 100
-source: leetcode
-```
+- `id`：数据库内部主键。
+- `slug`：分类稳定标识，例如 `hot_100`、`blind_75`、`neetcode_150`。
+- `name`：前端展示名称，例如 `Hot 100`。
+- `description`：分类说明，可为空字符串。
+- `created_at`：数据库创建时间。
+- `updated_at`：数据库更新时间。
 
 唯一约束：
 
@@ -200,17 +306,18 @@ problem_category_item
 - category_id
 - problem_id
 - sort_order
-- priority
-- metadata_json
 - created_at
 - updated_at
 ```
 
 字段说明：
 
-- `sort_order`：分类内顺序，例如 Hot 100 中的第几题。
-- `priority`：分类内推荐权重，默认 `0`。
-- `metadata_json`：分类来源补充信息，例如原始题单名称、备注、导入批次。
+- `id`：数据库内部主键。
+- `category_id`：关联 `problem_category.id`。
+- `problem_id`：关联 `problem.id`。
+- `sort_order`：分类内顺序，例如 Hot 100 中的第几题；没有顺序时为空。
+- `created_at`：数据库创建时间。
+- `updated_at`：数据库更新时间。
 
 唯一约束：
 
@@ -227,85 +334,68 @@ problem_category_item.problem_id
 
 ## 题面与题解隔离策略
 
-导入器必须按以下规则生成 `statement_md` 和 `solution_md`：
+隔离发生在数据准备阶段，而不是应用运行时。
+
+准备脚本必须按以下规则生成 `statement_md`：
 
 1. 读取 `problemset_md/{id}.{slug}.md`。
 2. 查找二级标题 `## solution 题解`。
-3. 标题之前的内容写入 `statement_md`。
-4. 标题及之后的内容写入 `solution_md`。
-5. 如果未找到 `## solution 题解`，整个 Markdown 写入 `statement_md`，`solution_md` 写空字符串。
-6. `metadata_json` 可以保存 JSON 中的 `hints` 和 `codeSnippets`，但 API 默认不向前端题目详情返回 `solution_md`。
+3. 标题之前的内容写入 seed 文件的 `statement_md`。
+4. 标题及之后的内容不写入任何第一版 seed 文件。
+5. 如果未找到 `## solution 题解`，整个 Markdown 写入 `statement_md`，并在准备日志中记录 warning。
 
-第一版不尝试用正则识别每种语言的具体题解质量。只要内容位于 `## solution 题解` 后，都视为高风险解法内容。
+第一版数据库不建 `solution_md` 字段。后续如果高提示等级或复盘确实需要题解，应单独设计 `problem_solution` 表和权限控制，不应把题解混入题目详情 API。
 
-## 元数据提取策略
+## 数据库导入流程
 
-导入器同时读取 Markdown 和 JSON：
+导入器从 `data/seed/` 读取结构化 seed 文件，而不是读取原始参考仓库。
 
-- Markdown 负责生成可渲染的 `statement_md` 和 `solution_md`。
-- JSON 负责提取稳定结构化字段。
-
-优先使用 JSON 字段：
+导入流程：
 
 ```text
-question.questionId
-question.questionFrontendId
-question.title
-question.translatedTitle
-question.titleSlug
-question.difficulty
-question.isPaidOnly
-question.topicTags
-question.similarQuestions
-question.codeSnippets
-question.sampleTestCase
-question.metaData
-```
-
-`metadata_json` 第一版结构：
-
-```json
-{
-  "topic_tags": [
-    {
-      "name": "Array",
-      "slug": "array",
-      "translated_name": "数组"
-    }
-  ],
-  "similar_questions": [],
-  "code_snippets": [],
-  "sample_test_case": "[2,7,11,15]\n9",
-  "function_meta": {},
-  "source": {
-    "json_path": "problemset/0000001.two-sum.json",
-    "markdown_path": "problemset_md/0000001.two-sum.md"
-  }
-}
-```
-
-如果 JSON 解析失败但 Markdown 存在，导入器应跳过该题并记录错误，不写入不完整题目。第一版不做部分导入。
-
-## 导入流程
-
-导入流程分为五步：
-
-```text
-检查数据源目录
--> 扫描 problemset_md 和 problemset
--> 逐题解析 Markdown 与 JSON
--> upsert problem
--> 输出导入统计
+检查 seed 目录
+-> 读取 manifest.json
+-> 导入 problems.jsonl
+-> 导入 problem_categories.jsonl
+-> 导入 problem_category_items.jsonl
+-> 记录导入统计
 ```
 
 导入命令必须幂等。重复执行时：
 
-- `slug` 已存在且 `content_hash` 未变化：跳过更新。
-- `slug` 已存在且 `content_hash` 变化：更新题目字段和 `updated_at`。
-- `slug` 不存在：插入新题。
-- 源文件损坏：跳过该题，记录错误数量，最终返回非零退出码。
+- `problem.slug` 已存在：跳过该题，不更新题目正文。
+- `problem.slug` 不存在：插入新题。
+- `problem_category.slug` 已存在：跳过该分类。
+- 分类关系已存在：跳过该关系。
+- seed 文件缺失或格式错误：停止导入并返回非零退出码。
 
-第一版不自动删除数据库中已存在但源仓库不存在的题目，避免误删用户后续训练数据。后续可以新增显式 `--prune` 模式。
+题目被视为静态基础数据，第一版不做按 hash 更新。后续如果要升级 seed 数据集，应提供显式重建或同步策略，而不是在普通启动流程里隐式覆盖。
+
+## 启动与 Docker 打包
+
+开发环境推荐显式执行：
+
+```bash
+uv run python scripts/prepare_problem_seed.py \
+  --source data/sources/leetcode-problemset \
+  --output data/seed
+make db-migrate
+make db-seed
+```
+
+Docker 打包时：
+
+- backend 镜像复制 `data/seed/` 到镜像内，例如 `/app/data/seed/`。
+- 如果 seed 文件不存在，镜像仍可构建，但执行 seed 时应给出清晰错误。
+- packaged compose 可以用 one-shot `seed` 服务执行导入。
+- 如果采用 backend 启动时自动导入，必须通过环境变量显式开启，例如 `SEED_PROBLEMS_ON_STARTUP=true`。
+- 启动自动导入只能在 `problem` 表为空时执行，并使用 PostgreSQL advisory lock 防止多实例并发导入。
+
+推荐默认路径：
+
+```text
+PROBLEM_SEED_PATH=data/seed
+```
 
 ## 后端模块边界
 
@@ -316,10 +406,10 @@ backend/app/models/problem.py
   SQLAlchemy problem、problem_category、problem_category_item 模型。
 
 backend/app/schemas/problem.py
-  题库列表和题目详情响应模型。
+  题库列表、分类列表和题目详情响应模型。
 
-backend/app/services/problem_importer.py
-  本地参考仓库扫描、解析、hash、upsert。
+backend/app/services/problem_seed.py
+  从结构化 seed 文件导入数据库。
 
 backend/app/services/problem_service.py
   题库查询、筛选、单题详情读取。
@@ -328,22 +418,31 @@ backend/app/api/problems.py
   题库 HTTP API。
 
 backend/app/core/config.py
-  新增 LEETCODE_PROBLEMSET_PATH 配置。
+  新增 PROBLEM_SEED_PATH 和可选 SEED_PROBLEMS_ON_STARTUP 配置。
 
 backend/app/db/migrations/versions/
   新增 problem 相关 migration。
+
+scripts/prepare_problem_seed.py
+  原始参考仓库到 seed 文件的数据准备脚本。
 ```
 
 命令入口：
 
 ```text
-backend/app/cli/problem_import.py
+backend/app/cli/problem_seed.py
 ```
 
 `make db-seed` 调用：
 
 ```bash
-uv run python -m backend.app.cli.problem_import
+uv run python -m backend.app.cli.problem_seed
+```
+
+建议新增数据准备命令：
+
+```bash
+make prepare-problem-seed
 ```
 
 ## API 设计
@@ -372,7 +471,7 @@ page_size
 - `tag` 匹配 `metadata_json.topic_tags[].slug`。
 - `category` 通过 `problem_category.slug` 过滤；没有分类数据时返回空集合。
 - `status` 预留，第一版没有训练记录时忽略或固定返回未开始。
-- `sort` 支持 `frontend_id`、`difficulty`、`priority`。
+- `sort` 支持 `frontend_id`、`difficulty`、`title`。
 
 响应示例：
 
@@ -428,7 +527,7 @@ page_size
 }
 ```
 
-该接口不得返回 `solution_md`。
+该接口不得返回题解内容。
 
 ### GET /api/problem-categories
 
@@ -474,10 +573,17 @@ page_size
 
 ## 错误处理
 
-导入错误分为三类：
+数据准备错误：
 
-- 数据源不存在：直接失败，提示 clone 路径。
+- 原始数据源不存在：直接失败，提示 clone 路径。
 - 单题 JSON 或 Markdown 缺失：记录该题失败，继续处理其他题，最终返回非零退出码。
+- JSON 结构缺少必要字段：记录该题失败，继续处理其他题，最终返回非零退出码。
+
+数据库导入错误：
+
+- seed 目录不存在：直接失败，提示先运行数据准备命令。
+- `manifest.json` 或 `problems.jsonl` 缺失：直接失败。
+- JSONL 行格式错误：停止导入并返回非零退出码。
 - 数据库写入失败：回滚当前事务，输出异常并返回非零退出码。
 
 API 错误：
@@ -490,13 +596,14 @@ API 错误：
 
 后端测试：
 
-- Markdown 切分：含 `## solution 题解` 时正确拆分题面和题解。
-- Markdown 切分：不含题解标题时 `solution_md` 为空。
-- JSON 解析：能提取 Two Sum 的 slug、难度、标签、Python3 snippet。
-- content_hash：相同内容 hash 稳定，内容变化 hash 改变。
-- upsert：重复导入不重复插入。
-- API：列表不返回 `solution_md`。
-- API：详情不返回 `solution_md`。
+- 数据准备：含 `## solution 题解` 时只输出题面，不输出题解。
+- 数据准备：不含题解标题时输出全文题面并记录 warning。
+- 数据准备：能提取 Two Sum 的 slug、难度、标签、Python3 snippet。
+- seed 导入：重复导入不重复插入。
+- seed 导入：分类 seed 为空时不创建默认分类。
+- seed 导入：分类和题目关联能按 slug 正确建立。
+- API：列表不返回题解内容。
+- API：详情不返回题解内容。
 - API：分类为空时列表仍可正常返回题目。
 
 前端测试：
@@ -509,6 +616,9 @@ API 错误：
 集成验证：
 
 ```bash
+uv run python scripts/prepare_problem_seed.py \
+  --source data/sources/leetcode-problemset \
+  --output data/seed
 make db-migrate
 make db-seed
 make test
@@ -521,38 +631,47 @@ Docker smoke 后续可以扩展 `make smoke`，检查至少存在一条题目数
 
 实现该设计时需要同步维护：
 
-- `docs/index.md`：新增题库导入 CLI、problem 模型/API 职责说明。
-- `docs/architecture/foundation.md`：如果 `make db-seed` 从占位变成题库导入入口，需要更新后续里程碑当前状态。
-- `docs/architecture/makefile.md`：更新 `make db-seed` 的命令内容和成功标准。
-- `docs/dev-setup.md`：补充本地 clone 参考仓库到 `data/sources/leetcode-problemset/` 的步骤。
-- `docs/prd/prd.md`：将 `is_hot100` / `hot100_order` 调整为分类关联表设计。
+- `docs/index.md`：新增题库 seed CLI、problem 模型/API、数据准备脚本职责说明。
+- `docs/architecture/foundation.md`：说明题库数据从 seed 文件导入，不在运行时解析参考仓库。
+- `docs/architecture/docker.md`：说明 Docker packaged mode 如何包含 `data/seed/`，以及 seed-on-startup 或 one-shot seed 服务策略。
+- `docs/architecture/makefile.md`：更新 `make prepare-problem-seed` 和 `make db-seed` 的命令内容与成功标准。
+- `docs/dev-setup.md`：补充本地 clone 参考仓库、生成 seed 文件、导入数据库的步骤。
+- `docs/prd/prd.md`：将 `is_hot100` / `hot100_order` 调整为分类关联表设计，并说明题解第一版不入 `problem` 表。
 
 ## 验收标准
 
-- 本地参考仓库目录被 `.gitignore` 忽略，不会提交题库原文。
-- 运行 `make db-seed` 能从本地参考仓库导入题目。
+- 原始参考仓库目录被 `.gitignore` 忽略，不会提交第三方原始数据。
+- seed 文件由 `scripts/prepare_problem_seed.py` 从原始参考仓库生成。
+- 生成的 `problems.jsonl` 不包含题解内容。
+- `problem` 表不包含来源仓库、来源路径、来源 commit、内容 hash、题解、Hot 100 标记或推荐权重字段。
+- 运行 `make db-seed` 能从 seed 文件导入题目。
 - 重复运行 `make db-seed` 不产生重复题目。
-- `problem` 表中 `statement_md` 和 `solution_md` 分离。
+- 没有分类 seed 数据时不创建默认分类。
 - `GET /api/problems` 能返回分页题库列表。
-- `GET /api/problems/{slug}` 能返回题目详情且不包含 `solution_md`。
+- `GET /api/problems/{slug}` 能返回题目详情且不包含题解内容。
 - 题库列表页展示真实题目数据。
 - 工作台能按 slug 展示真实 Markdown 题面。
-- 没有分类数据时题库列表仍正常工作。
-- 后续新增 Hot 100 只需要写入 `problem_category` 和 `problem_category_item`，不需要修改 `problem` 表。
+- 后续新增 Hot 100 只需要写入 `problem_category` 和 `problem_category_item` 对应 seed 文件，不需要修改 `problem` 表。
 
 ## 风险与应对
 
 - 风险：Markdown 标题格式未来变化，导致题面题解切分失败。
-  应对：切分函数有单元测试；未匹配题解标题时保守地把全文当题面并记录 warning。
+  应对：准备脚本有单元测试；未匹配题解标题时保守地输出全文题面并记录 warning。
 
 - 风险：JSON 和 Markdown 数量或 slug 不一致。
-  应对：以 slug 配对；缺任一文件则跳过该题并在导入统计中输出。
+  应对：以 slug 配对；缺任一文件则跳过该题并在准备统计中输出。
 
-- 风险：第三方题库包含完整题解，后续被 AI 误用。
-  应对：API 默认不返回 `solution_md`；AI/RAG 任务必须显式设计权限控制后才能读取。
+- 风险：seed 文件包含完整题面，被误提交到公开仓库。
+  应对：`.gitignore` 忽略 `data/seed/*.jsonl` 和 `data/seed/manifest.json`；最终提交前检查 `git status`。
 
-- 风险：全量导入对开发数据库造成重复或污染。
-  应对：使用 `slug` 唯一约束和 `content_hash` 幂等 upsert。
+- 风险：Docker 镜像打包了题面数据后被公开发布。
+  应对：文档明确 packaged 镜像默认面向本地或私有环境；公开发布前必须移除 seed 文件或确认授权。
+
+- 风险：题解内容被 AI 误用。
+  应对：第一版不导入题解；数据库和 API 都没有题解字段。
+
+- 风险：启动自动导入在多实例环境中重复执行。
+  应对：默认推荐显式 `make db-seed` 或 one-shot seed 服务；如果启用 `SEED_PROBLEMS_ON_STARTUP`，必须检查空库并使用 PostgreSQL advisory lock。
 
 - 风险：题库分类被误解为必填字段。
-  应对：分类是可选关系；无分类数据时不写 `problem_category` 和 `problem_category_item`。
+  应对：分类是可选关系；无分类 seed 数据时不写 `problem_category` 和 `problem_category_item`。
