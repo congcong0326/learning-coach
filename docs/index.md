@@ -1,0 +1,57 @@
+# 项目目录索引
+
+本文档说明仓库主要目录和模块职责。更具体的架构、Docker、命令和产品设计说明见对应专题文档。
+
+## 使用方式
+
+修改代码前，先根据本索引确认相关目录和专题文档。修改代码后，按“代码变更后的文档维护映射”检查是否需要反向维护文档。
+
+如果代码实现与文档描述发生冲突，应先明确冲突来源，再决定是调整代码、更新文档，还是两者都调整。
+
+## 目录职责
+
+- `backend/app/main.py`：FastAPI 应用工厂和路由注册。
+- `backend/app/api/`：HTTP API 路由，当前包含健康检查、数据库健康检查和题库 API。
+- `backend/app/core/`：配置和基础设施入口，当前使用 Pydantic Settings 读取 `.env`。
+- `backend/app/db/`：SQLAlchemy async engine、session、数据库健康检查和 Alembic migration。
+- `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类和题目分类关系。
+- `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库列表、分类列表和题目详情响应。
+- `backend/app/services/`：业务服务层，当前包含题库查询和题库 seed 导入。
+- `backend/app/agents/`：后续 LangGraph / Agent 编排代码目录。
+- `backend/app/rag/`：后续知识导入、切块、embedding 和检索代码目录。
+- `backend/app/tools/`：后续代码执行、静态分析、错误归因等工具客户端目录。
+- `backend/tests/`：后端基座测试。
+- `frontend/`：Vite React 前端，使用 Ant Design、React Router、TanStack Query 和 Monaco Editor。
+- `frontend/src/pages/`：当前 SPA 页面，包括题库、工作台、复盘和 Trace。
+- `frontend/src/api/`：前端 API client 与后端请求封装。
+- `infra/docker/`：后端、前端、code-runner 镜像和 Nginx 配置。
+- `infra/compose/`：开发、测试、生产/打包 compose 文件。
+- `scripts/`：smoke test、数据库等待、题库 seed 数据准备等自动化脚本。
+- `data/sources/`：本地第三方原始题库目录，必须忽略不提交。
+- `data/seed/`：本地生成的题库 seed 文件目录，题面数据默认不提交公开仓库。
+- `demo/`：LangChain、LangGraph 和 Agent 范式演示代码，主要用于学习和实验，不是当前产品主路径。
+- `tests/`：早期 demo 的测试。
+- `archive/`：归档数据或材料，修改前需要确认是否属于用户保留内容。
+
+## 相关文档
+
+- `docs/architecture/foundation.md`：项目基座架构和服务边界。
+- `docs/architecture/docker.md`：Docker 镜像、Compose 服务和 smoke test。
+- `docs/architecture/makefile.md`：根目录 `Makefile` 命令契约。
+- `docs/dev-setup.md`：WSL Ubuntu 本地开发环境和常用流程。
+- `docs/prd/prd.md`：产品需求、AI Coach 行为、RAG、工具层和里程碑。
+
+## 代码变更后的文档维护映射
+
+| 变更类型 | 需要检查或更新的文档 |
+| --- | --- |
+| 目录结构、模块职责、工程入口变化 | `docs/index.md` |
+| 系统边界、技术选型、运行架构变化 | `docs/architecture/foundation.md` |
+| Dockerfile、Compose 服务、端口、volume、环境变量、部署方式变化 | `docs/architecture/docker.md` |
+| `Makefile` 目标、脚本、验证命令、开发工作流变化 | `docs/architecture/makefile.md`、必要时 `docs/dev-setup.md` |
+| 本地环境、启动步骤、端口说明、常见问题变化 | `docs/dev-setup.md` |
+| 产品范围、页面行为、AI Coach 行为、训练模式、里程碑变化 | `docs/prd/prd.md` |
+| RAG 语料来源、入库顺序、材料标注方式变化 | `docs/prd/rag-materials.md` |
+| 新增功能设计或重要架构决策 | `docs/superpowers/specs/` 下新增或更新对应设计文档 |
+| 已按计划实施的多步骤任务 | `docs/superpowers/plans/` 下新增或更新对应实施计划 |
+| 只改变内部实现细节，不改变对外契约 | 可以不更新文档，但最终说明不更新原因 |

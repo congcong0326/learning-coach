@@ -17,7 +17,7 @@
 
 成功标准：
 
-- 输出包含 `bootstrap install lint test build docker-build up down logs db-migrate db-seed smoke package clean`。
+- 输出包含 `bootstrap install lint test build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
 
 ### `make bootstrap`
 
@@ -181,19 +181,41 @@ docker compose -f infra/compose/docker-compose.dev.yml exec backend uv run --no-
 成功标准：
 
 - Alembic 升级到 head。
-- 当前 head 为 `20260519_0001`。
+- 当前 head 为 `20260519_0002`。
+
+### `make prepare-problem-seed`
+
+从本地忽略目录 `data/sources/leetcode-problemset` 读取参考仓库，生成结构化 seed 文件。
+
+执行内容：
+
+```bash
+uv run python scripts/prepare_problem_seed.py --source data/sources/leetcode-problemset --output data/seed
+```
+
+成功标准：
+
+- 原始参考仓库存在。
+- `data/seed/problems.jsonl` 生成成功。
+- `data/seed/problem_categories.jsonl` 和 `data/seed/problem_category_items.jsonl` 生成成功。
+- 生成的题目 seed 不包含题解内容。
 
 ### `make db-seed`
 
-当前是占位命令。
+从 `data/seed/` 导入题库基础数据。
 
-输出：
+执行内容：
 
-```text
-No seed command is defined yet
+```bash
+uv run python -m backend.app.cli.problem_seed
 ```
 
-后续题库初始化实现后，此命令应改为调用题库导入/演示数据初始化逻辑。
+成功标准：
+
+- 数据库已完成 migration。
+- seed 文件存在。
+- `problem` 表写入题目基础数据。
+- 重复执行不会产生重复题目。
 
 ### `make smoke`
 

@@ -9,7 +9,7 @@
 | 产品形态   | Web 应用                                                     |
 | 面向场景   | LeetCode / 算法刷题训练                                      |
 | 核心定位   | AI 教练，而不是答案生成器                                    |
-| 第一版目标 | 跑通“选题 → 思路诊断 → 分层提示 → 代码 review → 提交回填 → 复盘画像”的完整学习闭环 |
+| 第一版目标 | 跑通“目标校准 → 训练计划 → 选题 → 思路诊断 → 分层提示 → 代码 review → 提交回填 → 复盘画像 → 下一组训练”的完整学习闭环 |
 
 ------
 
@@ -78,7 +78,9 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 第一版要完成一个完整学习闭环：
 
 ```text
-选题
+首次目标校准
+-> 生成基础训练计划
+-> 选题
 -> 阅读中文题面
 -> 用户描述思路
 -> AI 判断卡点
@@ -88,12 +90,13 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 -> 本地样例运行 / 用户去 LeetCode 官网提交
 -> 回填提交结果
 -> AI 复盘并更新学习画像
--> 推荐下一题
+-> 更新学习仪表盘
+-> 推荐下一题或下一组训练
 ```
 
 第一版不追求复杂推荐算法，不追求完整在线判题系统，不追求替代 LeetCode，而是证明一个核心闭环：
 
-> 给定一道算法题，系统能在不泄露完整答案的前提下，诊断用户卡点，动态控制提示层级，review 用户代码，记录过程数据，并把本次训练转化为用户画像。
+> 给定用户目标和一道算法题，系统能在不泄露完整答案的前提下，诊断用户卡点，动态控制提示层级，review 用户代码，记录过程数据，并把本次训练转化为用户画像和下一步训练建议。
 
 ------
 
@@ -103,16 +106,20 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 
 1. 题库初始化与题目浏览。
 2. 中文 Markdown 题面渲染。
-3. 做题工作台：题面、代码编辑器、AI 教练对话。
-4. 两种训练模式：入门引导、独立训练。
-5. AI 教练分层提示。
-6. 用户代码 review。
-7. 本地代码运行工具，至少支持 Python。
-8. 用户手动回填 LeetCode 提交结果。
-9. 单题复盘总结。
-10. 用户学习画像更新。
-11. Agent 执行 trace 记录。
-12. 本地教程语料导入与 RAG 教练知识库接入。
+3. 首访目标校准：目标、时间线、每周投入、首选语言和自评弱项。
+4. 规则化基础训练计划：根据目标、难度、题型标签和用户画像生成下一题或下一组训练建议。
+5. 做题工作台：题面、Python 代码编辑器、AI 教练对话。
+6. 两种核心训练模式：入门引导、独立训练。
+7. 面试模拟模式的轻量版本：计时、追问、代码 review 和复盘评分，不做完整面试平台。
+8. AI 教练分层提示，并在前端用用户可理解的提示档位展示。
+9. 用户代码 review。
+10. 本地代码运行工具，第一版支持 Python。
+11. 用户手动回填 LeetCode 提交结果。
+12. 单题复盘总结。
+13. 用户学习画像更新。
+14. 基础学习仪表盘：题型掌握度、常见卡点、平均提示等级和最近训练趋势。
+15. Agent 执行 trace 记录。
+16. 本地教程语料导入与 RAG 教练知识库接入。
 
 ### 5.2 第一版不做
 
@@ -123,6 +130,8 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 5. 不公开提交完整题面数据到自己的 Git 仓库。
 6. 不优先做复杂排行榜、社区、分享等社交功能。
 7. 不支持多语言代码运行，第一版只支持 Python。
+8. 不做日历集成、打卡提醒、移动端原生应用等学习管理外围能力。
+9. 不做系统设计、行为面试、简历润色等泛面试训练模块。
 
 ------
 
@@ -136,8 +145,8 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 - 支持难度筛选。
 - 支持关键词搜索。
 - 支持题型标签筛选。
-- 支持优先级排序。
-- 支持训练状态过滤：未开始、进行中、已完成、待复盘。
+- 支持分类筛选，例如后续 Hot 100、Blind 75、NeetCode 150。
+- 第一版只展示题目静态数据；用户训练状态、最近训练时间、平均提示等级和训练状态过滤在训练会话模型完成后接入。
 
 字段展示：
 
@@ -145,21 +154,52 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 - 标题。
 - 难度。
 - 标签。
-- 用户状态。
-- 最近训练时间。
-- 平均提示等级。
+- 分类。
+- LeetCode 原题入口。
 
-### 6.2 做题工作台
+### 6.2 首访目标校准页
+
+功能：
+
+- 采集用户目标：刷题入门、面试冲刺、专项补弱或保持手感。
+- 采集时间线：无明确时间、1 个月内、1～3 个月、3 个月以上。
+- 采集每周投入：每周可训练天数和单次训练时长。
+- 采集首选语言：第一版只允许 Python，后续可扩展。
+- 采集自评弱项：题意理解、题型识别、复杂度优化、代码实现、边界条件、面试表达。
+
+输出：
+
+- 初始化 `user_learning_goal`。
+- 生成第一版规则化训练计划。
+- 设置默认训练模式和提示档位偏好。
+
+### 6.3 学习计划页
+
+功能：
+
+- 展示当前训练目标和计划周期。
+- 展示推荐题单，按题型、难度和优先级分组。
+- 展示每道题的训练状态、建议模式和推荐理由。
+- 支持用户手动调整题单顺序或跳过题目。
+
+第一版计划生成规则：
+
+- 入门用户优先 Easy 和高频基础题型。
+- 面试冲刺用户优先 Blind 75 / Grind 75 / NeetCode 150 风格的高频题集映射。
+- 专项补弱用户优先用户画像中 mastery_score 较低的题型。
+- 最近连续失败的题型优先插入低难度巩固题。
+
+### 6.4 做题工作台
 
 页面布局：
 
 - 左侧：题目详情，渲染 Markdown 中文题面。
-- 中间：Python / Java 代码编辑区。
+- 中间：Python 代码编辑区。
 - 右侧：AI 教练对话区。
-- 顶部：题目标题、难度、标签、LeetCode 原题链接、训练模式、当前提示等级。
+- 顶部：题目标题、难度、标签、LeetCode 原题链接、训练模式、当前提示档位。
 - 底部或侧边：运行结果、提交回填、复盘入口。
 
-### 6.3 复盘页
+### 6.5 复盘页
 
 展示内容：
 
@@ -171,6 +211,30 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 - 正确解法核心不变量。
 - 用户画像更新记录。
 - 推荐下一题。
+
+### 6.6 学习仪表盘
+
+展示内容：
+
+- 总训练题数、完成题数、最近训练时间和连续训练概况。
+- 按算法标签展示掌握度，例如哈希表、双指针、滑动窗口、二分、动态规划。
+- 按卡点类型展示弱项分布，例如题型识别、不变量、边界条件、实现细节、复杂度。
+- 展示平均提示等级、最高提示等级分布和独立完成比例。
+- 展示最近训练趋势：题目结果、提示使用、错误类型和复盘完成情况。
+- 展示下一组推荐训练及推荐理由。
+
+### 6.7 面试模拟页
+
+定位：
+
+- 面试模拟模式是独立训练模式的高压变体，第一版只做算法题面试模拟，不扩展到系统设计或行为面试。
+
+功能：
+
+- 设置 30～45 分钟倒计时。
+- AI 以面试官方式追问题意、暴力解、优化思路、复杂度、边界条件和代码实现。
+- 默认更克制地控制提示，低提示档位只追问。
+- 结束后生成面试表现复盘，包括思路表达、代码质量、复杂度分析、沟通清晰度和改进建议。
 
 ------
 
@@ -199,6 +263,19 @@ AI 行为：
 - 优先追问，不直接提示。
 - 重点检查思路漏洞、复杂度、边界条件和表达能力。
 - 提示层级提升更慢。
+
+### 7.3 面试模拟模式
+
+适合 B 类用户和面试冲刺用户。
+
+AI 行为：
+
+- 更像真实技术面试官。
+- 控制时间节奏，必要时提醒用户推进到下一阶段。
+- 优先要求用户先表达题意理解、暴力解法、优化方向和复杂度。
+- 默认不主动给提示，除非用户明确请求或长时间无法推进。
+- 对代码之外的表达能力进行评分，例如沟通清晰度、推导过程和边界条件覆盖。
+- 结束后生成独立的 mock interview summary，并沉淀到用户画像。
 
 ------
 
@@ -244,6 +321,15 @@ review 代码
 | Level 4 | 给伪代码框架          | 遍历数组，计算 complement，先查 map，再写入当前元素。 |
 | Level 5 | 给完整解法思路        | 系统解释完整思路，但仍不默认直接给完整代码。          |
 
+前端展示可以把内部 0～5 级 hint level 包装为更容易理解的提示档位：
+
+| 用户可见档位 | 对应内部等级 | 行为边界 |
+| ------------ | ------------ | -------- |
+| 追问档       | Level 0      | 只追问和澄清，不提示题型或数据结构 |
+| 方向档       | Level 1～2   | 提示题型方向或关键数据结构，不给完整流程 |
+| 关键档       | Level 3～4   | 提醒核心不变量或伪代码框架，不给可直接提交的完整代码 |
+| 复盘档       | Level 5      | 可以解释完整思路，但仍默认不直接贴完整代码 |
+
 提示层级提升条件：
 
 - 用户明确请求更多提示。
@@ -264,19 +350,19 @@ review 代码
 
 ### 9.1 数据源
 
-第一版主数据源使用：
+第一版原始数据参考：
 
 ```text
-https://github.com/fishjar/leetcode-problemset/tree/main/problemset_md
+https://github.com/fishjar/leetcode-problemset
 ```
 
 使用方式：
 
-1. 程序启动时检查本地数据库是否已有题库。
-2. 如果没有，则初始化拉取或读取 problemset_md。
-3. 解析 Markdown，导入数据库。
-4. 后续启动直接读取数据库。
-5. 单独提供同步命令用于更新题库。
+1. 将参考仓库 clone 到本地忽略目录 `data/sources/leetcode-problemset`。
+2. 使用 Python 数据准备脚本解析 Markdown 和 JSON。
+3. 生成结构化 seed 文件到 `data/seed/`。
+4. 应用通过 `make db-seed` 从 seed 文件导入数据库。
+5. 后续启动直接读取数据库，不在运行时解析第三方参考仓库。
 
 ### 9.2 题面与题解隔离
 
@@ -288,27 +374,52 @@ https://github.com/fishjar/leetcode-problemset/tree/main/problemset_md
 | ------------- | -------------------------- | ---------------------- |
 | statement_md  | 题面、示例、约束           | 是                     |
 | metadata_json | 难度、标签、原链接、相似题 | 是                     |
-| solution_md   | 题解、完整思路、代码       | 否                     |
 | coach_notes   | 人工维护的教练提示卡片     | 按 hint level 控制     |
+
+第一版 `problem` 表不保存题解字段。数据准备脚本会丢弃 `## solution 题解` 之后的内容。后续如果高提示等级或复盘阶段确实需要题解，应单独设计 `problem_solution` 表和权限控制。
 
 ### 9.3 problem 表
 
 ```text
 problem
 - id
-- problem_id
+- frontend_id
 - title
+- translated_title
 - slug
 - difficulty
 - statement_md
-- solution_md
 - metadata_json
 - leetcode_url
-- source_repo
-- source_path
-- source_commit
-- content_hash
-- priority
+- is_paid_only
+- created_at
+- updated_at
+```
+
+### 9.4 problem_category 表
+
+分类是题目集合或题单定义。第一版全量题库导入时可以没有任何分类记录；有明确题单时才写分类和关联数据。
+
+```text
+problem_category
+- id
+- slug
+- name
+- description
+- created_at
+- updated_at
+```
+
+### 9.5 problem_category_item 表
+
+题目和分类是多对多关系，一道题可以属于多个分类。
+
+```text
+problem_category_item
+- id
+- category_id
+- problem_id
+- sort_order
 - created_at
 - updated_at
 ```
@@ -334,7 +445,7 @@ problem
 - LangGraph 负责编排学习流程。
 - RAG 以本地算法教程语料为知识底座，优先提供抽取后的教练知识，不直接提供答案。
 - Tool 提供代码运行和错误反馈。
-- Memory 记录用户当前状态和长期能力画像。
+- Memory 记录用户当前状态、目标、训练计划和长期能力画像。
 - Eval 和 Trace 保证 Agent 行为可控、可观测、可改进。
 
 ------
@@ -346,6 +457,7 @@ problem
 ```text
 ProblemSelected
 -> BuildProblemContext
+-> LoadGoalAndPlanContext
 -> RetrieveCoachContext
 -> DiagnoseStuckPoint
 -> DecideNextAction
@@ -364,6 +476,7 @@ ProblemSelected
 | --------------------- | -------------------------------------- |
 | ProblemSelected       | 用户选择题目，初始化 session           |
 | BuildProblemContext   | 加载题面、标签、用户历史记录           |
+| LoadGoalAndPlanContext | 加载用户目标、当前训练计划和推荐理由   |
 | RetrieveCoachContext  | 从 RAG 中检索教练知识和历史相似卡点    |
 | DiagnoseStuckPoint    | 判断用户当前卡点                       |
 | DecideNextAction      | 决定追问、提示、review、运行代码或复盘 |
@@ -385,8 +498,12 @@ ProblemSelected
   "user_id": "string",
   "problem_slug": "string",
   "phase": "UNDERSTAND | PLAN | IMPLEMENT | DEBUG | REVIEW | SUMMARY",
-  "training_mode": "guided | independent",
+  "training_mode": "guided | independent | mock_interview",
+  "goal_id": "string",
+  "study_plan_id": "string",
+  "plan_item_id": "string",
   "current_hint_level": 0,
+  "visible_hint_gear": "questioning | direction | key_hint | review",
   "max_hint_level_used": 0,
   "attempt_count": 0,
   "user_message": "string",
@@ -691,6 +808,8 @@ retrieval_trace
 | generate_test_cases_tool | 根据题面生成基础样例和边界样例                 |
 | analyze_code_tool        | 对代码做静态分析和复杂度初判                   |
 | classify_error_tool      | 根据运行结果、用户反馈和代码判断错误类型       |
+| recommend_next_problem_tool | 根据用户画像、训练目标和题库标签生成下一题或下一组题 |
+| score_mock_interview_tool | 根据面试模拟过程生成结构化评分和改进建议       |
 
 ### 13.2 run_python_code_tool
 
@@ -776,6 +895,66 @@ runtime_error
 unknown_error
 ```
 
+### 13.6 recommend_next_problem_tool
+
+输入：
+
+```json
+{
+  "user_id": "string",
+  "goal_id": "string",
+  "skill_profile": [],
+  "recent_sessions": [],
+  "available_problems": []
+}
+```
+
+输出：
+
+```json
+{
+  "recommendations": [
+    {
+      "problem_slug": "string",
+      "reason": "用于巩固滑动窗口收缩条件",
+      "suggested_mode": "guided | independent | mock_interview"
+    }
+  ]
+}
+```
+
+第一版使用规则排序，不引入复杂推荐模型。
+
+### 13.7 score_mock_interview_tool
+
+输入：
+
+```json
+{
+  "session_id": "string",
+  "transcript": [],
+  "code_snapshots": [],
+  "tool_results": []
+}
+```
+
+输出：
+
+```json
+{
+  "overall_score": 72,
+  "dimensions": {
+    "problem_understanding": 80,
+    "reasoning": 70,
+    "complexity_analysis": 65,
+    "code_quality": 75,
+    "communication": 70
+  },
+  "strengths": ["能主动给出暴力解法"],
+  "improvements": ["优化思路表达不够清晰", "边界条件覆盖不足"]
+}
+```
+
 ------
 
 ## 14. Memory Layer 设计
@@ -786,6 +965,7 @@ unknown_error
 
 - 当前题目。
 - 当前阶段。
+- 当前训练目标和计划项。
 - 用户思路。
 - 用户代码快照。
 - 已经给过的提示。
@@ -796,7 +976,51 @@ unknown_error
 
 ### 14.2 长期记忆
 
-长期记忆保存用户跨题目的能力画像：
+长期记忆保存用户跨题目的目标、计划和能力画像：
+
+```text
+user_learning_goal
+- id
+- user_id
+- goal_type            # beginner / interview_sprint / strengthen_weakness / maintain
+- target_timeline      # none / within_1_month / 1_to_3_months / over_3_months
+- weekly_days
+- session_minutes
+- preferred_language   # 第一版固定为 python
+- self_reported_weaknesses
+- default_training_mode
+- created_at
+- updated_at
+```
+
+```text
+study_plan
+- id
+- user_id
+- goal_id
+- title
+- status               # active / completed / archived
+- start_date
+- end_date
+- strategy             # beginner_path / interview_sprint / weakness_based
+- created_at
+- updated_at
+```
+
+```text
+study_plan_item
+- id
+- plan_id
+- problem_slug
+- skill_tags
+- difficulty
+- suggested_mode
+- recommendation_reason
+- status               # pending / in_progress / completed / skipped
+- order_index
+- created_at
+- updated_at
+```
 
 ```text
 user_skill_profile
@@ -825,6 +1049,25 @@ user_skill_profile
   "evidence": "用户在代码 review 阶段两次遗漏 right 指针边界",
   "next_recommendation": "继续练习 2 道固定窗口和可变窗口题"
 }
+```
+
+### 14.4 mock_interview_summary
+
+面试模拟结束后生成结构化总结：
+
+```text
+mock_interview_summary
+- id
+- session_id
+- user_id
+- problem_slug
+- duration_seconds
+- overall_score
+- dimension_scores
+- strengths
+- improvements
+- interviewer_notes
+- created_at
 ```
 
 ------
@@ -880,6 +1123,41 @@ user_skill_profile
 }
 ```
 
+### 15.5 StudyPlanRecommendation
+
+```json
+{
+  "plan_id": "string",
+  "strategy": "beginner_path | interview_sprint | weakness_based",
+  "items": [
+    {
+      "problem_slug": "two-sum",
+      "skill_tags": ["hash_table"],
+      "suggested_mode": "guided",
+      "reason": "适合作为哈希表 complement 查找的入门题"
+    }
+  ]
+}
+```
+
+### 15.6 MockInterviewSummary
+
+```json
+{
+  "overall_score": 72,
+  "dimension_scores": {
+    "problem_understanding": 80,
+    "reasoning": 70,
+    "complexity_analysis": 65,
+    "code_quality": 75,
+    "communication": 70
+  },
+  "main_feedback": "用户能给出暴力解法，但优化推导和边界条件表达不足",
+  "profile_delta": {},
+  "recommended_followups": []
+}
+```
+
 ------
 
 ## 16. 提交回填设计
@@ -922,13 +1200,18 @@ practice_session
 - id
 - user_id
 - problem_slug
-- training_mode
+- goal_id
+- study_plan_id
+- plan_item_id
+- training_mode        # guided / independent / mock_interview
 - status              # started / coding / submitted / reviewed / completed
 - current_phase
 - current_hint_level
+- visible_hint_gear
 - max_hint_level_used
 - attempt_count
 - final_result
+- duration_seconds
 - started_at
 - completed_at
 - created_at
@@ -941,9 +1224,10 @@ practice_session
 practice_event
 - id
 - session_id
-- event_type          # user_message / ai_message / tool_call / hint_used / code_run / submit_feedback
+- event_type          # user_message / ai_message / tool_call / hint_used / code_run / submit_feedback / mock_interview_score
 - phase
 - hint_level
+- visible_hint_gear
 - content
 - metadata_json
 - created_at
@@ -1132,20 +1416,23 @@ agent_trace
 
 第一版跑通后，用户应该能完成：
 
-1. 浏览题库。
-2. 打开一道题并看到中文 Markdown 题面。
-3. 和 AI 教练围绕这道题进行启发式对话。
-4. AI 能判断用户当前卡点。
-5. AI 能根据 hint level 控制提示粒度。
-6. 用户能在系统内写 Python 代码。
-7. AI 能 review 用户代码。
-8. 系统能运行基础样例并返回结构化结果。
-9. 用户能跳转 LeetCode 提交。
-10. 用户能回填提交结果。
-11. AI 能基于提交结果进行复盘。
-12. 系统能记录用户薄弱点、提示使用情况和题目进度。
-13. 系统能展示一次 Agent 执行 trace。
-14. 系统能从本地教程语料中检索算法概念或派生教练卡片。
+1. 完成首访目标校准，并生成基础训练计划。
+2. 浏览题库或从学习计划进入推荐题目。
+3. 打开一道题并看到中文 Markdown 题面。
+4. 和 AI 教练围绕这道题进行启发式对话。
+5. AI 能判断用户当前卡点。
+6. AI 能根据 hint level 控制提示粒度，并用用户可理解的提示档位展示。
+7. 用户能在系统内写 Python 代码。
+8. AI 能 review 用户代码。
+9. 系统能运行基础样例并返回结构化结果。
+10. 用户能跳转 LeetCode 提交。
+11. 用户能回填提交结果。
+12. AI 能基于提交结果进行复盘。
+13. 系统能记录用户薄弱点、提示使用情况和题目进度。
+14. 系统能展示题型掌握度、常见卡点、平均提示等级和下一组推荐训练。
+15. 用户能启动一次轻量面试模拟，并获得结构化评分与改进建议。
+16. 系统能展示一次 Agent 执行 trace。
+17. 系统能从本地教程语料中检索算法概念或派生教练卡片。
 
 ### 21.1 可量化指标
 
@@ -1155,6 +1442,10 @@ agent_trace
 | 复盘生成率         | 完成训练后 100% 生成复盘           |
 | 代码 review 可用率 | 能指出至少一个有效问题或确认正确性 |
 | 用户画像更新率     | 完成训练后 100% 生成 profile_delta |
+| 训练计划生成率     | 完成首访校准后 100% 生成基础训练计划 |
+| 推荐可解释性       | 每个推荐题目都有推荐理由和对应 skill_tag |
+| 仪表盘可解释性     | 掌握度和弱项指标能追溯到 practice_session 或 profile_delta |
+| 面试模拟总结生成率 | 完成面试模拟后 100% 生成 MockInterviewSummary |
 | session 可恢复     | 刷新页面后能恢复当前题目和对话状态 |
 | trace 完整率       | 每次 AI 回复都有对应 trace         |
 | RAG 命中可解释性   | 每次 RAG 回复都能追溯到 doc_id 或 chunk_id |
@@ -1165,10 +1456,12 @@ agent_trace
 
 ### Milestone 1：题库与基础 Web 工作台
 
-目标：完成基本做题界面。
+目标：完成基本做题界面和首访入口。
 
 任务：
 
+- 首访目标校准页。
+- 基础学习计划页壳层。
 - 题库初始化。
 - Markdown 题面解析。
 - 题库列表页。
@@ -1186,7 +1479,8 @@ agent_trace
 - 教练 prompt。
 - 结构化输出。
 - hint level 控制。
-- 两种训练模式。
+- 用户可见提示档位映射。
+- 两种核心训练模式。
 - practice_session 和 practice_event 记录。
 
 ### Milestone 3：LangGraph 状态机
@@ -1230,19 +1524,35 @@ agent_trace
 - 错误归因。
 - CodeReviewResult 结构化输出。
 
-### Milestone 6：复盘、画像和推荐
+### Milestone 6：复盘、画像、计划和仪表盘
 
-目标：训练结果沉淀为用户画像。
+目标：训练结果沉淀为用户画像，并驱动下一步训练。
 
 任务：
 
 - SessionSummary。
 - user_skill_profile。
 - profile_delta。
-- 简单下一题推荐。
+- user_learning_goal。
+- study_plan 和 study_plan_item。
+- 基于规则的下一题或下一组训练推荐。
+- 学习仪表盘基础视图。
 - 用户历史训练记录。
 
-### Milestone 7：评估与可观测性
+### Milestone 7：轻量面试模拟
+
+目标：把独立训练扩展为更接近真实技术面试的计时训练。
+
+任务：
+
+- 面试模拟模式。
+- 倒计时和阶段推进。
+- 面试官式追问 prompt。
+- score_mock_interview_tool。
+- MockInterviewSummary。
+- 面试表现沉淀到用户画像。
+
+### Milestone 8：评估与可观测性
 
 目标：证明系统不是普通 ChatGPT 套壳。
 
@@ -1370,6 +1680,10 @@ agent_trace
 
 - 第一版只支持 Python。
 - 第一版只做基础样例运行，不做完整 OJ。
+- 首访目标校准只采集少量关键字段，不做复杂问卷。
+- 学习计划第一版只做规则生成，不做日历、提醒和复杂排期。
+- 学习仪表盘第一版只展示已有训练数据，不做复杂统计建模。
+- 面试模拟第一版只作为独立训练的计时变体，不扩展系统设计或行为面试。
 - 本地教程导入第一版只要求跑通少量高质量资料，不追求全量自动化清洗。
 - 派生教练卡片第一版可以半自动生成，必要时人工修正。
 - 推荐算法先用规则。
@@ -1386,6 +1700,8 @@ agent_trace
 - 强调 hint level 控制。
 - 强调代码运行工具。
 - 强调用户画像。
+- 强调目标校准、学习计划和仪表盘把单题训练串成长期路径。
+- 强调面试模拟模式把刷题训练转化为表达和临场能力训练。
 - 强调 trace 和 eval。
 - 展示同一道题从卡点诊断到复盘的完整闭环。
 
@@ -1401,9 +1717,11 @@ agent_trace
 2. **本地教程增强 RAG**：把热门算法教程沉淀为可追溯的概念卡片、模式卡片、常见错误卡片和题目教练卡片，而不是直接检索完整答案。
 3. **分层提示控制**：通过 hint level 控制 AI 暴露信息的粒度，避免用户直接看答案。
 4. **工具调用闭环**：通过代码执行、测试用例生成、错误归因和代码 review，把 AI 对话变成可反馈的训练过程。
-5. **长期学习画像**：记录用户在题型、边界条件、实现细节上的薄弱点。
-6. **评估与可观测性**：通过 trace 和 eval 证明 Agent 行为可控、可分析、可优化。
+5. **目标校准与学习计划**：根据用户目标、时间线和弱项生成可解释的训练路径，而不是只给单题建议。
+6. **长期学习画像和仪表盘**：记录用户在题型、边界条件、实现细节和表达能力上的薄弱点，并可视化训练进展。
+7. **面试模拟模式**：把独立刷题升级为计时追问、表达评估和代码 review 的模拟面试。
+8. **评估与可观测性**：通过 trace 和 eval 证明 Agent 行为可控、可分析、可优化。
 
 最终主线：
 
-> 用完整中文题库和本地算法教程做内容底座，用 LangGraph 做刷题教练状态机，用 RAG 和工具系统增强教练能力，用用户画像沉淀训练结果，把“看答案”变成“被引导着独立想出来”。
+> 用完整中文题库和本地算法教程做内容底座，用 LangGraph 做刷题教练状态机，用 RAG 和工具系统增强教练能力，用目标校准、学习计划、用户画像和面试模拟沉淀长期训练结果，把“看答案”变成“被引导着独立想出来，并能在面试中讲清楚”。

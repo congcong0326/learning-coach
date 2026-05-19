@@ -28,6 +28,7 @@ infra/
 - 使用 Python 3.12 slim。
 - 使用 uv 安装 Python 依赖。
 - 运行 FastAPI 应用。
+- 打包 `scripts/` 和 `data/seed/`，用于私有或本地镜像中的题库 seed 导入。
 
 默认启动命令：
 
@@ -36,6 +37,8 @@ uv run --no-sync uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 
 开发 compose 会加 `--reload`，并把本地 `backend/` 挂载进容器。
+
+题库原始参考仓库不进入镜像。题库 seed 文件由本地命令生成到 `data/seed/`；生产/打包镜像可以包含该目录，用于启动前执行一次性 seed 导入。由于 seed 文件包含完整题面，打包后的镜像默认面向本地或私有环境，不应直接公开分发。
 
 ### frontend
 
@@ -165,8 +168,17 @@ docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 - `POSTGRES_HOST_PORT`
 - `DATABASE_URL`
 - `DOCKER_DATABASE_URL`
+- `PROBLEM_SEED_PATH`
+- `SEED_PROBLEMS_ON_STARTUP`
 
 本机直接运行后端时，数据库地址应指向 `localhost:15432`。容器内后端运行时，数据库地址应指向 `postgres:5432`。
+
+默认推荐使用显式 seed 命令，而不是后端启动时隐式导入：
+
+```bash
+make prepare-problem-seed
+make db-seed
+```
 
 ## Smoke Test
 

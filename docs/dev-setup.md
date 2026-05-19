@@ -56,6 +56,22 @@ make down
 - `make smoke`：检查后端、数据库、前端和 code-runner。
 - `make down`：停止并移除开发容器和网络，保留开发数据库 volume。
 
+## 题库 seed 数据准备
+
+题库原始参考仓库和生成后的题面 seed 文件默认只用于本地或私有环境，不应提交到公开 Git 仓库。
+
+首次准备题库数据：
+
+```bash
+mkdir -p data/sources
+git clone https://github.com/fishjar/leetcode-problemset.git data/sources/leetcode-problemset
+make prepare-problem-seed
+make db-migrate
+make db-seed
+```
+
+执行后，前端题库页会从后端 `GET /api/problems` 读取数据库中的题目静态数据。
+
 ## 本地校验
 
 ```bash

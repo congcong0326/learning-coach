@@ -65,6 +65,9 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `GET /health`
 - `GET /api/health`
 - `GET /api/db/health`
+- `GET /api/problems`
+- `GET /api/problems/{slug}`
+- `GET /api/problem-categories`
 
 后续产品功能会放在以下模块边界中：
 
@@ -94,6 +97,24 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `app_metadata`。
 - 创建基础 `agent_trace`。
 - 创建基础 `retrieval_trace`。
+
+题库数据使用结构化 seed 文件导入，不在应用运行时解析第三方参考仓库。数据准备流程是：
+
+```text
+本地忽略的 data/sources/leetcode-problemset
+-> scripts/prepare_problem_seed.py
+-> data/seed/*.jsonl
+-> make db-seed
+-> PostgreSQL problem / problem_category / problem_category_item
+```
+
+第一版题库浏览只展示题目静态数据，不展示用户训练状态、最近训练时间或平均提示等级。
+
+当前题库相关 migration 会：
+
+- 创建 `problem`。
+- 创建 `problem_category`。
+- 创建 `problem_category_item`。
 
 ## Docker Compose 角色
 
@@ -142,11 +163,10 @@ make down
 
 基座完成后，后续功能应按 PRD 里程碑推进：
 
-1. 题库初始化和题目浏览。
-2. 做题工作台。
-3. 基础 AI 教练闭环。
-4. LangGraph 状态机。
-5. RAG 教练知识库。
-6. 代码执行与错误归因。
-7. 复盘、画像和推荐。
-8. Trace 和评估。
+1. 做题工作台的代码编辑与训练会话。
+2. 基础 AI 教练闭环。
+3. LangGraph 状态机。
+4. RAG 教练知识库。
+5. 代码执行与错误归因。
+6. 复盘、画像和推荐。
+7. Trace 和评估。

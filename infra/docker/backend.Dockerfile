@@ -13,6 +13,8 @@ COPY pyproject.toml uv.lock .python-version README.md ./
 RUN uv sync --frozen --no-dev
 
 COPY backend ./backend
+COPY scripts ./scripts
+COPY data/seed ./data/seed
 COPY alembic.ini ./alembic.ini
 
 EXPOSE 8000
