@@ -23,3 +23,27 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: () => false,
   }),
 })
+
+class ResizeObserverStub {
+  observe() {
+    return undefined
+  }
+
+  unobserve() {
+    return undefined
+  }
+
+  disconnect() {
+    return undefined
+  }
+}
+
+Object.defineProperty(window, 'ResizeObserver', {
+  writable: true,
+  value: ResizeObserverStub,
+})
+
+Object.defineProperty(globalThis, 'ResizeObserver', {
+  writable: true,
+  value: ResizeObserverStub,
+})

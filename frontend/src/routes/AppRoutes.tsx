@@ -1,20 +1,13 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
 import { Typography } from 'antd'
+import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { ApiKeySettingsPage } from '../pages/ApiKeySettingsPage'
+import { GoalCalibrationPage } from '../pages/GoalCalibrationPage'
 import { ProblemLibraryPage } from '../pages/ProblemLibraryPage'
 import { ReviewPage } from '../pages/ReviewPage'
 import { TracePage } from '../pages/TracePage'
 import { WorkspacePage } from '../pages/WorkspacePage'
 import { AuthRedirect } from './AuthRedirect'
-
-function GoalCalibrationPagePlaceholder() {
-  return (
-    <section className="page-section">
-      <Typography.Title level={2}>目标校准</Typography.Title>
-    </section>
-  )
-}
 
 function StudyPlanPagePlaceholder() {
   return (
@@ -38,7 +31,7 @@ export function AppRoutes() {
       <Route path="/" element={<AuthRedirect />} />
       <Route path="/settings/api-keys" element={<ApiKeySettingsPage />} />
       <Route path="/problems" element={<ProblemLibraryPage />} />
-      <Route path="/goal-calibration" element={<GoalCalibrationPagePlaceholder />} />
+      <Route path="/goal-calibration" element={<GoalCalibrationPage />} />
       <Route path="/study-plan" element={<StudyPlanPagePlaceholder />} />
       <Route path="/study-plans" element={<StudyPlanHistoryPagePlaceholder />} />
       <Route
