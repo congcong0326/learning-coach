@@ -20,6 +20,7 @@ from backend.app.models.problem import Problem
 
 
 PRESERVED_ITEM_STATUSES = {"completed", "in_progress", "skipped"}
+ACTIVE_VERSION_STATUSES = {"active", "draft"}
 
 
 class StudyPlanError(RuntimeError):
@@ -47,9 +48,9 @@ async def get_active_plan_version(
     user: AppUser,
     plan_id: int,
 ) -> StudyPlanVersion:
+    plan = await _load_plan(db, user, plan_id)
     result = await db.execute(
         select(StudyPlanVersion)
-        .join(StudyPlan)
         .options(
             selectinload(StudyPlanVersion.stages)
             .selectinload(StudyPlanStage.items)
@@ -57,14 +58,16 @@ async def get_active_plan_version(
             selectinload(StudyPlanVersion.items).selectinload(StudyPlanItem.problem),
         )
         .where(
-            StudyPlan.id == plan_id,
-            StudyPlan.user_id == user.id,
-            StudyPlanVersion.status == "active",
+            StudyPlanVersion.plan_id == plan.id,
+            StudyPlanVersion.version_number == plan.active_version_number,
         )
     )
     version = result.scalar_one_or_none()
     if version is None:
         raise StudyPlanError("active_study_plan_version_not_found")
+    if version.status not in ACTIVE_VERSION_STATUSES:
+        raise StudyPlanError("active_study_plan_version_inconsistent")
+    await _set_only_active_version(db, version)
     return version
 
 
@@ -74,6 +77,32 @@ async def _problem_by_slug(db: AsyncSession, slug: str) -> Problem:
     if problem is None:
         raise StudyPlanError("validated_problem_not_found")
     return problem
+
+
+async def _load_plan(db: AsyncSession, user: AppUser, plan_id: int) -> StudyPlan:
+    result = await db.execute(
+        select(StudyPlan).where(StudyPlan.id == plan_id, StudyPlan.user_id == user.id)
+    )
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        raise StudyPlanError("study_plan_not_found")
+    return plan
+
+
+async def _set_only_active_version(
+    db: AsyncSession,
+    version: StudyPlanVersion,
+) -> None:
+    await db.execute(
+        update(StudyPlanVersion)
+        .where(
+            StudyPlanVersion.plan_id == version.plan_id,
+            StudyPlanVersion.id != version.id,
+            StudyPlanVersion.status == "active",
+        )
+        .values(status="superseded")
+    )
+    version.status = "active"
 
 
 def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
@@ -90,13 +119,35 @@ def _list_of_strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+async def _normalized_stage_payloads(
+    db: AsyncSession,
+    draft_plan_json: dict[str, Any],
+) -> list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]]:
+    seen_problem_ids: set[int] = set()
+    normalized: list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]] = []
+    for stage_payload in _list_of_dicts(draft_plan_json.get("stages", [])):
+        normalized_items: list[tuple[dict[str, Any], Problem]] = []
+        for item_payload in _list_of_dicts(stage_payload.get("items", [])):
+            slug = item_payload.get("problem_slug", "")
+            if not isinstance(slug, str) or not slug:
+                raise StudyPlanError("validated_problem_not_found")
+            problem = await _problem_by_slug(db, slug)
+            if problem.id in seen_problem_ids:
+                raise StudyPlanError("duplicate_plan_item")
+            seen_problem_ids.add(problem.id)
+            normalized_items.append((item_payload, problem))
+        normalized.append((stage_payload, normalized_items))
+    return normalized
+
+
 async def _write_version_content(
     db: AsyncSession,
     version: StudyPlanVersion,
     draft_plan_json: dict[str, Any],
 ) -> None:
-    for stage_index, stage_payload in enumerate(
-        _list_of_dicts(draft_plan_json.get("stages", [])),
+    normalized_stages = await _normalized_stage_payloads(db, draft_plan_json)
+    for stage_index, (stage_payload, item_payloads) in enumerate(
+        normalized_stages,
         start=1,
     ):
         stage = StudyPlanStage(
@@ -114,14 +165,10 @@ async def _write_version_content(
         )
         db.add(stage)
         await db.flush()
-        for order_index, item_payload in enumerate(
-            _list_of_dicts(stage_payload.get("items", [])),
+        for order_index, (item_payload, problem) in enumerate(
+            item_payloads,
             start=1,
         ):
-            slug = item_payload.get("problem_slug", "")
-            if not isinstance(slug, str) or not slug:
-                raise StudyPlanError("validated_problem_not_found")
-            problem = await _problem_by_slug(db, slug)
             db.add(
                 StudyPlanItem(
                     version_id=version.id,
@@ -205,16 +252,6 @@ async def confirm_plan_draft(
         raise
 
 
-async def _load_plan(db: AsyncSession, user: AppUser, plan_id: int) -> StudyPlan:
-    result = await db.execute(
-        select(StudyPlan).where(StudyPlan.id == plan_id, StudyPlan.user_id == user.id)
-    )
-    plan = result.scalar_one_or_none()
-    if plan is None:
-        raise StudyPlanError("study_plan_not_found")
-    return plan
-
-
 def _sort_stages(stages: list[StudyPlanStage]) -> list[StudyPlanStage]:
     return sorted(stages, key=lambda stage: stage.stage_index)
 
@@ -223,11 +260,10 @@ def _sort_items(items: list[StudyPlanItem]) -> list[StudyPlanItem]:
     return sorted(items, key=lambda item: item.order_index)
 
 
-def _stage_payload_from_item(
-    item: StudyPlanItem,
-    stage_by_id: dict[int, StudyPlanStage],
+def _stage_payload_from_items(
+    stage: StudyPlanStage,
+    items: list[StudyPlanItem],
 ) -> dict[str, Any]:
-    stage = stage_by_id[item.stage_id]
     return {
         "title": stage.title,
         "objective_md": stage.objective_md,
@@ -240,6 +276,7 @@ def _stage_payload_from_item(
                 "suggested_mode": item.suggested_mode,
                 "recommendation_reason": item.recommendation_reason,
             }
+            for item in items
         ],
     }
 
@@ -267,12 +304,16 @@ def _merged_adjustment_draft(
 ) -> dict[str, Any]:
     preserved = _preserved_items(old_version)
     draft_slugs = _draft_problem_slugs(draft_plan_json)
-    stage_by_id = {stage.id: stage for stage in old_version.stages}
-    preserved_stages = [
-        _stage_payload_from_item(item, stage_by_id)
-        for item in _sort_items(list(preserved.values()))
-        if item.problem_slug not in draft_slugs
-    ]
+    preserved_stages: list[dict[str, Any]] = []
+    for stage in _sort_stages(old_version.stages):
+        preserved_items = [
+            item
+            for item in _sort_items(stage.items)
+            if item.problem_slug in preserved
+            and item.problem_slug not in draft_slugs
+        ]
+        if preserved_items:
+            preserved_stages.append(_stage_payload_from_items(stage, preserved_items))
     return {
         **draft_plan_json,
         "stages": preserved_stages
@@ -460,7 +501,7 @@ async def activate_plan(
         version = result.scalar_one_or_none()
         if version is None:
             raise StudyPlanError("active_study_plan_version_not_found")
-        version.status = "active"
+        await _set_only_active_version(db, version)
         version.activated_at = version.activated_at or datetime.now(UTC)
         plan.status = "active"
         plan.updated_at = datetime.now(UTC)

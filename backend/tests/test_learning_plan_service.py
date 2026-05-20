@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from pydantic import ValidationError
-from sqlalchemy import Table
+from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.models.auth import AppUser
@@ -21,7 +21,7 @@ from backend.app.models.learning import (
     StudyPlanVersion,
 )
 from backend.app.models.problem import Base, Problem
-from backend.app.schemas.learning import GoalCalibrationInput
+from backend.app.schemas.learning import GoalCalibrationInput, StudyPlanResponse
 from backend.app.services.study_plan_service import (
     StudyPlanError,
     activate_plan,
@@ -224,6 +224,8 @@ async def create_learning_user(session: AsyncSession) -> AppUser:
     session.add(problem("two-sum"))
     session.add(problem("valid-parentheses", difficulty="Medium"))
     session.add(problem("merge-intervals", difficulty="Medium"))
+    session.add(problem("binary-search", difficulty="Easy"))
+    session.add(problem("climbing-stairs", difficulty="Easy"))
     await session.commit()
     await session.refresh(user)
     return user
@@ -258,6 +260,91 @@ def draft_plan_json(title: str = "学习计划") -> dict[str, Any]:
     }
 
 
+def duplicate_plan_json() -> dict[str, Any]:
+    plan = draft_plan_json("重复计划")
+    plan["stages"][0]["items"].append(
+        {
+            "problem_slug": "two-sum",
+            "skill_tags": ["array"],
+            "suggested_mode": "guided",
+            "recommendation_reason": "重复题目",
+        }
+    )
+    return plan
+
+
+def multi_stage_plan_json(title: str = "多阶段计划") -> dict[str, Any]:
+    return {
+        "title": title,
+        "generation_summary_md": "多阶段训练计划",
+        "stages": [
+            {
+                "title": "基础阶段",
+                "objective_md": "先练基础数据结构",
+                "focus_tags": ["array", "stack"],
+                "assessment_criteria": ["能稳定写出基础题"],
+                "items": [
+                    {
+                        "problem_slug": "two-sum",
+                        "skill_tags": ["array"],
+                        "suggested_mode": "guided",
+                        "recommendation_reason": "练习哈希表",
+                    },
+                    {
+                        "problem_slug": "valid-parentheses",
+                        "skill_tags": ["stack"],
+                        "suggested_mode": "independent",
+                        "recommendation_reason": "练习栈",
+                    },
+                ],
+            },
+            {
+                "title": "进阶阶段",
+                "objective_md": "补充区间和二分",
+                "focus_tags": ["interval", "binary-search"],
+                "assessment_criteria": ["能识别进阶模式"],
+                "items": [
+                    {
+                        "problem_slug": "merge-intervals",
+                        "skill_tags": ["interval"],
+                        "suggested_mode": "guided",
+                        "recommendation_reason": "练习区间",
+                    },
+                    {
+                        "problem_slug": "binary-search",
+                        "skill_tags": ["binary-search"],
+                        "suggested_mode": "independent",
+                        "recommendation_reason": "练习二分",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def replacement_plan_json() -> dict[str, Any]:
+    return {
+        "title": "替换计划",
+        "generation_summary_md": "替换后的训练计划",
+        "stages": [
+            {
+                "title": "新增阶段",
+                "objective_md": "新增动态规划入门",
+                "focus_tags": ["dp"],
+                "assessment_criteria": ["能解释状态转移"],
+                "items": [
+                    {
+                        "problem_slug": "climbing-stairs",
+                        "skill_tags": ["dp"],
+                        "suggested_mode": "guided",
+                        "recommendation_reason": "补充动态规划",
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def adjusted_plan_json() -> dict[str, Any]:
     return {
         "title": "调整计划",
@@ -286,6 +373,7 @@ async def create_ready_draft(
     user: AppUser,
     *,
     title: str = "学习计划",
+    plan_json: dict[str, Any] | None = None,
 ) -> GoalCalibrationDraft:
     now = datetime.now(UTC)
     draft = GoalCalibrationDraft(
@@ -293,7 +381,7 @@ async def create_ready_draft(
         input_json={"goal_type": "interview_sprint"},
         followup_messages_json=[],
         draft_goal_json={"goal_type": "interview_sprint", "weekly_days": 4},
-        draft_plan_json=draft_plan_json(title),
+        draft_plan_json=plan_json or draft_plan_json(title),
         validation_report_json={"valid": True},
         repair_log_json=[],
         prompt_version="goal-plan-v1",
@@ -307,6 +395,18 @@ async def create_ready_draft(
     await session.commit()
     await session.refresh(draft)
     return draft
+
+
+def ordered_stages(version: StudyPlanVersion) -> list[StudyPlanStage]:
+    return sorted(version.stages, key=lambda stage: stage.stage_index)
+
+
+def ordered_items(stage: StudyPlanStage) -> list[StudyPlanItem]:
+    return sorted(stage.items, key=lambda item: item.order_index)
+
+
+def item_by_slug(version: StudyPlanVersion, slug: str) -> StudyPlanItem:
+    return next(item for item in version.items if item.problem_slug == slug)
 
 
 @pytest.mark.asyncio
@@ -337,9 +437,9 @@ async def test_adjustment_clone_preserves_completed_items(
         draft = await create_ready_draft(session, user, title="原计划")
         plan = await confirm_plan_draft(session, user, draft.id)
         version = await get_active_plan_version(session, user, plan.id)
-        completed_slug = version.items[0].problem_slug
-        version.items[0].status = "completed"
-        version.items[0].locked = True
+        completed_item = item_by_slug(version, "two-sum")
+        completed_item.status = "completed"
+        completed_item.locked = True
         await session.commit()
 
         new_version = await clone_adjusted_version(
@@ -352,9 +452,7 @@ async def test_adjustment_clone_preserves_completed_items(
             repair_log_json=[],
         )
 
-        preserved = next(
-            item for item in new_version.items if item.problem_slug == completed_slug
-        )
+        preserved = item_by_slug(new_version, "two-sum")
         assert preserved.status == "completed"
         assert preserved.locked is True
         assert new_version.version_number == 2
@@ -377,7 +475,10 @@ async def test_plan_payload_lists_stages_items_and_current_plan(
         plans = await list_study_plans(session, user)
 
         assert payload["title"] == "当前计划"
-        assert payload["active_version"]["stages"][0]["items"][0]["frontend_id"] == "two-sum"
+        StudyPlanResponse.model_validate(payload)
+        stages = payload["active_version"]["stages"]
+        items = stages[0]["items"]
+        assert items[0]["frontend_id"] == "two-sum"
         assert current["id"] == plan.id
         assert plans["items"] == [
             {
@@ -400,7 +501,7 @@ async def test_update_plan_item_status_allows_only_pending_or_skipped_on_active_
         draft = await create_ready_draft(session, user)
         plan = await confirm_plan_draft(session, user, draft.id)
         version = await get_active_plan_version(session, user, plan.id)
-        item = version.items[0]
+        item = item_by_slug(version, "two-sum")
 
         returned_plan_id = await update_plan_item_status(
             session,
@@ -425,8 +526,8 @@ async def test_reorder_stage_items_requires_exact_same_item_set(
         draft = await create_ready_draft(session, user)
         plan = await confirm_plan_draft(session, user, draft.id)
         version = await get_active_plan_version(session, user, plan.id)
-        stage = version.stages[0]
-        ordered_ids = [item.id for item in sorted(stage.items, key=lambda item: item.order_index)]
+        stage = ordered_stages(version)[0]
+        ordered_ids = [item.id for item in ordered_items(stage)]
 
         returned_plan_id = await reorder_stage_items(
             session,
@@ -437,7 +538,7 @@ async def test_reorder_stage_items_requires_exact_same_item_set(
 
         assert returned_plan_id == plan.id
         await session.refresh(stage, attribute_names=["items"])
-        assert [item.id for item in sorted(stage.items, key=lambda item: item.order_index)] == list(
+        assert [item.id for item in ordered_items(stage)] == list(
             reversed(ordered_ids)
         )
         with pytest.raises(StudyPlanError, match="stage_item_set_mismatch"):
@@ -461,3 +562,124 @@ async def test_activate_plan_pauses_other_active_plans(
         assert activated.id == first_plan.id
         assert activated.status == "active"
         assert second_plan.status == "paused"
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_rejects_duplicate_plan_items(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(
+            session,
+            user,
+            plan_json=duplicate_plan_json(),
+        )
+
+        with pytest.raises(StudyPlanError, match="duplicate_plan_item"):
+            await confirm_plan_draft(session, user, draft.id)
+
+
+@pytest.mark.asyncio
+async def test_adjustment_clone_preserves_cross_stage_item_order_and_logs_changes(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(
+            session,
+            user,
+            plan_json=multi_stage_plan_json(),
+        )
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        item_by_slug(version, "two-sum").status = "completed"
+        item_by_slug(version, "valid-parentheses").status = "in_progress"
+        item_by_slug(version, "merge-intervals").status = "skipped"
+        await session.commit()
+
+        new_version = await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="保留已开始题目，替换未开始题目",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+
+        stages = ordered_stages(new_version)
+        assert [[item.problem_slug for item in ordered_items(stage)] for stage in stages] == [
+            ["two-sum", "valid-parentheses"],
+            ["merge-intervals"],
+            ["climbing-stairs"],
+        ]
+        assert item_by_slug(new_version, "two-sum").status == "completed"
+        assert item_by_slug(new_version, "valid-parentheses").status == "in_progress"
+        assert item_by_slug(new_version, "merge-intervals").status == "skipped"
+        result = await session.execute(
+            select(PlanChangeLog.change_type).where(
+                PlanChangeLog.version_id == new_version.id
+            )
+        )
+        change_types = sorted(result.scalars().all())
+        assert change_types.count("preserved") == 3
+        assert "added" in change_types
+        assert "removed" in change_types
+
+
+@pytest.mark.asyncio
+async def test_get_active_plan_version_uses_active_version_number_when_statuses_conflict(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        first_version = await get_active_plan_version(session, user, plan.id)
+        second_version = await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="制造多 active 版本状态",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+        first_version.status = "active"
+        await session.commit()
+
+        active_version = await get_active_plan_version(session, user, plan.id)
+
+        assert active_version.id == second_version.id
+        await session.refresh(first_version)
+        assert first_version.status == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_activate_plan_supersedes_other_active_versions(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        first_version = await get_active_plan_version(session, user, plan.id)
+        second_version = await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="制造多 active 版本状态",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+        first_version.status = "active"
+        await session.commit()
+
+        await activate_plan(session, user, plan.id)
+
+        await session.refresh(first_version)
+        await session.refresh(second_version)
+        assert first_version.status == "superseded"
+        assert second_version.status == "active"
