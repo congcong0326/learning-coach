@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -19,6 +20,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.models.problem import Base, ID_TYPE, Problem
+
+
+EMPTY_ARRAY = text("'[]'")
+EMPTY_OBJECT = text("'{}'")
+EMPTY_TEXT = text("''")
 
 
 class GoalCalibrationDraft(Base):
@@ -42,45 +48,66 @@ class GoalCalibrationDraft(Base):
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     draft_goal_json: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
+        server_default=EMPTY_OBJECT,
     )
     draft_plan_json: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
+        server_default=EMPTY_OBJECT,
     )
     validation_report_json: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
+        server_default=EMPTY_OBJECT,
     )
     repair_log_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     prompt_version: Mapped[str] = mapped_column(
         String(80),
         nullable=False,
         default="goal-plan-v1",
+        server_default=text("'goal-plan-v1'"),
     )
-    model_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    model_name: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+        default="",
+        server_default=EMPTY_TEXT,
+    )
     status: Mapped[str] = mapped_column(
         String(40),
         nullable=False,
         server_default=text("'collecting_input'"),
     )
-    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        server_default=EMPTY_TEXT,
+    )
     confirmed_plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("study_plan.id", ondelete="SET NULL"),
         nullable=True,
     )
     confirmed_version_id: Mapped[int | None] = mapped_column(
-        ForeignKey("study_plan_version.id", ondelete="SET NULL"),
+        ForeignKey(
+            "study_plan_version.id",
+            name="fk_goal_draft_confirmed_version",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -177,21 +204,25 @@ class StudyPlanVersion(Base):
         Text,
         nullable=False,
         default="",
+        server_default=EMPTY_TEXT,
     )
     adjustment_summary_md: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="",
+        server_default=EMPTY_TEXT,
     )
     validation_report_json: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
+        server_default=EMPTY_OBJECT,
     )
     repair_log_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -225,6 +256,11 @@ class StudyPlanStage(Base):
             "stage_index",
             name="uq_study_plan_stage_version_index",
         ),
+        UniqueConstraint(
+            "id",
+            "version_id",
+            name="uq_study_plan_stage_id_version",
+        ),
         Index("ix_study_plan_stage_version", "version_id"),
     )
 
@@ -240,11 +276,13 @@ class StudyPlanStage(Base):
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     assessment_criteria_json: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     status: Mapped[str] = mapped_column(
         String(30),
@@ -263,7 +301,10 @@ class StudyPlanStage(Base):
     )
 
     version: Mapped[StudyPlanVersion] = relationship(back_populates="stages")
-    items: Mapped[list[StudyPlanItem]] = relationship(back_populates="stage")
+    items: Mapped[list[StudyPlanItem]] = relationship(
+        back_populates="stage",
+        overlaps="items",
+    )
 
 
 class StudyPlanItem(Base):
@@ -279,6 +320,12 @@ class StudyPlanItem(Base):
             "order_index",
             name="uq_study_plan_item_stage_order",
         ),
+        ForeignKeyConstraint(
+            ["stage_id", "version_id"],
+            ["study_plan_stage.id", "study_plan_stage.version_id"],
+            name="fk_study_plan_item_stage_version",
+            ondelete="CASCADE",
+        ),
         Index("ix_study_plan_item_version_status", "version_id", "status"),
     )
 
@@ -287,10 +334,7 @@ class StudyPlanItem(Base):
         ForeignKey("study_plan_version.id", ondelete="CASCADE"),
         nullable=False,
     )
-    stage_id: Mapped[int] = mapped_column(
-        ForeignKey("study_plan_stage.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    stage_id: Mapped[int] = mapped_column(ID_TYPE, nullable=False)
     problem_id: Mapped[int] = mapped_column(
         ForeignKey("problem.id", ondelete="RESTRICT"),
         nullable=False,
@@ -300,6 +344,7 @@ class StudyPlanItem(Base):
         JSON,
         nullable=False,
         default=list,
+        server_default=EMPTY_ARRAY,
     )
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
     suggested_mode: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -326,8 +371,14 @@ class StudyPlanItem(Base):
         server_default=func.now(),
     )
 
-    version: Mapped[StudyPlanVersion] = relationship(back_populates="items")
-    stage: Mapped[StudyPlanStage] = relationship(back_populates="items")
+    version: Mapped[StudyPlanVersion] = relationship(
+        back_populates="items",
+        overlaps="items",
+    )
+    stage: Mapped[StudyPlanStage] = relationship(
+        back_populates="items",
+        overlaps="items,version",
+    )
     problem: Mapped[Problem] = relationship()
 
 
@@ -349,8 +400,14 @@ class PlanChangeLog(Base):
         JSON,
         nullable=False,
         default=dict,
+        server_default=EMPTY_OBJECT,
     )
-    reason_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reason_md: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        server_default=EMPTY_TEXT,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

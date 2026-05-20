@@ -17,6 +17,10 @@ down_revision: str | None = "20260519_0004"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+EMPTY_JSON_ARRAY = sa.text("'[]'::json")
+EMPTY_JSON_OBJECT = sa.text("'{}'::json")
+EMPTY_TEXT = sa.text("''")
+
 
 def upgrade() -> None:
     op.create_table(
@@ -81,20 +85,60 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("input_json", sa.JSON(), nullable=False),
-        sa.Column("followup_messages_json", sa.JSON(), nullable=False),
-        sa.Column("draft_goal_json", sa.JSON(), nullable=False),
-        sa.Column("draft_plan_json", sa.JSON(), nullable=False),
-        sa.Column("validation_report_json", sa.JSON(), nullable=False),
-        sa.Column("repair_log_json", sa.JSON(), nullable=False),
-        sa.Column("prompt_version", sa.String(length=80), nullable=False),
-        sa.Column("model_name", sa.String(length=120), nullable=False),
+        sa.Column(
+            "followup_messages_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
+        sa.Column(
+            "draft_goal_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_OBJECT,
+        ),
+        sa.Column(
+            "draft_plan_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_OBJECT,
+        ),
+        sa.Column(
+            "validation_report_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_OBJECT,
+        ),
+        sa.Column(
+            "repair_log_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
+        sa.Column(
+            "prompt_version",
+            sa.String(length=80),
+            nullable=False,
+            server_default=sa.text("'goal-plan-v1'"),
+        ),
+        sa.Column(
+            "model_name",
+            sa.String(length=120),
+            nullable=False,
+            server_default=EMPTY_TEXT,
+        ),
         sa.Column(
             "status",
             sa.String(length=40),
             nullable=False,
             server_default=sa.text("'collecting_input'"),
         ),
-        sa.Column("error_message", sa.Text(), nullable=False),
+        sa.Column(
+            "error_message",
+            sa.Text(),
+            nullable=False,
+            server_default=EMPTY_TEXT,
+        ),
         sa.Column(
             "confirmed_plan_id",
             sa.BigInteger(),
@@ -156,10 +200,30 @@ def upgrade() -> None:
             server_default=sa.text("'draft'"),
         ),
         sa.Column("target_snapshot_json", sa.JSON(), nullable=False),
-        sa.Column("generation_summary_md", sa.Text(), nullable=False),
-        sa.Column("adjustment_summary_md", sa.Text(), nullable=False),
-        sa.Column("validation_report_json", sa.JSON(), nullable=False),
-        sa.Column("repair_log_json", sa.JSON(), nullable=False),
+        sa.Column(
+            "generation_summary_md",
+            sa.Text(),
+            nullable=False,
+            server_default=EMPTY_TEXT,
+        ),
+        sa.Column(
+            "adjustment_summary_md",
+            sa.Text(),
+            nullable=False,
+            server_default=EMPTY_TEXT,
+        ),
+        sa.Column(
+            "validation_report_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_OBJECT,
+        ),
+        sa.Column(
+            "repair_log_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -199,8 +263,18 @@ def upgrade() -> None:
         sa.Column("stage_index", sa.Integer(), nullable=False),
         sa.Column("title", sa.String(length=180), nullable=False),
         sa.Column("objective_md", sa.Text(), nullable=False),
-        sa.Column("focus_tags_json", sa.JSON(), nullable=False),
-        sa.Column("assessment_criteria_json", sa.JSON(), nullable=False),
+        sa.Column(
+            "focus_tags_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
+        sa.Column(
+            "assessment_criteria_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
         sa.Column(
             "status",
             sa.String(length=30),
@@ -224,6 +298,11 @@ def upgrade() -> None:
             "stage_index",
             name="uq_study_plan_stage_version_index",
         ),
+        sa.UniqueConstraint(
+            "id",
+            "version_id",
+            name="uq_study_plan_stage_id_version",
+        ),
     )
     op.create_index(
         "ix_study_plan_stage_version",
@@ -240,12 +319,7 @@ def upgrade() -> None:
             sa.ForeignKey("study_plan_version.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "stage_id",
-            sa.BigInteger(),
-            sa.ForeignKey("study_plan_stage.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
+        sa.Column("stage_id", sa.BigInteger(), nullable=False),
         sa.Column(
             "problem_id",
             sa.BigInteger(),
@@ -253,7 +327,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("problem_slug", sa.String(length=180), nullable=False),
-        sa.Column("skill_tags_json", sa.JSON(), nullable=False),
+        sa.Column(
+            "skill_tags_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_ARRAY,
+        ),
         sa.Column("difficulty", sa.String(length=20), nullable=False),
         sa.Column("suggested_mode", sa.String(length=30), nullable=False),
         sa.Column("recommendation_reason", sa.Text(), nullable=False),
@@ -292,6 +371,12 @@ def upgrade() -> None:
             "order_index",
             name="uq_study_plan_item_stage_order",
         ),
+        sa.ForeignKeyConstraint(
+            ["stage_id", "version_id"],
+            ["study_plan_stage.id", "study_plan_stage.version_id"],
+            name="fk_study_plan_item_stage_version",
+            ondelete="CASCADE",
+        ),
     )
     op.create_index(
         "ix_study_plan_item_version_status",
@@ -315,8 +400,18 @@ def upgrade() -> None:
             sa.ForeignKey("problem.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("detail_json", sa.JSON(), nullable=False),
-        sa.Column("reason_md", sa.Text(), nullable=False),
+        sa.Column(
+            "detail_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=EMPTY_JSON_OBJECT,
+        ),
+        sa.Column(
+            "reason_md",
+            sa.Text(),
+            nullable=False,
+            server_default=EMPTY_TEXT,
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
