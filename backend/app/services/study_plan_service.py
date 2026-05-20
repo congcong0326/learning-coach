@@ -47,6 +47,8 @@ async def get_active_plan_version(
     db: AsyncSession,
     user: AppUser,
     plan_id: int,
+    *,
+    commit_repair: bool = True,
 ) -> StudyPlanVersion:
     plan = await _load_plan(db, user, plan_id)
     result = await db.execute(
@@ -67,7 +69,15 @@ async def get_active_plan_version(
         raise StudyPlanError("active_study_plan_version_not_found")
     if version.status not in ACTIVE_VERSION_STATUSES:
         raise StudyPlanError("active_study_plan_version_inconsistent")
-    await _set_only_active_version(db, version)
+    repaired = await _set_only_active_version(db, version)
+    if repaired and commit_repair:
+        await db.commit()
+        await db.refresh(
+            version,
+            attribute_names=["stages", "items"],
+        )
+        for item in version.items:
+            await db.refresh(item, attribute_names=["problem"])
     return version
 
 
@@ -92,8 +102,9 @@ async def _load_plan(db: AsyncSession, user: AppUser, plan_id: int) -> StudyPlan
 async def _set_only_active_version(
     db: AsyncSession,
     version: StudyPlanVersion,
-) -> None:
-    await db.execute(
+) -> bool:
+    was_already_active = version.status == "active"
+    result = await db.execute(
         update(StudyPlanVersion)
         .where(
             StudyPlanVersion.plan_id == version.plan_id,
@@ -103,6 +114,8 @@ async def _set_only_active_version(
         .values(status="superseded")
     )
     version.status = "active"
+    changed_count = getattr(result, "rowcount", 0)
+    return bool(changed_count) or not was_already_active
 
 
 def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
@@ -438,7 +451,12 @@ async def clone_adjusted_version(
 ) -> StudyPlanVersion:
     try:
         plan = await _load_plan(db, user, plan_id)
-        old_version = await get_active_plan_version(db, user, plan_id)
+        old_version = await get_active_plan_version(
+            db,
+            user,
+            plan_id,
+            commit_repair=False,
+        )
         now = datetime.now(UTC)
         old_version.status = "superseded"
         new_version = StudyPlanVersion(

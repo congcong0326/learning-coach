@@ -671,6 +671,8 @@ async def test_adjustment_clone_preserves_cross_stage_item_order_and_logs_change
 async def test_get_active_plan_version_uses_active_version_number_when_statuses_conflict(
     learning_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    first_version_id: int
+    second_version_id: int
     async with learning_session_factory() as session:
         user = await create_learning_user(session)
         draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
@@ -693,6 +695,17 @@ async def test_get_active_plan_version_uses_active_version_number_when_statuses_
         assert active_version.id == second_version.id
         await session.refresh(first_version)
         assert first_version.status == "superseded"
+        first_version_id = first_version.id
+        second_version_id = second_version.id
+
+    async with learning_session_factory() as session:
+        first_version_record = await session.get(StudyPlanVersion, first_version_id)
+        second_version_record = await session.get(StudyPlanVersion, second_version_id)
+
+        assert first_version_record is not None
+        assert second_version_record is not None
+        assert first_version_record.status == "superseded"
+        assert second_version_record.status == "active"
 
 
 @pytest.mark.asyncio
