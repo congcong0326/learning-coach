@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import Table
 
 from backend.app.models.learning import (
@@ -12,6 +14,7 @@ from backend.app.models.learning import (
     StudyPlanStage,
     StudyPlanVersion,
 )
+from backend.app.schemas.learning import GoalCalibrationInput
 
 
 def test_learning_tables_are_registered_in_metadata() -> None:
@@ -120,3 +123,32 @@ def test_study_plan_item_stage_fk_includes_version_guard() -> None:
         constraint.name for constraint in stage_table.constraints
     }
     assert "uq_study_plan_stage_id_version" in stage_unique_constraints
+
+def test_goal_calibration_accepts_supported_languages() -> None:
+    for language in ["c", "go", "python3", "javascript", "java"]:
+        payload = GoalCalibrationInput(
+            goal_type="interview_sprint",
+            target_timeline="one_to_three_months",
+            weekly_days=4,
+            session_minutes=60,
+            current_level="medium_partial",
+            preferred_language=cast(Any, language),
+            self_reported_weaknesses=["pattern", "edge_case"],
+            extra_notes="3 months until interview",
+            training_preference="independent_first",
+        )
+        assert payload.preferred_language == language
+
+
+def test_goal_calibration_rejects_unsupported_language() -> None:
+    with pytest.raises(ValidationError):
+        GoalCalibrationInput(
+            goal_type="interview_sprint",
+            target_timeline="one_to_three_months",
+            weekly_days=4,
+            session_minutes=60,
+            current_level="medium_partial",
+            preferred_language=cast(Any, "ruby"),
+            self_reported_weaknesses=[],
+            training_preference="guided",
+        )
