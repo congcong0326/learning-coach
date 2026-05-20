@@ -130,7 +130,7 @@ Agentic Coding Learning Coach 是一个面向算法刷题的 AI 训练教练。�
 4. 不做复杂推荐算法。
 5. 不公开提交完整题面数据到自己的 Git 仓库。
 6. 不优先做复杂排行榜、社区、分享等社交功能。
-7. 不支持多语言代码运行，第一版只支持 Python。
+7. 不一次性实现所有训练语言的代码运行工具；T1 先保存默认训练语言，代码运行按语言分阶段接入。
 8. 不做日历集成、打卡提醒、移动端原生应用等学习管理外围能力。
 9. 不做系统设计、行为面试、简历润色等泛面试训练模块。
 10. 第一版本地账号不做 OAuth、邮箱验证、找回密码、组织空间或多模型 provider；模型资产先支持 OpenAI / OpenAI-compatible base URL。
@@ -185,39 +185,44 @@ API 设置页以列表展示多个 API 资产，新增和编辑使用弹窗。�
 - 采集用户目标：刷题入门、面试冲刺、专项补弱或保持手感。
 - 采集时间线：无明确时间、1 个月内、1～3 个月、3 个月以上。
 - 采集每周投入：每周可训练天数和单次训练时长。
-- 采集首选语言：第一版只允许 Python，后续可扩展。
+- 采集默认训练语言：C、Go、Python3、JavaScript、Java。
 - 采集自评弱项：题意理解、题型识别、复杂度优化、代码实现、边界条件、面试表达。
-- 使用当前用户首选/当前通讯 OpenAI API 资产生成目标和任务草稿。
-- 用户可以确认、重试或调整草稿；只有用户确认后才写入目标和学习计划。
+- 结构化表单提交后，使用当前用户首选/当前通讯 OpenAI API 资产进行目标理解。
+- LLM 最多追问 3 个会显著影响计划的问题；用户可以回答，也可以跳过并生成计划。
+- LLM 生成阶段化学习计划草稿，后端用本地题库校验题目 slug、付费状态、重复项和可替换题目。
+- 用户确认草稿后创建学习计划 v1，并将其设为当前唯一 active 计划。
 
 输出：
 
-- 初始化 `user_learning_goal`。
-- 生成并确认第一版训练目标和学习计划。
-- 设置默认训练模式和提示档位偏好。
+- 初始化 `goal_calibration_draft`，保存输入、追问记录、模型、prompt 版本、校验报告和 repair log。
+- 生成并确认第一版 `study_plan`、`study_plan_version`、`study_plan_stage` 和 `study_plan_item`。
+- 目标快照保存默认训练语言、训练偏好、时间投入和弱项，用于后续工作台与 AI Coach 上下文。
 
 ### 6.3 学习计划页
 
 功能：
 
-- 展示当前训练目标和计划周期。
-- 展示推荐题单，按题型、难度和优先级分组。
+- 默认展示当前 active 学习计划；用户可以进入学习计划历史查看其他计划。
+- 学习计划支持多计划管理，但任意时刻同一用户只能有一个 active 计划。
+- 学习计划按阶段展示目标、训练重点、验收标准和当前阶段题目。
 - 展示每道题的训练状态、建议模式和推荐理由。
-- 支持用户手动调整题单顺序或跳过题目。
+- 支持用户跳过或恢复未开始题目；重排 API 已预留。
+- 支持手动触发计划调整，生成新的 draft 版本；用户确认版本后新版本成为当前 active 版本。
+- 旧版本保留只读，已经开始、跳过、完成或锁定的题目在新版本中保留。
 
 第一版计划生成规则：
 
-- 入门用户优先 Easy 和高频基础题型。
-- 面试冲刺用户优先 Blind 75 / Grind 75 / NeetCode 150 风格的高频题集映射。
-- 专项补弱用户优先用户画像中 mastery_score 较低的题型。
-- 最近连续失败的题型优先插入低难度巩固题。
+- LLM 先根据目标、时间线、当前水平、默认语言、弱项、训练偏好和追问记录生成阶段化草稿。
+- 后端只允许本地题库中存在且非 paid only 的题目进入正式计划。
+- 后端会对缺失、重复或 paid only 题目进行有限 repair，必要时要求 LLM 重新修复。
+- 当前 T1 尚未接入真实训练历史和提交历史；版本克隆先按计划项状态保留已经开始、跳过、完成或锁定的题目。
 
 ### 6.4 做题工作台
 
 页面布局：
 
 - 左侧：题目详情，渲染 Markdown 中文题面。
-- 中间：Python 代码编辑区。
+- 中间：代码编辑区，默认语言来自当前学习计划目标快照；各语言运行工具分阶段接入。
 - 右侧：AI 教练对话区。
 - 顶部：题目标题、难度、标签、LeetCode 原题链接、训练模式、当前提示档位。
 - 底部或侧边：运行结果、提交回填、复盘入口。
@@ -1002,14 +1007,14 @@ unknown_error
 长期记忆保存用户跨题目的目标、计划和能力画像：
 
 ```text
-user_learning_goal
+goal_calibration_draft / study_plan.target_snapshot
 - id
 - user_id
 - goal_type            # beginner / interview_sprint / strengthen_weakness / maintain
 - target_timeline      # none / within_1_month / 1_to_3_months / over_3_months
 - weekly_days
 - session_minutes
-- preferred_language   # 第一版固定为 python
+- preferred_language   # c / go / python3 / javascript / java
 - self_reported_weaknesses
 - default_training_mode
 - created_at
@@ -1561,8 +1566,8 @@ agent_trace
 - SessionSummary。
 - user_skill_profile。
 - profile_delta。
-- user_learning_goal。
-- study_plan 和 study_plan_item。
+- goal_calibration_draft。
+- study_plan、study_plan_version 和 study_plan_item。
 - 基于规则的下一题或下一组训练推荐。
 - 学习仪表盘基础视图。
 - 用户历史训练记录。
@@ -1706,10 +1711,10 @@ agent_trace
 
 应对：
 
-- 第一版只支持 Python。
+- 目标校准和学习计划默认训练语言支持 C、Go、Python3、JavaScript、Java；代码运行工具可分阶段接入各语言。
 - 第一版只做基础样例运行，不做完整 OJ。
 - 首访目标校准只采集少量关键字段，不做复杂问卷。
-- 学习计划第一版只做规则生成，不做日历、提醒和复杂排期。
+- 学习计划第一版使用 LLM 草稿 + 本地题库校验，不做日历、提醒和复杂排期。
 - 学习仪表盘第一版只展示已有训练数据，不做复杂统计建模。
 - 面试模拟第一版只作为独立训练的计时变体，不扩展系统设计或行为面试。
 - 本地教程导入第一版只要求跑通少量高质量资料，不追求全量自动化清洗。

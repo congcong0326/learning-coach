@@ -53,7 +53,7 @@ Browser
 
 Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态优先交给 TanStack Query。只有当客户端全局状态明显变复杂时再考虑 Redux。
 
-当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`。
+当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
 ## 后端选型
 
@@ -86,17 +86,34 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/me/llm-credentials/{id}/default`
 - `POST /api/me/llm-credentials/{id}/test`
 - `DELETE /api/me/llm-credentials/{id}`
+- `POST /api/goal-calibration`
+- `POST /api/goal-calibration/{draft_id}/followup`
+- `POST /api/goal-calibration/{draft_id}/generate`
+- `POST /api/study-plans/confirm`
+- `GET /api/study-plan/current`
+- `GET /api/study-plans`
+- `POST /api/study-plans/{plan_id}/activate`
+- `GET /api/study-plans/{plan_id}/versions/{version_id}`
+- `POST /api/study-plans/{plan_id}/adjustments`
+- `POST /api/study-plans/{plan_id}/versions/{version_id}/activate`
+- `PATCH /api/study-plan/items/{item_id}`
+- `POST /api/study-plan/stages/{stage_id}/reorder`
 
-后续产品功能会放在以下模块边界中：
+当前和后续产品功能会放在以下模块边界中：
 
 - `backend.app.api`：HTTP API。
+- `backend.app.api.learning`：目标校准、计划草稿、计划确认、当前计划、计划历史、计划项状态、计划重排和版本激活 API。
 - `backend.app.core`：配置和基础设施。
 - `backend.app.db`：数据库连接、migration 支撑。
 - `backend.app.models`：SQLAlchemy 模型。
+- `backend.app.models.learning`：目标校准草稿、学习计划、计划版本、阶段、计划项和变更日志。
 - `backend.app.schemas`：Pydantic 输入输出模型。
 - `backend.app.services.auth_service`：本地用户、Argon2id 密码 hash、session token hash、注册登录退出和当前用户查询。
 - `backend.app.services.credential_crypto`：Fernet API key 加密、解密和 mask。
 - `backend.app.services.llm_credential_service`：用户级 OpenAI API 资产 CRUD、首选/当前通讯资产处理、粘性路由、连续失败计数和所有权校验。
+- `backend.app.services.learning_plan_llm`：目标校准追问、学习计划草稿生成、OpenAI Responses client 和 LLM repair loop 编排。
+- `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
+- `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
 - `backend.app.agents`：LangGraph 编排。
 - `backend.app.rag`：知识库导入、切块、检索。
 - `backend.app.tools`：代码运行、静态分析、错误归因等工具。
@@ -144,6 +161,17 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `llm_credential`。
 
 `app_user` 是后续目标、学习计划、训练记录和画像的用户主键来源。`auth_session` 保存后端 session token hash，浏览器侧只持有 HttpOnly cookie。`llm_credential` 保存用户级 OpenAI API 资产，其中 `api_key_ciphertext` 为 Fernet 密文，`api_key_mask` 用于前端展示；同一用户首选资产和当前通讯资产由服务层保证唯一，数据库当前只提供查询索引，不提供唯一约束。
+
+当前学习计划相关 migration 会：
+
+- 创建 `goal_calibration_draft`，保存结构化输入、LLM 追问记录、草稿计划、校验报告、repair log 和确认后的计划/版本引用。
+- 创建 `study_plan`，保存用户级计划容器、计划状态和当前版本号。
+- 创建 `study_plan_version`，保存目标快照、生成说明、调整说明、校验报告、repair log 和版本状态。
+- 创建 `study_plan_stage`，保存阶段目标、重点标签、验收标准和阶段状态。
+- 创建 `study_plan_item`，保存正式题库题目引用、推荐理由、建议训练模式、状态、顺序和锁定标记。
+- 创建 `plan_change_log`，记录版本调整中的 preserved、added、removed 和 reordered 变化。
+
+T1 当前只把学习计划项和题库题目关联起来；真实训练会话、提交历史和代码快照将在 T2 通过稳定的 plan/version/item 标识继续关联。
 
 ## Docker Compose 角色
 
