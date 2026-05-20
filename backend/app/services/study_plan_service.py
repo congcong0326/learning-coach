@@ -536,15 +536,24 @@ async def list_study_plans(db: AsyncSession, user: AppUser) -> dict[str, Any]:
 
 async def get_active_study_plan(db: AsyncSession, user: AppUser) -> StudyPlan:
     result = await db.execute(
-        select(StudyPlan).where(
+        select(StudyPlan)
+        .where(
             StudyPlan.user_id == user.id,
             StudyPlan.status == "active",
         )
+        .order_by(StudyPlan.updated_at.desc(), StudyPlan.id.desc())
     )
-    plan = result.scalar_one_or_none()
-    if plan is None:
+    active_plans = list(result.scalars().all())
+    if not active_plans:
         raise StudyPlanError("active_study_plan_not_found")
-    return plan
+    selected_plan = active_plans[0]
+    if len(active_plans) > 1:
+        now = datetime.now(UTC)
+        for plan in active_plans[1:]:
+            plan.status = "paused"
+            plan.updated_at = now
+        await db.flush()
+    return selected_plan
 
 
 async def _load_payload_version(

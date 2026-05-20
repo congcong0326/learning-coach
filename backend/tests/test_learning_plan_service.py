@@ -565,6 +565,28 @@ async def test_activate_plan_pauses_other_active_plans(
 
 
 @pytest.mark.asyncio
+async def test_get_current_study_plan_payload_repairs_duplicate_active_plans(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        first_draft = await create_ready_draft(session, user, title="第一计划")
+        first_plan = await confirm_plan_draft(session, user, first_draft.id)
+        second_draft = await create_ready_draft(session, user, title="第二计划")
+        second_plan = await confirm_plan_draft(session, user, second_draft.id)
+        first_plan.status = "active"
+        await session.commit()
+
+        payload = await get_current_study_plan_payload(session, user)
+
+        await session.refresh(first_plan)
+        await session.refresh(second_plan)
+        assert payload["id"] == second_plan.id
+        assert first_plan.status == "paused"
+        assert second_plan.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_confirm_draft_rejects_duplicate_plan_items(
     learning_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
