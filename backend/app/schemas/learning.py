@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -87,11 +87,11 @@ class PlanDraftStage(BaseModel):
 class PlanDraftResponse(BaseModel):
     draft_id: int
     status: DraftStatus
-    target_snapshot: dict
+    target_snapshot: dict[str, Any]
     generation_summary_md: str
     stages: list[PlanDraftStage]
-    validation_report: dict
-    repair_log: list[dict]
+    validation_report: dict[str, Any]
+    repair_log: list[dict[str, Any]]
     uncertainty_notes: list[str] = Field(default_factory=list)
 
 
@@ -108,9 +108,9 @@ class StudyPlanItemResponse(BaseModel):
     translated_title: str
     difficulty: str
     skill_tags: list[str]
-    suggested_mode: str
+    suggested_mode: TrainingMode
     recommendation_reason: str
-    status: str
+    status: PlanItemStatus
     order_index: int
     locked: bool
 
@@ -122,19 +122,19 @@ class StudyPlanStageResponse(BaseModel):
     objective_md: str
     focus_tags: list[str]
     assessment_criteria: list[str]
-    status: str
+    status: StageStatus
     items: list[StudyPlanItemResponse]
 
 
 class StudyPlanVersionResponse(BaseModel):
     id: int
     version_number: int
-    status: str
-    target_snapshot: dict
+    status: VersionStatus
+    target_snapshot: dict[str, Any]
     generation_summary_md: str
     adjustment_summary_md: str
-    validation_report: dict
-    repair_log: list[dict]
+    validation_report: dict[str, Any]
+    repair_log: list[dict[str, Any]]
     stages: list[StudyPlanStageResponse]
     created_at: datetime
     activated_at: datetime | None
@@ -143,7 +143,7 @@ class StudyPlanVersionResponse(BaseModel):
 class StudyPlanResponse(BaseModel):
     id: int
     title: str
-    status: str
+    status: PlanStatus
     active_version_number: int
     created_at: datetime
     updated_at: datetime
@@ -153,7 +153,7 @@ class StudyPlanResponse(BaseModel):
 class StudyPlanListItem(BaseModel):
     id: int
     title: str
-    status: str
+    status: PlanStatus
     active_version_number: int
     created_at: datetime
     updated_at: datetime
