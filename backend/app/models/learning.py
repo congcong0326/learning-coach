@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -30,6 +31,20 @@ EMPTY_TEXT = text("''")
 class GoalCalibrationDraft(Base):
     __tablename__ = "goal_calibration_draft"
     __table_args__ = (
+        CheckConstraint(
+            (
+                "(confirmed_plan_id IS NULL AND confirmed_version_id IS NULL) "
+                "OR (confirmed_plan_id IS NOT NULL AND confirmed_version_id IS NOT NULL)"
+            ),
+            name="ck_goal_draft_confirmed_pair",
+        ),
+        ForeignKeyConstraint(
+            ["confirmed_version_id", "confirmed_plan_id"],
+            ["study_plan_version.id", "study_plan_version.plan_id"],
+            name="fk_goal_draft_confirmed_version",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
         Index("ix_goal_calibration_draft_user_status", "user_id", "status"),
         Index("ix_goal_calibration_draft_created", "created_at"),
     )
@@ -101,15 +116,7 @@ class GoalCalibrationDraft(Base):
         ForeignKey("study_plan.id", ondelete="SET NULL"),
         nullable=True,
     )
-    confirmed_version_id: Mapped[int | None] = mapped_column(
-        ForeignKey(
-            "study_plan_version.id",
-            name="fk_goal_draft_confirmed_version",
-            ondelete="SET NULL",
-            use_alter=True,
-        ),
-        nullable=True,
-    )
+    confirmed_version_id: Mapped[int | None] = mapped_column(ID_TYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -173,6 +180,11 @@ class StudyPlanVersion(Base):
             "plan_id",
             "version_number",
             name="uq_study_plan_version_plan_number",
+        ),
+        UniqueConstraint(
+            "id",
+            "plan_id",
+            name="uq_study_plan_version_id_plan",
         ),
         Index("ix_study_plan_version_plan_status", "plan_id", "status"),
     )

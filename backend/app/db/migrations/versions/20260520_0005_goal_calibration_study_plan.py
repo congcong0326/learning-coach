@@ -159,6 +159,13 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
         sa.Column("confirmed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            (
+                "(confirmed_plan_id IS NULL AND confirmed_version_id IS NULL) "
+                "OR (confirmed_plan_id IS NOT NULL AND confirmed_version_id IS NOT NULL)"
+            ),
+            name="ck_goal_draft_confirmed_pair",
+        ),
     )
     op.create_index(
         "ix_goal_calibration_draft_user_status",
@@ -236,6 +243,11 @@ def upgrade() -> None:
             "version_number",
             name="uq_study_plan_version_plan_number",
         ),
+        sa.UniqueConstraint(
+            "id",
+            "plan_id",
+            name="uq_study_plan_version_id_plan",
+        ),
     )
     op.create_index(
         "ix_study_plan_version_plan_status",
@@ -246,8 +258,8 @@ def upgrade() -> None:
         "fk_goal_draft_confirmed_version",
         "goal_calibration_draft",
         "study_plan_version",
-        ["confirmed_version_id"],
-        ["id"],
+        ["confirmed_version_id", "confirmed_plan_id"],
+        ["id", "plan_id"],
         ondelete="SET NULL",
     )
 

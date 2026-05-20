@@ -45,6 +45,36 @@ def test_confirmed_version_fk_is_named_and_deferred() -> None:
     assert confirmed_version_fk.constraint.use_alter is True
 
 
+def test_confirmed_plan_and_version_are_linked_by_composite_fk() -> None:
+    draft_table = cast(Table, GoalCalibrationDraft.__table__)
+    version_table = cast(Table, StudyPlanVersion.__table__)
+    draft_constraints = {
+        constraint.name: constraint
+        for constraint in draft_table.foreign_key_constraints
+    }
+    confirmed_version_fk = draft_constraints["fk_goal_draft_confirmed_version"]
+
+    assert confirmed_version_fk.use_alter is True
+    assert [element.parent.name for element in confirmed_version_fk.elements] == [
+        "confirmed_version_id",
+        "confirmed_plan_id",
+    ]
+    assert [element.column.name for element in confirmed_version_fk.elements] == [
+        "id",
+        "plan_id",
+    ]
+
+    version_unique_constraints = {
+        constraint.name for constraint in version_table.constraints
+    }
+    assert "uq_study_plan_version_id_plan" in version_unique_constraints
+
+    draft_constraint_names = {
+        constraint.name for constraint in draft_table.constraints
+    }
+    assert "ck_goal_draft_confirmed_pair" in draft_constraint_names
+
+
 def test_default_empty_learning_columns_have_server_defaults() -> None:
     columns = [
         GoalCalibrationDraft.__table__.c.followup_messages_json,
