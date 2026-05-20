@@ -8,6 +8,7 @@
 - Python 命令通过 `uv run` 执行。
 - 前端命令通过 `corepack pnpm` 执行，避免依赖全局 pnpm。
 - Docker 命令默认使用 `infra/compose/docker-compose.dev.yml`。
+- 如果仓库根目录存在 `.env`，Makefile 中的 Docker Compose 命令会显式追加 `--env-file .env`，确保 `CREDENTIAL_ENCRYPTION_KEY`、端口和数据库变量从根目录环境文件传入容器。
 
 ## 命令列表
 
@@ -119,7 +120,7 @@ cd frontend && corepack pnpm build
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.dev.yml build
+docker compose --env-file .env -f infra/compose/docker-compose.dev.yml build
 ```
 
 成功标准：
@@ -133,7 +134,7 @@ docker compose -f infra/compose/docker-compose.dev.yml build
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.dev.yml up --build -d
+docker compose --env-file .env -f infra/compose/docker-compose.dev.yml up --build -d
 ```
 
 成功标准：
@@ -150,7 +151,7 @@ docker compose -f infra/compose/docker-compose.dev.yml up --build -d
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.dev.yml down
+docker compose --env-file .env -f infra/compose/docker-compose.dev.yml down
 ```
 
 成功标准：
@@ -165,7 +166,7 @@ docker compose -f infra/compose/docker-compose.dev.yml down
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.dev.yml logs -f
+docker compose --env-file .env -f infra/compose/docker-compose.dev.yml logs -f
 ```
 
 ### `make db-migrate`
@@ -175,13 +176,13 @@ docker compose -f infra/compose/docker-compose.dev.yml logs -f
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.dev.yml exec backend uv run --no-sync alembic upgrade head
+docker compose --env-file .env -f infra/compose/docker-compose.dev.yml exec backend uv run --no-sync alembic upgrade head
 ```
 
 成功标准：
 
 - Alembic 升级到 head。
-- 当前 head 为 `20260519_0002`。
+- 当前 head 为 `20260519_0003`。
 
 ### `make prepare-problem-seed`
 
@@ -247,7 +248,7 @@ COMPOSE_FILE=infra/compose/docker-compose.dev.yml ./scripts/smoke_all.sh
 执行内容：
 
 ```bash
-docker compose -f infra/compose/docker-compose.prod.yml build
+docker compose --env-file .env -f infra/compose/docker-compose.prod.yml build
 ```
 
 成功标准：

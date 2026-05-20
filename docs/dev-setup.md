@@ -107,9 +107,24 @@ cp .env.example .env
 
 当前 `.env` 不应提交到 Git。敏感变量包括：
 
+- `CREDENTIAL_ENCRYPTION_KEY`
 - `OPENAI_API_KEY`
 - `LLM_API_KEY`
 - `SERPAPI_API_KEY`
+
+`CREDENTIAL_ENCRYPTION_KEY` 用于加密用户在 API 设置页保存的 OpenAI API key，必须是 Fernet key。首次本地开发可运行：
+
+```bash
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+把输出写入本地 `.env`：
+
+```bash
+CREDENTIAL_ENCRYPTION_KEY=<上一步输出>
+```
+
+如果该变量为空或格式无效，注册登录仍可使用，但创建或测试 API 资产会失败并返回明确错误。
 
 ## WSL 注意事项
 

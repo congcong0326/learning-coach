@@ -12,6 +12,9 @@ wheels/
 # Local environment variables
 .env
 
+# Local brainstorming mockups
+.superpowers/
+
 # Local third-party datasets and generated seed data
 data/sources/
 data/seed/*.jsonl

@@ -26,6 +26,7 @@ services:
     environment:
       APP_ENV: test
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_TEST_USER:-learning_coach}:${POSTGRES_TEST_PASSWORD:-learning_coach}@postgres:5432/${POSTGRES_TEST_DB:-learning_coach_test}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-V6Abyqka9UaCuhUYUHpXhAZaMg-ZH17gNFyefTmgkRg=}
       OPENAI_API_KEY: ""
       LLM_API_KEY: ""
       LLM_MODEL_ID: ""

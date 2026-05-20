@@ -11,6 +11,10 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://learning_coach:learning_coach"
         "@localhost:5432/learning_coach"
     )
+    credential_encryption_key: str = ""
+    session_cookie_name: str = "learning_coach_session"
+    session_ttl_hours: int = 24 * 14
+    session_cookie_secure: bool = False
     problem_seed_path: Path = Path("data/seed")
     seed_problems_on_startup: bool = False
 

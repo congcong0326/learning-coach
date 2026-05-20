@@ -3,15 +3,19 @@ import {
   CodeOutlined,
   DatabaseOutlined,
   FileSearchOutlined,
+  KeyOutlined,
   ProfileOutlined,
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { Layout, Space, Tag, Typography } from 'antd'
-import { useMemo } from 'react'
-import { BrowserRouter, NavLink } from 'react-router-dom'
+import { type ReactNode, useMemo } from 'react'
+import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
 
 import { getBackendHealth } from './api/health'
+import { LoginPage } from './pages/LoginPage'
+import { RegisterPage } from './pages/RegisterPage'
 import { AppRoutes } from './routes/AppRoutes'
+import { ProtectedRoute } from './routes/ProtectedRoute'
 import './styles/app.css'
 
 const { Header, Sider, Content } = Layout
@@ -19,6 +23,7 @@ const { Header, Sider, Content } = Layout
 const navItems = [
   { to: '/problems', label: '题库', icon: <DatabaseOutlined aria-hidden="true" /> },
   { to: '/workspace', label: '工作台', icon: <CodeOutlined aria-hidden="true" /> },
+  { to: '/settings/api-keys', label: 'API 设置', icon: <KeyOutlined aria-hidden="true" /> },
   { to: '/review', label: '复盘', icon: <ProfileOutlined aria-hidden="true" /> },
   { to: '/trace', label: 'Trace', icon: <FileSearchOutlined aria-hidden="true" /> },
 ]
@@ -45,7 +50,7 @@ function BackendHealthBadge() {
   )
 }
 
-function AppShell() {
+function AppShell({ children }: { children: ReactNode }) {
   return (
     <Layout className="app-shell">
       <Sider className="app-sider" width={232}>
@@ -78,10 +83,27 @@ function AppShell() {
           </Space>
         </Header>
         <Content className="app-content">
-          <AppRoutes />
+          <ProtectedRoute>{children}</ProtectedRoute>
         </Content>
       </Layout>
     </Layout>
+  )
+}
+
+function AppFrame() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/*"
+        element={
+          <AppShell>
+            <AppRoutes />
+          </AppShell>
+        }
+      />
+    </Routes>
   )
 }
 
@@ -101,7 +123,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AppShell />
+        <AppFrame />
       </BrowserRouter>
     </QueryClientProvider>
   )

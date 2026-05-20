@@ -1,7 +1,8 @@
 SHELL := /usr/bin/env bash
 
-COMPOSE_DEV := docker compose -f infra/compose/docker-compose.dev.yml
-COMPOSE_PROD := docker compose -f infra/compose/docker-compose.prod.yml
+COMPOSE_ENV_FILE := $(if $(wildcard .env),--env-file .env,)
+COMPOSE_DEV := docker compose $(COMPOSE_ENV_FILE) -f infra/compose/docker-compose.dev.yml
+COMPOSE_PROD := docker compose $(COMPOSE_ENV_FILE) -f infra/compose/docker-compose.prod.yml
 PNPM := corepack pnpm
 
 .DEFAULT_GOAL := help

@@ -10,6 +10,7 @@
 - 前端 Vite React 应用。
 - PostgreSQL + pgvector 数据库。
 - Alembic migration。
+- 本地用户注册登录和用户级 OpenAI API 资产配置。
 - Docker Compose 开发环境。
 - Makefile 一键命令。
 - 基础 smoke test。
@@ -25,6 +26,10 @@ Browser
 ```
 
 后端是系统的业务边界。前端只通过 HTTP API 与后端交互，不直接连接数据库、不直接调用 LLM、不直接执行用户代码。
+
+用户身份和模型资产也在后端边界内处理。浏览器只保存后端设置的 HttpOnly session cookie；OpenAI API key 只在创建或覆盖更新时提交给后端，后端加密落库，API 和前端只返回脱敏后的 `api_key_mask`。
+
+用户级 OpenAI API 资产支持多资产列表管理、启用/禁用、首选资产和当前通讯资产。后端后续 LLM 调用不直接读取单个默认资产，而是通过统一选择服务使用粘性策略：优先保持当前通讯资产；当连续失败达到 3 次后，切换到其他启用且可用的资产。`is_default` 暂时保留为兼容字段，语义等同 `is_preferred`。
 
 ## 前端选型
 
@@ -48,6 +53,8 @@ Browser
 
 Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态优先交给 TanStack Query。只有当客户端全局状态明显变复杂时再考虑 Redux。
 
+当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`。
+
 ## 后端选型
 
 当前后端使用：
@@ -68,6 +75,17 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `GET /api/problems`
 - `GET /api/problems/{slug}`
 - `GET /api/problem-categories`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/me/llm-credentials`
+- `POST /api/me/llm-credentials`
+- `PATCH /api/me/llm-credentials/{id}`
+- `POST /api/me/llm-credentials/{id}/preferred`
+- `POST /api/me/llm-credentials/{id}/default`
+- `POST /api/me/llm-credentials/{id}/test`
+- `DELETE /api/me/llm-credentials/{id}`
 
 后续产品功能会放在以下模块边界中：
 
@@ -76,6 +94,9 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.db`：数据库连接、migration 支撑。
 - `backend.app.models`：SQLAlchemy 模型。
 - `backend.app.schemas`：Pydantic 输入输出模型。
+- `backend.app.services.auth_service`：本地用户、Argon2id 密码 hash、session token hash、注册登录退出和当前用户查询。
+- `backend.app.services.credential_crypto`：Fernet API key 加密、解密和 mask。
+- `backend.app.services.llm_credential_service`：用户级 OpenAI API 资产 CRUD、首选/当前通讯资产处理、粘性路由、连续失败计数和所有权校验。
 - `backend.app.agents`：LangGraph 编排。
 - `backend.app.rag`：知识库导入、切块、检索。
 - `backend.app.tools`：代码运行、静态分析、错误归因等工具。
@@ -115,6 +136,14 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `problem`。
 - 创建 `problem_category`。
 - 创建 `problem_category_item`。
+
+当前本地用户和模型资产相关 migration 会：
+
+- 创建 `app_user`。
+- 创建 `auth_session`。
+- 创建 `llm_credential`。
+
+`app_user` 是后续目标、学习计划、训练记录和画像的用户主键来源。`auth_session` 保存后端 session token hash，浏览器侧只持有 HttpOnly cookie。`llm_credential` 保存用户级 OpenAI API 资产，其中 `api_key_ciphertext` 为 Fernet 密文，`api_key_mask` 用于前端展示；同一用户首选资产和当前通讯资产由服务层保证唯一，数据库当前只提供查询索引，不提供唯一约束。
 
 ## Docker Compose 角色
 

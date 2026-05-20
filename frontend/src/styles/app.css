@@ -110,6 +110,51 @@ body {
   padding: 24px;
 }
 
+.route-loading {
+  display: flex;
+  align-items: center;
+  min-height: 180px;
+  color: #5f655f;
+  font-size: 14px;
+}
+
+.auth-page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #f7f7f4;
+}
+
+.auth-panel {
+  width: min(100%, 384px);
+  padding: 28px;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.auth-panel h1.ant-typography {
+  margin: 0 0 22px;
+  color: #202420;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.auth-alert {
+  margin-bottom: 16px;
+}
+
+.auth-switch {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: #626862;
+  font-size: 14px;
+}
+
 .page-section {
   width: 100%;
 }
@@ -162,6 +207,87 @@ body {
   font-weight: 650;
 }
 
+.settings-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.settings-table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: collapse;
+}
+
+.settings-table th,
+.settings-table td {
+  padding: 12px;
+  border-bottom: 1px solid #ecece7;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.settings-table th {
+  color: #4c554c;
+  font-size: 13px;
+  font-weight: 600;
+  background: #fafaf7;
+}
+
+.settings-table td {
+  color: #252b25;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.settings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.settings-page .ant-modal .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.empty-settings {
+  padding: 18px 0;
+  color: #686f68;
+  font-size: 14px;
+}
+
+.credential-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.credential-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid #ecece7;
+}
+
+.credential-row:first-child {
+  border-top: 0;
+}
+
+.credential-main {
+  min-width: 0;
+}
+
+.credential-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  color: #687068;
+  font-size: 13px;
+  word-break: break-word;
+}
+
 .markdown-statement {
   margin: 0;
   white-space: pre-wrap;
@@ -196,5 +322,9 @@ body {
 
   .app-content {
     padding: 16px;
+  }
+
+  .credential-row {
+    grid-template-columns: 1fr;
   }
 }

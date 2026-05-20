@@ -11,19 +11,20 @@
 ## 目录职责
 
 - `backend/app/main.py`：FastAPI 应用工厂和路由注册。
-- `backend/app/api/`：HTTP API 路由，当前包含健康检查、数据库健康检查和题库 API。
-- `backend/app/core/`：配置和基础设施入口，当前使用 Pydantic Settings 读取 `.env`。
+- `backend/app/api/`：HTTP API 路由，当前包含健康检查、数据库健康检查、题库 API、本地认证 API 和用户级 LLM API 资产 API。
+- `backend/app/core/`：配置和基础设施入口，当前使用 Pydantic Settings 读取 `.env`，包含数据库、session cookie 和 API key 加密配置。
 - `backend/app/db/`：SQLAlchemy async engine、session、数据库健康检查和 Alembic migration。
-- `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类和题目分类关系。
-- `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库列表、分类列表和题目详情响应。
-- `backend/app/services/`：业务服务层，当前包含题库查询和题库 seed 导入。
+- `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类、题目分类关系、本地用户、登录 session 和 LLM API 资产。
+- `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库、认证和 LLM API 资产相关请求响应。
+- `backend/app/services/`：业务服务层，当前包含题库查询、题库 seed 导入、认证 session、API key 加密、LLM API 资产管理、粘性路由和 OpenAI 连接测试。
 - `backend/app/agents/`：后续 LangGraph / Agent 编排代码目录。
 - `backend/app/rag/`：后续知识导入、切块、embedding 和检索代码目录。
 - `backend/app/tools/`：后续代码执行、静态分析、错误归因等工具客户端目录。
 - `backend/tests/`：后端基座测试。
 - `frontend/`：Vite React 前端，使用 Ant Design、React Router、TanStack Query 和 Monaco Editor。
-- `frontend/src/pages/`：当前 SPA 页面，包括题库、工作台、复盘和 Trace。
-- `frontend/src/api/`：前端 API client 与后端请求封装。
+- `frontend/src/pages/`：当前 SPA 页面，包括登录、注册、API 设置、题库、工作台、复盘和 Trace。
+- `frontend/src/routes/`：前端路由、首访重定向和登录态保护。
+- `frontend/src/api/`：前端 API client 与后端请求封装，所有业务请求通过后端 API 并携带 HttpOnly session cookie。
 - `infra/docker/`：后端、前端、code-runner 镜像和 Nginx 配置。
 - `infra/compose/`：开发、测试、生产/打包 compose 文件。
 - `scripts/`：smoke test、数据库等待、题库 seed 数据准备等自动化脚本。

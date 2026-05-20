@@ -168,10 +168,13 @@ docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 - `POSTGRES_HOST_PORT`
 - `DATABASE_URL`
 - `DOCKER_DATABASE_URL`
+- `CREDENTIAL_ENCRYPTION_KEY`
 - `PROBLEM_SEED_PATH`
 - `SEED_PROBLEMS_ON_STARTUP`
 
 本机直接运行后端时，数据库地址应指向 `localhost:15432`。容器内后端运行时，数据库地址应指向 `postgres:5432`。
+
+`CREDENTIAL_ENCRYPTION_KEY` 是后端加密用户 OpenAI API key 的 Fernet key。开发和生产 compose 会从宿主机环境或 `.env` 传入该变量；为空时，登录注册可用，但 API 资产创建、覆盖更新和测试连接会失败。测试 compose 使用固定测试 key，避免在临时测试环境中依赖开发者本机密钥。
 
 默认推荐使用显式 seed 命令，而不是后端启动时隐式导入：
 
