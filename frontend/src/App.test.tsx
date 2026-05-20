@@ -63,6 +63,12 @@ describe('App shell', () => {
             headers: { 'Content-Type': 'application/json' },
           })
         }
+        if (url === '/api/study-plan/current') {
+          return new Response(JSON.stringify({ detail: 'active_study_plan_not_found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
         return new Response(
           JSON.stringify({ items: [], total: 0, page: 1, page_size: 20 }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -77,6 +83,7 @@ describe('App shell', () => {
       screen.getByRole('heading', { name: 'Agentic Coding Learning Coach' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '题库' })).toBeInTheDocument()
+    expect(await screen.findByText('学习计划')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '工作台' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'API 设置' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '复盘' })).toBeInTheDocument()

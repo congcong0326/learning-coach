@@ -19,7 +19,7 @@ export function AuthRedirect() {
 
   return (
     <Navigate
-      to={user.has_default_llm_credential ? '/problems' : '/settings/api-keys'}
+      to={user.has_default_llm_credential ? '/study-plan' : '/settings/api-keys'}
       replace
     />
   )
