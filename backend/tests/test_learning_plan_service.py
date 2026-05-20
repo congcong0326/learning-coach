@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -21,16 +22,26 @@ from backend.app.models.learning import (
     StudyPlanVersion,
 )
 from backend.app.models.problem import Base, Problem
-from backend.app.schemas.learning import GoalCalibrationInput, StudyPlanResponse
+from backend.app.schemas.learning import (
+    FollowupAnswer,
+    GoalCalibrationInput,
+    PlanAdjustmentRequest,
+    StudyPlanResponse,
+)
 from backend.app.services.study_plan_service import (
     StudyPlanError,
+    activate_plan_version,
     activate_plan,
+    answer_goal_followup,
     clone_adjusted_version,
     confirm_plan_draft,
+    create_adjustment_draft,
+    generate_goal_plan_draft,
     get_active_plan_version,
     get_current_study_plan_payload,
     list_study_plans,
     reorder_stage_items,
+    start_goal_calibration,
     study_plan_payload,
     update_plan_item_status,
 )
@@ -407,6 +418,185 @@ def ordered_items(stage: StudyPlanStage) -> list[StudyPlanItem]:
 
 def item_by_slug(version: StudyPlanVersion, slug: str) -> StudyPlanItem:
     return next(item for item in version.items if item.problem_slug == slug)
+
+
+class FakeGoalCalibrationClient:
+    def __init__(self) -> None:
+        self.followup_calls = 0
+
+    async def followup_question(
+        self,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        self.followup_calls += 1
+        if self.followup_calls == 1:
+            return {"question_id": "q1", "question": "你的面试时间是？"}
+        return None
+
+    async def plan_draft(
+        self,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return draft_plan_json()
+
+    async def repair_plan_draft(
+        self,
+        payload: dict[str, Any],
+        report: dict[str, Any],
+        repair_log: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return draft_plan_json()
+
+
+def goal_input() -> GoalCalibrationInput:
+    return GoalCalibrationInput(
+        goal_type="interview_sprint",
+        target_timeline="one_to_three_months",
+        weekly_days=4,
+        session_minutes=60,
+        current_level="medium_partial",
+        preferred_language="python3",
+        self_reported_weaknesses=["pattern"],
+        extra_notes="",
+        training_preference="independent_first",
+    )
+
+
+@pytest.mark.asyncio
+async def test_goal_calibration_start_answer_and_generate_persists_draft(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeGoalCalibrationClient()
+    credential = SimpleNamespace(id=7, model_name="test-model")
+
+    async def fake_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        return client, credential
+
+    async def fake_generate_plan_with_repair(
+        session: AsyncSession,
+        client: FakeGoalCalibrationClient,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        max_repairs: int = 2,
+        locked_problem_slugs: set[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        return (
+            draft_plan_json(),
+            {"valid": True, "issues": [], "item_count": 2},
+            [{"reason": "problem_not_found", "replacement_problem_slug": "two-sum"}],
+        )
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        fake_client_for_user,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.generate_plan_with_repair",
+        fake_generate_plan_with_repair,
+        raising=False,
+    )
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+
+        started = await start_goal_calibration(session, user, goal_input())
+        answered = await answer_goal_followup(
+            session,
+            user,
+            started["draft_id"],
+            FollowupAnswer(question_id="q1", answer="两个月后"),
+        )
+        generated = await generate_goal_plan_draft(session, user, started["draft_id"])
+
+        saved_draft = await session.get(GoalCalibrationDraft, started["draft_id"])
+        assert saved_draft is not None
+        assert started["followup_question"] == "你的面试时间是？"
+        assert answered["status"] == "collecting_input"
+        assert answered["followup_question"] is None
+        assert answered["remaining_followups"] == 0
+        assert generated["status"] == "ready_for_review"
+        assert generated["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert saved_draft.status == "ready_for_review"
+        assert saved_draft.model_name == "test-model"
+        assert saved_draft.repair_log_json
+
+
+@pytest.mark.asyncio
+async def test_create_adjustment_draft_and_activate_version_preserves_active_plan_until_confirmed(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        return FakeGoalCalibrationClient(), SimpleNamespace(id=7, model_name="test-model")
+
+    async def fake_generate_plan_with_repair(
+        session: AsyncSession,
+        client: FakeGoalCalibrationClient,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        max_repairs: int = 2,
+        locked_problem_slugs: set[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        assert locked_problem_slugs == {"two-sum"}
+        return replacement_plan_json(), {"valid": True, "issues": [], "item_count": 1}, []
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        fake_client_for_user,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.generate_plan_with_repair",
+        fake_generate_plan_with_repair,
+        raising=False,
+    )
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        active_version = await get_active_plan_version(session, user, plan.id)
+        item_by_slug(active_version, "two-sum").status = "completed"
+        await session.commit()
+
+        adjustment = await create_adjustment_draft(
+            session,
+            user,
+            plan.id,
+            PlanAdjustmentRequest(
+                reason="strengthen_topic",
+                notes="补强动态规划",
+                preferred_language=None,
+            ),
+        )
+
+        await session.refresh(plan)
+        draft_version = await session.get(StudyPlanVersion, adjustment["draft_id"])
+        assert draft_version is not None
+        assert draft_version.status == "draft"
+        assert plan.active_version_number == 1
+        assert adjustment["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+
+        await activate_plan_version(session, user, plan.id, draft_version.id)
+
+        await session.refresh(plan)
+        await session.refresh(active_version)
+        await session.refresh(draft_version)
+        assert plan.active_version_number == 2
+        assert active_version.status == "superseded"
+        assert draft_version.status == "active"
 
 
 @pytest.mark.asyncio

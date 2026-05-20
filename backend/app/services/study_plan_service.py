@@ -17,16 +17,289 @@ from backend.app.models.learning import (
     StudyPlanVersion,
 )
 from backend.app.models.problem import Problem
+from backend.app.schemas.learning import (
+    FollowupAnswer,
+    GoalCalibrationInput,
+    PlanAdjustmentRequest,
+)
+from backend.app.services.credential_crypto import CredentialEncryptionError
+from backend.app.services.learning_plan_llm import (
+    PROMPT_VERSION,
+    client_for_user,
+    generate_plan_with_repair,
+)
+from backend.app.services.llm_credential_service import LlmCredentialError
 
 
 PRESERVED_ITEM_STATUSES = {"completed", "in_progress", "skipped"}
 ACTIVE_VERSION_STATUSES = {"active", "draft"}
+MAX_FOLLOWUPS = 3
 
 
 class StudyPlanError(RuntimeError):
     def __init__(self, detail: str) -> None:
         super().__init__(detail)
         self.detail = detail
+
+
+async def _client_for_user_or_error(
+    db: AsyncSession,
+    user: AppUser,
+) -> tuple[Any, Any]:
+    try:
+        return await client_for_user(db, user)
+    except LlmCredentialError as exc:
+        raise StudyPlanError(exc.detail) from exc
+    except CredentialEncryptionError as exc:
+        raise StudyPlanError(str(exc)) from exc
+
+
+def _followup_question_count(history: list[dict[str, Any]]) -> int:
+    return sum(1 for item in history if item.get("role") == "assistant")
+
+
+def _normalise_followup_question(
+    question: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if question is None:
+        return None
+    question_id = question.get("question_id")
+    question_text = question.get("question")
+    if not isinstance(question_id, str) or not question_id:
+        return None
+    if not isinstance(question_text, str) or not question_text:
+        return None
+    return {
+        "role": "assistant",
+        "question_id": question_id,
+        "question": question_text,
+    }
+
+
+def _goal_calibration_start_response(draft: GoalCalibrationDraft) -> dict[str, Any]:
+    history = _list_of_dicts(draft.followup_messages_json)
+    last_message = history[-1] if history else {}
+    last_question = (
+        last_message
+        if draft.status == "asking_followup"
+        and last_message.get("role") == "assistant"
+        else {}
+    )
+    question_count = _followup_question_count(history)
+    return {
+        "draft_id": draft.id,
+        "status": draft.status,
+        "followup_question": last_question.get("question"),
+        "followup_question_id": last_question.get("question_id"),
+        "remaining_followups": (
+            max(0, MAX_FOLLOWUPS - question_count)
+            if draft.status == "asking_followup"
+            else 0
+        ),
+    }
+
+
+def _plan_draft_response_from_json(
+    *,
+    draft_id: int,
+    status: str,
+    draft_plan_json: dict[str, Any],
+    target_snapshot: dict[str, Any],
+    validation_report: dict[str, Any],
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "draft_id": draft_id,
+        "status": status,
+        "target_snapshot": target_snapshot,
+        "generation_summary_md": str(
+            draft_plan_json.get("generation_summary_md", "")
+        ),
+        "stages": _list_of_dicts(draft_plan_json.get("stages", [])),
+        "validation_report": validation_report,
+        "repair_log": repair_log,
+        "uncertainty_notes": _list_of_strings(
+            draft_plan_json.get("uncertainty_notes", [])
+        ),
+    }
+
+
+def _plan_draft_response_from_goal_draft(
+    draft: GoalCalibrationDraft,
+) -> dict[str, Any]:
+    target_snapshot = draft.draft_goal_json or draft.draft_plan_json.get(
+        "target_snapshot",
+        {},
+    )
+    return _plan_draft_response_from_json(
+        draft_id=draft.id,
+        status=draft.status,
+        draft_plan_json=draft.draft_plan_json,
+        target_snapshot=target_snapshot,
+        validation_report=draft.validation_report_json,
+        repair_log=draft.repair_log_json,
+    )
+
+
+def _plan_draft_response_from_version(
+    version: StudyPlanVersion,
+    *,
+    status: str = "ready_for_review",
+) -> dict[str, Any]:
+    items_by_stage_id: dict[int, list[StudyPlanItem]] = {}
+    for item in version.items:
+        items_by_stage_id.setdefault(item.stage_id, []).append(item)
+    draft_plan_json = {
+        "generation_summary_md": version.generation_summary_md,
+        "stages": [
+            _stage_payload_from_items(
+                stage,
+                _sort_items(items_by_stage_id.get(stage.id, [])),
+            )
+            for stage in _sort_stages(version.stages)
+        ],
+    }
+    return _plan_draft_response_from_json(
+        draft_id=version.id,
+        status=status,
+        draft_plan_json=draft_plan_json,
+        target_snapshot=version.target_snapshot_json,
+        validation_report=version.validation_report_json,
+        repair_log=version.repair_log_json,
+    )
+
+
+async def start_goal_calibration(
+    db: AsyncSession,
+    user: AppUser,
+    payload: GoalCalibrationInput,
+) -> dict[str, Any]:
+    client, credential = await _client_for_user_or_error(db, user)
+    payload_json = payload.model_dump()
+    question = _normalise_followup_question(
+        await client.followup_question(payload_json, [])
+    )
+    history = [question] if question is not None else []
+    now = datetime.now(UTC)
+    draft = GoalCalibrationDraft(
+        user_id=user.id,
+        llm_credential_id=credential.id,
+        input_json=payload_json,
+        followup_messages_json=history,
+        draft_goal_json={},
+        draft_plan_json={},
+        validation_report_json={},
+        repair_log_json=[],
+        prompt_version=PROMPT_VERSION,
+        model_name=credential.model_name,
+        status="asking_followup" if question is not None else "collecting_input",
+        error_message="",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(draft)
+    await db.commit()
+    await db.refresh(draft)
+    return _goal_calibration_start_response(draft)
+
+
+async def _load_goal_draft(
+    db: AsyncSession,
+    user: AppUser,
+    draft_id: int,
+) -> GoalCalibrationDraft:
+    result = await db.execute(
+        select(GoalCalibrationDraft).where(
+            GoalCalibrationDraft.id == draft_id,
+            GoalCalibrationDraft.user_id == user.id,
+        )
+    )
+    draft = result.scalar_one_or_none()
+    if draft is None:
+        raise StudyPlanError("goal_calibration_draft_not_found")
+    return draft
+
+
+async def answer_goal_followup(
+    db: AsyncSession,
+    user: AppUser,
+    draft_id: int,
+    payload: FollowupAnswer,
+) -> dict[str, Any]:
+    draft = await _load_goal_draft(db, user, draft_id)
+    if draft.status not in {"asking_followup", "collecting_input"}:
+        raise StudyPlanError("goal_calibration_draft_not_editable")
+
+    history = _list_of_dicts(draft.followup_messages_json)
+    history.append(
+        {
+            "role": "user",
+            "question_id": payload.question_id,
+            "answer": payload.answer,
+        }
+    )
+    if _followup_question_count(history) < MAX_FOLLOWUPS:
+        client, credential = await _client_for_user_or_error(db, user)
+        question = _normalise_followup_question(
+            await client.followup_question(draft.input_json, history)
+        )
+        draft.llm_credential_id = credential.id
+        draft.model_name = credential.model_name
+        if question is not None:
+            history.append(question)
+            draft.status = "asking_followup"
+        else:
+            draft.status = "collecting_input"
+    else:
+        draft.status = "collecting_input"
+
+    draft.followup_messages_json = history
+    draft.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(draft)
+    return _goal_calibration_start_response(draft)
+
+
+async def generate_goal_plan_draft(
+    db: AsyncSession,
+    user: AppUser,
+    draft_id: int,
+) -> dict[str, Any]:
+    draft = await _load_goal_draft(db, user, draft_id)
+    if draft.status not in {"collecting_input", "asking_followup", "ready_for_review"}:
+        raise StudyPlanError("goal_calibration_draft_not_generatable")
+
+    client, credential = await _client_for_user_or_error(db, user)
+    draft.status = "generating"
+    draft.updated_at = datetime.now(UTC)
+    plan_json, report, repair_log = await generate_plan_with_repair(
+        db,
+        client,
+        draft.input_json,
+        _list_of_dicts(draft.followup_messages_json),
+    )
+    if not report.get("valid"):
+        draft.status = "failed"
+        draft.validation_report_json = report
+        draft.repair_log_json = repair_log
+        draft.error_message = str((report.get("issues") or ["invalid_plan"])[0])
+        draft.updated_at = datetime.now(UTC)
+        await db.commit()
+        raise StudyPlanError(draft.error_message)
+
+    draft.llm_credential_id = credential.id
+    draft.model_name = credential.model_name
+    draft.prompt_version = PROMPT_VERSION
+    draft.draft_goal_json = plan_json.get("target_snapshot", draft.input_json)
+    draft.draft_plan_json = plan_json
+    draft.validation_report_json = report
+    draft.repair_log_json = repair_log
+    draft.status = "ready_for_review"
+    draft.error_message = ""
+    draft.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(draft)
+    return _plan_draft_response_from_goal_draft(draft)
 
 
 async def pause_other_active_plans(
@@ -495,6 +768,148 @@ async def clone_adjusted_version(
         plan.updated_at = now
         await db.commit()
         return await get_active_plan_version(db, user, plan.id)
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def _next_version_number(db: AsyncSession, plan_id: int) -> int:
+    result = await db.execute(
+        select(StudyPlanVersion.version_number)
+        .where(StudyPlanVersion.plan_id == plan_id)
+        .order_by(StudyPlanVersion.version_number.desc())
+        .limit(1)
+    )
+    latest = result.scalar_one_or_none()
+    return (latest or 0) + 1
+
+
+def _adjustment_generation_payload(
+    old_version: StudyPlanVersion,
+    payload: PlanAdjustmentRequest,
+) -> dict[str, Any]:
+    return {
+        "adjustment": payload.model_dump(),
+        "target_snapshot": old_version.target_snapshot_json,
+        "current_version": {
+            "version_number": old_version.version_number,
+            "stages": [
+                {
+                    "title": stage.title,
+                    "objective_md": stage.objective_md,
+                    "focus_tags": stage.focus_tags_json,
+                    "items": [
+                        {
+                            "problem_slug": item.problem_slug,
+                            "status": item.status,
+                            "difficulty": item.difficulty,
+                            "skill_tags": item.skill_tags_json,
+                        }
+                        for item in _sort_items(stage.items)
+                    ],
+                }
+                for stage in _sort_stages(old_version.stages)
+            ],
+        },
+    }
+
+
+async def create_adjustment_draft(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+    payload: PlanAdjustmentRequest,
+) -> dict[str, Any]:
+    try:
+        plan = await _load_plan(db, user, plan_id)
+        old_version = await get_active_plan_version(
+            db,
+            user,
+            plan_id,
+            commit_repair=False,
+        )
+        client, _credential = await _client_for_user_or_error(db, user)
+        preserved_by_slug = _preserved_items(old_version)
+        plan_json, report, repair_log = await generate_plan_with_repair(
+            db,
+            client,
+            _adjustment_generation_payload(old_version, payload),
+            [],
+            locked_problem_slugs=set(preserved_by_slug),
+        )
+        if not report.get("valid"):
+            raise StudyPlanError(str((report.get("issues") or ["invalid_plan"])[0]))
+
+        now = datetime.now(UTC)
+        new_version = StudyPlanVersion(
+            plan_id=plan.id,
+            cloned_from_version_id=old_version.id,
+            version_number=await _next_version_number(db, plan.id),
+            status="draft",
+            target_snapshot_json=old_version.target_snapshot_json,
+            generation_summary_md=str(plan_json.get("generation_summary_md", "")),
+            adjustment_summary_md=payload.notes or payload.reason,
+            validation_report_json=report,
+            repair_log_json=repair_log,
+            created_at=now,
+            activated_at=None,
+        )
+        db.add(new_version)
+        await db.flush()
+        merged_draft = _merged_adjustment_draft(old_version, plan_json)
+        await _write_version_content(db, new_version, merged_draft)
+        await db.flush()
+        await db.refresh(
+            new_version,
+            attribute_names=["stages", "items"],
+        )
+        for item in new_version.items:
+            await db.refresh(item, attribute_names=["stage", "problem"])
+        await _copy_preserved_item_state(new_version, preserved_by_slug)
+        _write_adjustment_change_logs(
+            db,
+            old_version,
+            new_version,
+            adjustment_summary_md=new_version.adjustment_summary_md,
+        )
+        plan.updated_at = now
+        await db.commit()
+        return _plan_draft_response_from_version(new_version)
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def activate_plan_version(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+    version_id: int,
+) -> StudyPlanVersion:
+    try:
+        plan = await _load_plan(db, user, plan_id)
+        result = await db.execute(
+            select(StudyPlanVersion).where(
+                StudyPlanVersion.id == version_id,
+                StudyPlanVersion.plan_id == plan.id,
+            )
+        )
+        version = result.scalar_one_or_none()
+        if version is None:
+            raise StudyPlanError("study_plan_version_not_found")
+        if version.status not in {"draft", "active"}:
+            raise StudyPlanError("study_plan_version_cannot_be_activated")
+
+        await pause_other_active_plans(db, user, keep_plan_id=plan.id)
+        await _set_only_active_version(db, version)
+        now = datetime.now(UTC)
+        version.activated_at = version.activated_at or now
+        plan.status = "active"
+        plan.active_version_number = version.version_number
+        plan.updated_at = now
+        await db.commit()
+        await db.refresh(version)
+        return version
     except Exception:
         await db.rollback()
         raise
