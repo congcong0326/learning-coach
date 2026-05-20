@@ -552,7 +552,8 @@ async def get_active_study_plan(db: AsyncSession, user: AppUser) -> StudyPlan:
         for plan in active_plans[1:]:
             plan.status = "paused"
             plan.updated_at = now
-        await db.flush()
+        await db.commit()
+        await db.refresh(selected_plan)
     return selected_plan
 
 
@@ -678,6 +679,7 @@ async def update_plan_item_status(
                 StudyPlan.user_id == user.id,
                 StudyPlan.status == "active",
                 StudyPlanVersion.status == "active",
+                StudyPlanVersion.version_number == StudyPlan.active_version_number,
             )
         )
         row = result.one_or_none()
@@ -713,6 +715,7 @@ async def reorder_stage_items(
                 StudyPlan.user_id == user.id,
                 StudyPlan.status == "active",
                 StudyPlanVersion.status == "active",
+                StudyPlanVersion.version_number == StudyPlan.active_version_number,
             )
         )
         row = result.one_or_none()

@@ -568,6 +568,9 @@ async def test_activate_plan_pauses_other_active_plans(
 async def test_get_current_study_plan_payload_repairs_duplicate_active_plans(
     learning_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    user_id: int
+    first_plan_id: int
+    second_plan_id: int
     async with learning_session_factory() as session:
         user = await create_learning_user(session)
         first_draft = await create_ready_draft(session, user, title="第一计划")
@@ -584,6 +587,20 @@ async def test_get_current_study_plan_payload_repairs_duplicate_active_plans(
         assert payload["id"] == second_plan.id
         assert first_plan.status == "paused"
         assert second_plan.status == "active"
+        user_id = user.id
+        first_plan_id = first_plan.id
+        second_plan_id = second_plan.id
+
+    async with learning_session_factory() as session:
+        result = await session.execute(
+            select(StudyPlan.id, StudyPlan.status)
+            .where(StudyPlan.user_id == user_id)
+            .order_by(StudyPlan.id.asc())
+        )
+        plan_statuses = {plan_id: status for plan_id, status in result.all()}
+
+        assert plan_statuses[first_plan_id] == "paused"
+        assert plan_statuses[second_plan_id] == "active"
 
 
 @pytest.mark.asyncio
@@ -705,3 +722,61 @@ async def test_activate_plan_supersedes_other_active_versions(
         await session.refresh(second_version)
         assert first_version.status == "superseded"
         assert second_version.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_update_plan_item_status_rejects_stale_active_version_item(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        first_version = await get_active_plan_version(session, user, plan.id)
+        old_item = item_by_slug(first_version, "two-sum")
+        await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="制造 stale active item",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+        first_version.status = "active"
+        await session.commit()
+
+        with pytest.raises(StudyPlanError, match="active_plan_item_not_found"):
+            await update_plan_item_status(session, user, old_item.id, "skipped")
+
+
+@pytest.mark.asyncio
+async def test_reorder_stage_items_rejects_stale_active_version_stage(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        first_version = await get_active_plan_version(session, user, plan.id)
+        old_stage = ordered_stages(first_version)[0]
+        old_item_ids = [item.id for item in ordered_items(old_stage)]
+        await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="制造 stale active stage",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+        first_version.status = "active"
+        await session.commit()
+
+        with pytest.raises(StudyPlanError, match="active_plan_stage_not_found"):
+            await reorder_stage_items(
+                session,
+                user,
+                old_stage.id,
+                list(reversed(old_item_ids)),
+            )
