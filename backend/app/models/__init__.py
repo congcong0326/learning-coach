@@ -1,4 +1,12 @@
 from backend.app.models.auth import AppUser, AuthSession, LlmCredential
+from backend.app.models.learning import (
+    GoalCalibrationDraft,
+    PlanChangeLog,
+    StudyPlan,
+    StudyPlanItem,
+    StudyPlanStage,
+    StudyPlanVersion,
+)
 from backend.app.models.problem import (
     Base,
     Problem,
@@ -10,8 +18,14 @@ __all__ = [
     "AppUser",
     "AuthSession",
     "Base",
+    "GoalCalibrationDraft",
     "LlmCredential",
+    "PlanChangeLog",
     "Problem",
     "ProblemCategory",
     "ProblemCategoryItem",
+    "StudyPlan",
+    "StudyPlanItem",
+    "StudyPlanStage",
+    "StudyPlanVersion",
 ]
