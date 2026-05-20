@@ -147,3 +147,37 @@ export function getCurrentStudyPlan() {
 export function listStudyPlans() {
   return requestJson<StudyPlanListResponse>('/api/study-plans')
 }
+
+export function updatePlanItemStatus(itemId: number, status: 'pending' | 'skipped') {
+  return requestJson<StudyPlan>(`/api/study-plan/items/${itemId}`, {
+    method: 'PATCH',
+    body: { status },
+  })
+}
+
+export function reorderStageItems(stageId: number, itemIds: number[]) {
+  return requestJson<StudyPlan>(`/api/study-plan/stages/${stageId}/reorder`, {
+    method: 'POST',
+    body: { item_ids: itemIds },
+  })
+}
+
+export function activateStudyPlan(planId: number) {
+  return requestJson<StudyPlan>(`/api/study-plans/${planId}/activate`, {
+    method: 'POST',
+  })
+}
+
+export function createPlanAdjustment(
+  planId: number,
+  payload: {
+    reason: string
+    notes: string
+    preferred_language?: PreferredLanguage
+  },
+) {
+  return requestJson<PlanDraftResponse>(`/api/study-plans/${planId}/adjustments`, {
+    method: 'POST',
+    body: payload,
+  })
+}

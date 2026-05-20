@@ -225,6 +225,52 @@ body {
   color: #303830;
 }
 
+.study-plan-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.plan-stage {
+  padding: 16px;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plan-stage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plan-stage-heading h3.ant-typography {
+  margin: 0;
+  font-size: 18px;
+}
+
+.plan-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid #f0f0f0;
+}
+
+.plan-item-reason {
+  margin-top: 4px;
+  color: #586158;
+  font-size: 13px;
+}
+
 .problem-tags {
   display: flex;
   flex-wrap: wrap;

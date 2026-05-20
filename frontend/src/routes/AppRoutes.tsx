@@ -1,29 +1,14 @@
-import { Typography } from 'antd'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { ApiKeySettingsPage } from '../pages/ApiKeySettingsPage'
 import { GoalCalibrationPage } from '../pages/GoalCalibrationPage'
 import { ProblemLibraryPage } from '../pages/ProblemLibraryPage'
 import { ReviewPage } from '../pages/ReviewPage'
+import { StudyPlanHistoryPage } from '../pages/StudyPlanHistoryPage'
+import { StudyPlanPage } from '../pages/StudyPlanPage'
 import { TracePage } from '../pages/TracePage'
 import { WorkspacePage } from '../pages/WorkspacePage'
 import { AuthRedirect } from './AuthRedirect'
-
-function StudyPlanPagePlaceholder() {
-  return (
-    <section className="page-section">
-      <Typography.Title level={2}>学习计划</Typography.Title>
-    </section>
-  )
-}
-
-function StudyPlanHistoryPagePlaceholder() {
-  return (
-    <section className="page-section">
-      <Typography.Title level={2}>学习计划历史</Typography.Title>
-    </section>
-  )
-}
 
 export function AppRoutes() {
   return (
@@ -32,11 +17,11 @@ export function AppRoutes() {
       <Route path="/settings/api-keys" element={<ApiKeySettingsPage />} />
       <Route path="/problems" element={<ProblemLibraryPage />} />
       <Route path="/goal-calibration" element={<GoalCalibrationPage />} />
-      <Route path="/study-plan" element={<StudyPlanPagePlaceholder />} />
-      <Route path="/study-plans" element={<StudyPlanHistoryPagePlaceholder />} />
+      <Route path="/study-plan" element={<StudyPlanPage />} />
+      <Route path="/study-plans" element={<StudyPlanHistoryPage />} />
       <Route
         path="/study-plans/:planId/versions/:versionId"
-        element={<StudyPlanPagePlaceholder />}
+        element={<StudyPlanPage />}
       />
       <Route path="/workspace" element={<WorkspacePage />} />
       <Route path="/workspace/:slug" element={<WorkspacePage />} />
