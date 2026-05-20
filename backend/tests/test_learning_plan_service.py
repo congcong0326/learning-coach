@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import cast
+
+from sqlalchemy import Table
+
 from backend.app.models.learning import (
     GoalCalibrationDraft,
     PlanChangeLog,
@@ -36,6 +40,7 @@ def test_confirmed_version_fk_is_named_and_deferred() -> None:
         fk for fk in foreign_keys if fk.parent.name == "confirmed_version_id"
     )
 
+    assert confirmed_version_fk.constraint is not None
     assert confirmed_version_fk.constraint.name == "fk_goal_draft_confirmed_version"
     assert confirmed_version_fk.constraint.use_alter is True
 
@@ -65,9 +70,10 @@ def test_default_empty_learning_columns_have_server_defaults() -> None:
 
 
 def test_study_plan_item_stage_fk_includes_version_guard() -> None:
+    item_table = cast(Table, StudyPlanItem.__table__)
+    stage_table = cast(Table, StudyPlanStage.__table__)
     constraints = {
-        constraint.name: constraint
-        for constraint in StudyPlanItem.__table__.foreign_key_constraints
+        constraint.name: constraint for constraint in item_table.foreign_key_constraints
     }
     stage_version_fk = constraints["fk_study_plan_item_stage_version"]
 
@@ -81,6 +87,6 @@ def test_study_plan_item_stage_fk_includes_version_guard() -> None:
     ]
 
     stage_unique_constraints = {
-        constraint.name for constraint in StudyPlanStage.__table__.constraints
+        constraint.name for constraint in stage_table.constraints
     }
     assert "uq_study_plan_stage_id_version" in stage_unique_constraints
