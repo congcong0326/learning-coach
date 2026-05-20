@@ -17,10 +17,14 @@ class ValidationIssue(str, Enum):
 
 
 def _problem_tags(problem: Problem) -> set[str]:
+    metadata = problem.metadata_json if isinstance(problem.metadata_json, dict) else {}
+    topic_tags = metadata.get("topic_tags", [])
+    if not isinstance(topic_tags, list):
+        return set()
     return {
         item.get("slug", "")
-        for item in problem.metadata_json.get("topic_tags", [])
-        if item.get("slug")
+        for item in topic_tags
+        if isinstance(item, dict) and item.get("slug")
     }
 
 
@@ -49,11 +53,34 @@ def _candidate_for_tags(
 
 
 def _skill_tags(problem: Problem) -> list[str]:
+    metadata = problem.metadata_json if isinstance(problem.metadata_json, dict) else {}
+    topic_tags = metadata.get("topic_tags", [])
+    if not isinstance(topic_tags, list):
+        return []
     return [
         tag.get("slug", "")
-        for tag in problem.metadata_json.get("topic_tags", [])
-        if tag.get("slug")
+        for tag in topic_tags
+        if isinstance(tag, dict) and tag.get("slug")
     ]
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _list_of_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _append_issue(issues: list[str], issue: ValidationIssue) -> None:
+    if issue.value not in issues:
+        issues.append(issue.value)
 
 
 def _item_from_problem(
@@ -79,7 +106,7 @@ async def validate_and_repair_plan_draft(
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     problems = await _load_problems(session)
     candidates = [problem for problem in problems if not problem.is_paid_only]
-    if not candidates:
+    if not problems:
         return (
             draft,
             {
@@ -97,9 +124,9 @@ async def validate_and_repair_plan_draft(
     locked = locked_problem_slugs or set()
     repaired = {**draft, "stages": []}
 
-    for stage in draft.get("stages", []):
+    for stage in _list_of_dicts(draft.get("stages", [])):
         repaired_stage = {**stage, "items": []}
-        for order_index, item in enumerate(stage.get("items", []), start=1):
+        for order_index, item in enumerate(_list_of_dicts(stage.get("items", [])), start=1):
             slug = item.get("problem_slug", "")
             problem = by_slug.get(slug)
             reason = ""
@@ -116,12 +143,11 @@ async def validate_and_repair_plan_draft(
             if problem is None:
                 replacement = _candidate_for_tags(
                     candidates,
-                    item.get("skill_tags", []),
+                    _list_of_strings(item.get("skill_tags", [])),
                     used | locked,
                 )
                 if replacement is None:
-                    if reason:
-                        issues.append(reason)
+                    _append_issue(issues, ValidationIssue.EMPTY_PROBLEM_LIBRARY)
                     continue
                 repair_log.append(
                     {
@@ -145,4 +171,3 @@ async def validate_and_repair_plan_draft(
         "item_count": item_count,
     }
     return repaired, report, repair_log
-

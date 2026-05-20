@@ -192,3 +192,117 @@ async def test_validator_skips_locked_replacement_candidate(
         assert repaired["stages"][0]["items"][0]["problem_slug"] == "zzz-array"
         assert report["valid"] is True
         assert repair_log[0]["replacement_problem_slug"] == "zzz-array"
+
+
+@pytest.mark.asyncio
+async def test_validator_reports_empty_library_when_replacement_candidates_exhausted(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        draft = {
+            "stages": [
+                {
+                    "title": "基础",
+                    "items": [
+                        {"problem_slug": "missing-problem", "skill_tags": ["array"]}
+                    ],
+                }
+            ]
+        }
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            draft,
+            locked_problem_slugs={"two-sum"},
+        )
+
+        assert repaired["stages"][0]["items"] == []
+        assert report["valid"] is False
+        assert report["issues"] == [ValidationIssue.EMPTY_PROBLEM_LIBRARY.value]
+        assert repair_log == []
+
+
+@pytest.mark.asyncio
+async def test_validator_drops_paid_only_items_when_library_has_no_free_candidates(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("premium-array", paid=True))
+        await session.commit()
+
+        draft = {
+            "stages": [
+                {
+                    "title": "基础",
+                    "items": [
+                        {"problem_slug": "premium-array", "skill_tags": ["array"]}
+                    ],
+                }
+            ]
+        }
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            draft,
+        )
+
+        assert repaired["stages"][0]["items"] == []
+        assert report["valid"] is False
+        assert report["issues"] == [ValidationIssue.EMPTY_PROBLEM_LIBRARY.value]
+        assert repair_log == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skill_tags", [None, "array"])
+async def test_validator_normalizes_malformed_skill_tags(
+    validator_session_factory,
+    skill_tags,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        draft = {
+            "stages": [
+                {
+                    "title": "基础",
+                    "items": [
+                        {
+                            "problem_slug": "missing-problem",
+                            "skill_tags": skill_tags,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            draft,
+        )
+
+        assert repaired["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert report["valid"] is True
+        assert repair_log[0]["reason"] == ValidationIssue.PROBLEM_NOT_FOUND.value
+
+
+@pytest.mark.asyncio
+async def test_validator_ignores_null_stages_and_items(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            {"stages": [None, {"title": "基础", "items": None}]},
+        )
+
+        assert repaired["stages"] == [{"title": "基础", "items": []}]
+        assert report["valid"] is False
+        assert report["item_count"] == 0
+        assert repair_log == []
