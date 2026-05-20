@@ -709,6 +709,45 @@ async def test_get_active_plan_version_uses_active_version_number_when_statuses_
 
 
 @pytest.mark.asyncio
+async def test_current_plan_payload_repairs_duplicate_active_versions(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    first_version_id: int
+    second_version_id: int
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
+        plan = await confirm_plan_draft(session, user, draft.id)
+        first_version = await get_active_plan_version(session, user, plan.id)
+        second_version = await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="制造当前计划读取时的多 active 版本状态",
+            draft_plan_json=replacement_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+        first_version.status = "active"
+        await session.commit()
+
+        payload = await get_current_study_plan_payload(session, user)
+
+        assert payload["active_version"]["id"] == second_version.id
+        first_version_id = first_version.id
+        second_version_id = second_version.id
+
+    async with learning_session_factory() as session:
+        first_version_record = await session.get(StudyPlanVersion, first_version_id)
+        second_version_record = await session.get(StudyPlanVersion, second_version_id)
+
+        assert first_version_record is not None
+        assert second_version_record is not None
+        assert first_version_record.status == "superseded"
+        assert second_version_record.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_activate_plan_supersedes_other_active_versions(
     learning_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

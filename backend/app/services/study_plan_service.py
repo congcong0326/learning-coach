@@ -582,6 +582,9 @@ async def _load_payload_version(
     version_id: int | None = None,
 ) -> tuple[StudyPlan, StudyPlanVersion]:
     plan = await _load_plan(db, user, plan_id)
+    if version_id is None:
+        return plan, await get_active_plan_version(db, user, plan.id)
+
     version_query = (
         select(StudyPlanVersion)
         .options(
@@ -592,12 +595,7 @@ async def _load_payload_version(
         )
         .where(StudyPlanVersion.plan_id == plan.id)
     )
-    if version_id is None:
-        version_query = version_query.where(
-            StudyPlanVersion.version_number == plan.active_version_number
-        )
-    else:
-        version_query = version_query.where(StudyPlanVersion.id == version_id)
+    version_query = version_query.where(StudyPlanVersion.id == version_id)
     result = await db.execute(version_query)
     version = result.scalar_one_or_none()
     if version is None:
