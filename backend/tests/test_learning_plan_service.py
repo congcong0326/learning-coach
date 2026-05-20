@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 from sqlalchemy import Table
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
     GoalCalibrationDraft,
     PlanChangeLog,
@@ -14,7 +20,20 @@ from backend.app.models.learning import (
     StudyPlanStage,
     StudyPlanVersion,
 )
+from backend.app.models.problem import Base, Problem
 from backend.app.schemas.learning import GoalCalibrationInput
+from backend.app.services.study_plan_service import (
+    StudyPlanError,
+    activate_plan,
+    clone_adjusted_version,
+    confirm_plan_draft,
+    get_active_plan_version,
+    get_current_study_plan_payload,
+    list_study_plans,
+    reorder_stage_items,
+    study_plan_payload,
+    update_plan_item_status,
+)
 
 
 def test_learning_tables_are_registered_in_metadata() -> None:
@@ -152,3 +171,293 @@ def test_goal_calibration_rejects_unsupported_language() -> None:
             self_reported_weaknesses=[],
             training_preference="guided",
         )
+
+
+@pytest_asyncio.fixture
+async def learning_session_factory() -> AsyncGenerator[
+    async_sessionmaker[AsyncSession],
+    None,
+]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+def problem(slug: str, *, difficulty: str = "Easy") -> Problem:
+    now = datetime.now(UTC)
+    return Problem(
+        frontend_id=slug,
+        slug=slug,
+        title=slug.replace("-", " ").title(),
+        translated_title=slug,
+        difficulty=difficulty,
+        statement_md="# statement",
+        metadata_json={
+            "topic_tags": [
+                {"slug": "array", "name": "Array", "translated_name": "数组"}
+            ]
+        },
+        leetcode_url=f"https://leetcode.cn/problems/{slug}/",
+        is_paid_only=False,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def create_learning_user(session: AsyncSession) -> AppUser:
+    now = datetime.now(UTC)
+    unique = uuid4().hex
+    user = AppUser(
+        username=f"user-{unique}",
+        email=f"user-{unique}@example.com",
+        password_hash="hash",
+        display_name="learner",
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(user)
+    await session.flush()
+    session.add(problem("two-sum"))
+    session.add(problem("valid-parentheses", difficulty="Medium"))
+    session.add(problem("merge-intervals", difficulty="Medium"))
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+def draft_plan_json(title: str = "学习计划") -> dict[str, Any]:
+    return {
+        "title": title,
+        "generation_summary_md": "按当前目标生成的训练计划",
+        "stages": [
+            {
+                "title": "基础巩固",
+                "objective_md": "巩固高频基础模式",
+                "focus_tags": ["array", "stack"],
+                "assessment_criteria": ["能解释核心思路"],
+                "items": [
+                    {
+                        "problem_slug": "two-sum",
+                        "skill_tags": ["array"],
+                        "suggested_mode": "guided",
+                        "recommendation_reason": "练习哈希表补数",
+                    },
+                    {
+                        "problem_slug": "valid-parentheses",
+                        "skill_tags": ["stack"],
+                        "suggested_mode": "independent",
+                        "recommendation_reason": "练习栈匹配",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def adjusted_plan_json() -> dict[str, Any]:
+    return {
+        "title": "调整计划",
+        "generation_summary_md": "调整后的训练计划",
+        "stages": [
+            {
+                "title": "补强区间",
+                "objective_md": "补充区间题",
+                "focus_tags": ["interval"],
+                "assessment_criteria": ["能识别排序合并策略"],
+                "items": [
+                    {
+                        "problem_slug": "merge-intervals",
+                        "skill_tags": ["interval"],
+                        "suggested_mode": "guided",
+                        "recommendation_reason": "补强区间合并",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+async def create_ready_draft(
+    session: AsyncSession,
+    user: AppUser,
+    *,
+    title: str = "学习计划",
+) -> GoalCalibrationDraft:
+    now = datetime.now(UTC)
+    draft = GoalCalibrationDraft(
+        user_id=user.id,
+        input_json={"goal_type": "interview_sprint"},
+        followup_messages_json=[],
+        draft_goal_json={"goal_type": "interview_sprint", "weekly_days": 4},
+        draft_plan_json=draft_plan_json(title),
+        validation_report_json={"valid": True},
+        repair_log_json=[],
+        prompt_version="goal-plan-v1",
+        model_name="test-model",
+        status="ready_for_review",
+        error_message="",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(draft)
+    await session.commit()
+    await session.refresh(draft)
+    return draft
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_creates_unique_active_plan(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        first_draft = await create_ready_draft(session, user, title="第一计划")
+        first_plan = await confirm_plan_draft(session, user, first_draft.id)
+
+        second_draft = await create_ready_draft(session, user, title="第二计划")
+        second_plan = await confirm_plan_draft(session, user, second_draft.id)
+
+        await session.refresh(first_plan)
+        assert first_plan.status == "paused"
+        assert second_plan.status == "active"
+        assert second_draft.status == "confirmed"
+        assert second_draft.confirmed_plan_id == second_plan.id
+
+
+@pytest.mark.asyncio
+async def test_adjustment_clone_preserves_completed_items(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, title="原计划")
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        completed_slug = version.items[0].problem_slug
+        version.items[0].status = "completed"
+        version.items[0].locked = True
+        await session.commit()
+
+        new_version = await clone_adjusted_version(
+            session,
+            user,
+            plan.id,
+            adjustment_summary_md="完成题保留，补充数组题",
+            draft_plan_json=adjusted_plan_json(),
+            validation_report_json={"valid": True},
+            repair_log_json=[],
+        )
+
+        preserved = next(
+            item for item in new_version.items if item.problem_slug == completed_slug
+        )
+        assert preserved.status == "completed"
+        assert preserved.locked is True
+        assert new_version.version_number == 2
+        assert new_version.status == "active"
+        assert plan.active_version_number == 2
+        assert version.status == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_plan_payload_lists_stages_items_and_current_plan(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, title="当前计划")
+        plan = await confirm_plan_draft(session, user, draft.id)
+
+        payload = await study_plan_payload(session, user, plan.id)
+        current = await get_current_study_plan_payload(session, user)
+        plans = await list_study_plans(session, user)
+
+        assert payload["title"] == "当前计划"
+        assert payload["active_version"]["stages"][0]["items"][0]["frontend_id"] == "two-sum"
+        assert current["id"] == plan.id
+        assert plans["items"] == [
+            {
+                "id": plan.id,
+                "title": "当前计划",
+                "status": "active",
+                "active_version_number": 1,
+                "created_at": plan.created_at,
+                "updated_at": plan.updated_at,
+            }
+        ]
+
+
+@pytest.mark.asyncio
+async def test_update_plan_item_status_allows_only_pending_or_skipped_on_active_version(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        item = version.items[0]
+
+        returned_plan_id = await update_plan_item_status(
+            session,
+            user,
+            item.id,
+            "skipped",
+        )
+
+        assert returned_plan_id == plan.id
+        await session.refresh(item)
+        assert item.status == "skipped"
+        with pytest.raises(StudyPlanError, match="invalid_plan_item_status"):
+            await update_plan_item_status(session, user, item.id, "completed")
+
+
+@pytest.mark.asyncio
+async def test_reorder_stage_items_requires_exact_same_item_set(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        stage = version.stages[0]
+        ordered_ids = [item.id for item in sorted(stage.items, key=lambda item: item.order_index)]
+
+        returned_plan_id = await reorder_stage_items(
+            session,
+            user,
+            stage.id,
+            list(reversed(ordered_ids)),
+        )
+
+        assert returned_plan_id == plan.id
+        await session.refresh(stage, attribute_names=["items"])
+        assert [item.id for item in sorted(stage.items, key=lambda item: item.order_index)] == list(
+            reversed(ordered_ids)
+        )
+        with pytest.raises(StudyPlanError, match="stage_item_set_mismatch"):
+            await reorder_stage_items(session, user, stage.id, ordered_ids[:1])
+
+
+@pytest.mark.asyncio
+async def test_activate_plan_pauses_other_active_plans(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        first_draft = await create_ready_draft(session, user, title="第一计划")
+        first_plan = await confirm_plan_draft(session, user, first_draft.id)
+        second_draft = await create_ready_draft(session, user, title="第二计划")
+        second_plan = await confirm_plan_draft(session, user, second_draft.id)
+
+        activated = await activate_plan(session, user, first_plan.id)
+
+        await session.refresh(second_plan)
+        assert activated.id == first_plan.id
+        assert activated.status == "active"
+        assert second_plan.status == "paused"
