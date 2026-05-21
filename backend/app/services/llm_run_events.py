@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,7 +38,7 @@ class LlmRunEventHub:
         for queue in list(self._subscribers.get(run_id, set())):
             await queue.put(event)
 
-    async def subscribe(self, run_id: int) -> AsyncIterator[LlmRunEvent]:
+    async def subscribe(self, run_id: int) -> AsyncGenerator[LlmRunEvent, None]:
         queue: asyncio.Queue[LlmRunEvent] = asyncio.Queue()
         self._subscribers[run_id].add(queue)
         try:

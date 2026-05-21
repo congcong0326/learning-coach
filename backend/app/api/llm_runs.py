@@ -216,7 +216,11 @@ async def stream_llm_run_route(
 
     async def stream_events() -> AsyncIterator[str]:
         subscription = event_hub.subscribe(run_id)
-        first_event_task = asyncio.create_task(anext(subscription))
+
+        async def next_event() -> LlmRunEvent:
+            return await anext(subscription)
+
+        first_event_task: asyncio.Task[LlmRunEvent] = asyncio.create_task(next_event())
         try:
             await asyncio.sleep(0)
             if status == "pending" and not event_hub.has_task(run_id):

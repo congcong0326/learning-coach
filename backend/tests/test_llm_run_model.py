@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from typing import cast
+
+from sqlalchemy import CheckConstraint, Table
+
 from backend.app.models.llm_run import LlmRun
 
 
+def llm_run_table() -> Table:
+    return cast(Table, LlmRun.__table__)
+
+
 def test_llm_run_table_shape() -> None:
-    table = LlmRun.__table__
+    table = llm_run_table()
 
     assert table.name == "llm_run"
     assert table.c.user_id.nullable is False
@@ -18,7 +26,7 @@ def test_llm_run_table_shape() -> None:
 
 
 def test_llm_run_has_expected_indexes() -> None:
-    table = LlmRun.__table__
+    table = llm_run_table()
     indexes = {index.name for index in table.indexes}
 
     assert "ix_llm_run_user_created" in indexes
@@ -28,12 +36,14 @@ def test_llm_run_has_expected_indexes() -> None:
 
 
 def test_llm_run_status_constraint_values() -> None:
-    table = LlmRun.__table__
+    table = llm_run_table()
     constraints = {constraint.name: constraint for constraint in table.constraints}
 
     assert "ck_llm_run_status" in constraints
-    assert "pending" in str(constraints["ck_llm_run_status"].sqltext)
-    assert "running" in str(constraints["ck_llm_run_status"].sqltext)
-    assert "succeeded" in str(constraints["ck_llm_run_status"].sqltext)
-    assert "failed" in str(constraints["ck_llm_run_status"].sqltext)
-    assert "canceled" in str(constraints["ck_llm_run_status"].sqltext)
+    status_constraint = cast(CheckConstraint, constraints["ck_llm_run_status"])
+    status_sql = str(status_constraint.sqltext)
+    assert "pending" in status_sql
+    assert "running" in status_sql
+    assert "succeeded" in status_sql
+    assert "failed" in status_sql
+    assert "canceled" in status_sql
