@@ -27,12 +27,11 @@ type SsePayload = {
   run_id?: number
   status?: LlmRunStatus
   stage?: string
-  message?: string
+  message?: string | null
   text?: string
   result?: unknown
   error_code?: string | null
   error_message?: string | null
-  message?: string | null
 }
 
 const initialState: LlmRunState = {
