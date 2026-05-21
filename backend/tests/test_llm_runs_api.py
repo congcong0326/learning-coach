@@ -84,6 +84,40 @@ def test_cancel_llm_run_maps_status_conflict(monkeypatch) -> None:
     assert response.json()["detail"] == "run_status_conflict"
 
 
+def test_status_route_allows_retry_for_canceled_run(monkeypatch) -> None:
+    now = datetime.now(UTC)
+
+    async def fake_get(session: Any, user: AppUser, run_id: int):
+        return type(
+            "Run",
+            (),
+            {
+                "id": run_id,
+                "kind": "goal_plan_generate",
+                "status": "canceled",
+                "stage": "canceled",
+                "display_text_md": "",
+                "result_json": {},
+                "error_code": "",
+                "error_message": "",
+                "created_at": now,
+                "started_at": now,
+                "finished_at": now,
+            },
+        )()
+
+    monkeypatch.setattr("backend.app.api.llm_runs.get_llm_run_for_user", fake_get)
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.get("/api/llm-runs/7")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["can_retry"] is True
+
+
 def test_stream_route_starts_pending_run(monkeypatch) -> None:
     started: list[int] = []
 

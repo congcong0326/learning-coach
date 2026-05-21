@@ -65,7 +65,7 @@ def _status_payload(run: LlmRun) -> dict[str, Any]:
         "result": run.result_json,
         "error_code": run.error_code or None,
         "error_message": run.error_message or None,
-        "can_retry": run.status == "failed",
+        "can_retry": run.status in {"failed", "canceled"},
         "created_at": run.created_at.isoformat(),
         "started_at": _datetime_text(run.started_at),
         "finished_at": _datetime_text(run.finished_at),
