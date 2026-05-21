@@ -142,10 +142,15 @@ async def _fail_and_publish(
     error_code: str,
 ) -> None:
     await _safe_rollback(session, run_id=run_id, user_id=user_id)
+    fresh_run = await _run_for_transition(session, run, run_id=run_id, user_id=user_id)
+    if fresh_run is None:
+        await _publish_error(run_id, error_code=error_code)
+        await _publish_done(run_id)
+        return
     try:
         await fail_llm_run(
             session,
-            run,
+            fresh_run,
             error_code=error_code,
             error_message=_message_for_error(error_code),
         )
@@ -162,6 +167,20 @@ async def _fail_and_publish(
         )
     await _publish_error(run_id, error_code=error_code)
     await _publish_done(run_id)
+
+
+async def _run_for_transition(
+    session: AsyncSession,
+    run: LlmRun,
+    *,
+    run_id: int,
+    user_id: int,
+) -> LlmRun | None:
+    if hasattr(session, "get"):
+        fresh_run = await session.get(LlmRun, run_id)
+        if fresh_run is not None and fresh_run.user_id == user_id:
+            return fresh_run
+    return run
 
 
 async def execute_llm_run(
@@ -188,6 +207,16 @@ async def execute_llm_run(
                 run_id,
                 LlmRunEvent("started", {"run_id": run_id, "kind": run.kind}),
             )
+            if run.kind != "goal_plan_generate":
+                await _fail_and_publish(
+                    session,
+                    run,
+                    run_id=run_id,
+                    user_id=user_id,
+                    error_code="run_kind_unsupported",
+                )
+                return
+
             await event_hub.publish(
                 run_id,
                 LlmRunEvent(
@@ -215,16 +244,6 @@ async def execute_llm_run(
                 api_key=api_key,
                 base_url=credential.base_url,
             )
-
-            if run.kind != "goal_plan_generate":
-                await _fail_and_publish(
-                    session,
-                    run,
-                    run_id=run_id,
-                    user_id=user_id,
-                    error_code="run_kind_unsupported",
-                )
-                return
 
             result = await run_goal_plan_generate(
                 session,

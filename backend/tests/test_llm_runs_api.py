@@ -5,16 +5,34 @@ from importlib import import_module
 import logging
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
+import pytest_asyncio
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.api.auth import current_user_dependency
-from backend.app.models.auth import AppUser
+from backend.app.core.config import settings
+from backend.app.models.auth import AppUser, LlmCredential
+from backend.app.models.llm_run import LlmRun
+from backend.app.models.problem import Base
+from backend.app.services.credential_crypto import encrypt_api_key
 from backend.app.services.llm_run_events import LlmRunEvent
 
 
 app = cast(Any, import_module("backend.app.main").app)
+
+
+@pytest_asyncio.fixture
+async def orchestrator_session_factory() -> Any:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
 
 
 def fake_user() -> AppUser:
@@ -33,6 +51,54 @@ def fake_user() -> AppUser:
 
 async def fake_current_user_from_token(session: Any, token: str | None) -> AppUser:
     return fake_user()
+
+
+async def create_orchestrator_user_run(
+    session: AsyncSession,
+    *,
+    encryption_key: str,
+    kind: str = "goal_plan_generate",
+) -> tuple[AppUser, LlmRun]:
+    now = datetime.now(UTC)
+    unique = uuid4().hex
+    user = AppUser(
+        username=f"user-{unique}",
+        email=f"user-{unique}@example.com",
+        password_hash="hash",
+        display_name="Learner",
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(user)
+    await session.flush()
+    credential = LlmCredential(
+        user_id=user.id,
+        provider="openai",
+        display_name="Test",
+        base_url="https://example.test/v1",
+        api_mode="responses",
+        model_name="gpt-test",
+        api_key_ciphertext=encrypt_api_key("sk-test", encryption_key),
+        api_key_mask="sk-...test",
+        is_default=True,
+        is_enabled=True,
+        is_preferred=True,
+        is_active=True,
+        failure_count=0,
+        status="valid",
+        last_error="",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(credential)
+    await session.flush()
+    run = LlmRun(user_id=user.id, kind=kind)
+    session.add(run)
+    await session.commit()
+    await session.refresh(user)
+    await session.refresh(run)
+    return user, run
 
 
 @pytest.mark.asyncio
@@ -423,8 +489,46 @@ async def test_orchestrator_unsupported_kind_fails_and_publishes_error(monkeypat
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 10, 42)
 
     assert failed == [("run_kind_unsupported", "当前生成类型暂未接入")]
-    assert [event.name for event in events] == ["started", "progress", "error", "done"]
-    assert events[2].data["error_code"] == "run_kind_unsupported"
+    assert [event.name for event in events] == ["started", "error", "done"]
+    assert events[1].data["error_code"] == "run_kind_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_unsupported_kind_real_session_finishes_stream(
+    monkeypatch,
+    orchestrator_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from backend.app.services import llm_orchestrator
+
+    encryption_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(settings, "credential_encryption_key", encryption_key)
+    async with orchestrator_session_factory() as session:
+        user, run = await create_orchestrator_user_run(
+            session,
+            encryption_key=encryption_key,
+            kind="study_plan_adjustment",
+        )
+        user_id = user.id
+        run_id = run.id
+
+    events: list[LlmRunEvent] = []
+
+    class FakeEventHub:
+        async def publish(self, published_run_id: int, event: LlmRunEvent) -> None:
+            assert published_run_id == run_id
+            events.append(event)
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+
+    await llm_orchestrator.execute_llm_run(orchestrator_session_factory, run_id, user_id)
+
+    async with orchestrator_session_factory() as session:
+        saved_run = await session.get(LlmRun, run_id)
+        assert saved_run is not None
+        assert saved_run.status == "failed"
+        assert saved_run.error_code == "run_kind_unsupported"
+
+    assert [event.name for event in events] == ["started", "error", "done"]
 
 
 @pytest.mark.asyncio
