@@ -523,4 +523,36 @@ describe('useLlmRun', () => {
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps canceled state when a canceled pending create fails', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: 'request_failed' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    let start!: Promise<unknown>
+    act(() => {
+      start = result.current.startRun('coach_message', { message: 'fail after cancel' })
+      start.catch(() => undefined)
+    })
+    await act(async () => {
+      await result.current.cancelRun()
+    })
+    await act(async () => {
+      await start.catch(() => undefined)
+    })
+    await act(async () => {
+      await result.current.cancelRun()
+    })
+
+    expect(result.current.status).toBe('canceled')
+    expect(result.current.stage).toBe('canceled')
+    expect(result.current.error).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

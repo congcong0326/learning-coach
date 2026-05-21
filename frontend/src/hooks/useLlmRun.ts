@@ -194,8 +194,12 @@ export function useLlmRun() {
       try {
         created = await createLlmRun(kind, payload)
       } catch (error) {
+        const wasCanceled = canceledCreateSeqsRef.current.delete(requestSeq)
         if (requestSeqRef.current === requestSeq) {
           pendingCreateSeqRef.current = null
+          if (wasCanceled) {
+            throw error
+          }
           setState((current) => ({
             ...current,
             status: 'failed',
