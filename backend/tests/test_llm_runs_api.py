@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.api.auth import current_user_dependency
@@ -26,6 +29,24 @@ def fake_user() -> AppUser:
 
 async def fake_current_user_from_token(session: Any, token: str | None) -> AppUser:
     return fake_user()
+
+
+@pytest.mark.asyncio
+async def test_observe_llm_task_logs_sanitized_exception(caplog) -> None:
+    from backend.app.api.llm_runs import _observe_llm_task
+
+    async def fail_with_secret() -> None:
+        raise RuntimeError("secret prompt text")
+
+    task = asyncio.create_task(fail_with_secret())
+    with pytest.raises(RuntimeError):
+        await task
+
+    caplog.set_level(logging.ERROR, logger="backend.app.api.llm_runs")
+    _observe_llm_task(77, task)
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "secret prompt text" not in caplog.text
 
 
 def test_create_llm_run_requires_authentication() -> None:

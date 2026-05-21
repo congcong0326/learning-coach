@@ -83,14 +83,12 @@ def _observe_llm_task(run_id: int, task: asyncio.Task[None]) -> None:
     try:
         exception = task.exception()
     except asyncio.CancelledError:
-        logger.info("llm run task canceled run_id=%s", run_id)
         return
     if exception is not None:
         logger.error(
             "llm run task failed run_id=%s error_type=%s",
             run_id,
             type(exception).__name__,
-            exc_info=(type(exception), exception, exception.__traceback__),
         )
 
 
