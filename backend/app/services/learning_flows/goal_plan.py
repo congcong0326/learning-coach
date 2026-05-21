@@ -163,6 +163,8 @@ async def run_goal_plan_generate(
                 await _update_display_text(session, run, "".join(display_parts))
             if chunk.final_text:
                 final_text = chunk.final_text
+    except LearningFlowError:
+        raise
     except Exception as exc:
         logger.warning(
             "goal plan flow provider failed run_id=%s user_id=%s draft_id=%s "
@@ -204,7 +206,7 @@ async def run_goal_plan_generate(
         draft.repair_log_json = repair_log
         draft.error_message = "plan_validation_failed"
         draft.updated_at = datetime.now(UTC)
-        await session.commit()
+        await session.flush()
         logger.warning(
             "goal plan flow validation failed run_id=%s user_id=%s draft_id=%s "
             "issues=%s item_count=%s repair_log_count=%s",
@@ -233,14 +235,8 @@ async def run_goal_plan_generate(
     draft.status = "ready_for_review"
     draft.error_message = ""
     draft.updated_at = datetime.now(UTC)
-    await session.commit()
+    await session.flush()
     await session.refresh(draft)
-    await publish(
-        LlmRunEvent(
-            "result",
-            {"run_id": run.id, "status": "succeeded", "result": result},
-        )
-    )
     logger.info(
         "goal plan flow completed run_id=%s user_id=%s draft_id=%s "
         "stage_count=%s item_count=%s repair_log_count=%s",

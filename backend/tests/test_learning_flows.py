@@ -233,9 +233,8 @@ async def test_goal_plan_generate_flow_updates_draft_and_emits_result(
             "progress",
             "delta",
             "progress",
-            "result",
         ]
-        assert events[-1].data["result"]["draft_id"] == draft.id
+        assert all(event.name != "result" for event in events)
 
 
 @pytest.mark.asyncio
@@ -378,3 +377,37 @@ async def test_goal_plan_generate_stops_when_run_is_canceled_mid_stream(
         assert run.status == "canceled"
         assert run.result_json == {}
         assert [event.name for event in events] == ["progress", "delta"]
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generate_does_not_commit_formal_draft_before_run_success(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        draft, run = await create_draft_run(session, user)
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        await run_goal_plan_generate(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakePlanProvider(),
+            model_name="gpt-test",
+            publish=publish,
+        )
+        assert draft.status == "ready_for_review"
+
+        await session.rollback()
+
+        await session.refresh(draft)
+        assert draft.status == "collecting_input"
+        assert draft.draft_plan_json == {}
+        await session.refresh(run)
+        assert run.status == "pending"
+        assert run.result_json == {}
+        assert run.display_text_md == "我会按三个阶段生成计划。"
+        assert all(event.name != "result" for event in events)
