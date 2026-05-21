@@ -65,6 +65,18 @@ class FakePlanProvider:
         )
 
 
+class FailingProvider:
+    async def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncGenerator[ProviderChunk, None]:
+        raise RuntimeError("secret provider details")
+        yield ProviderChunk(text_delta="unreachable")
+
+
 @pytest_asyncio.fixture
 async def session_factory() -> AsyncGenerator[
     async_sessionmaker[AsyncSession],
@@ -182,6 +194,10 @@ async def test_goal_plan_generate_flow_updates_draft_and_emits_result(
         assert draft.draft_goal_json == {"goal_type": "interview_sprint"}
         assert draft.draft_plan_json["stages"][0]["items"][0]["problem_slug"] == "two-sum"
         assert draft.validation_report_json["valid"] is True
+        await session.refresh(run)
+        assert run.status == "pending"
+        assert run.result_json == {}
+        assert run.display_text_md == "我会按三个阶段生成计划。"
         assert [event.name for event in events] == [
             "progress",
             "delta",
@@ -256,4 +272,41 @@ async def test_goal_plan_generate_stores_failure_report_without_formal_plan(
             "item_count": 0,
         }
         assert draft.error_message == "plan_validation_failed"
+        await session.refresh(run)
+        assert run.status == "pending"
+        assert run.error_code == ""
+        assert run.result_json == {}
+        assert run.display_text_md == "我会按三个阶段生成计划。"
         assert [event.name for event in events] == ["progress", "delta", "progress"]
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generate_wraps_provider_failure_without_terminal_run(
+    session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        _draft, run = await create_draft_run(session, user)
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        with pytest.raises(LearningFlowError) as exc_info:
+            await run_goal_plan_generate(
+                session,
+                user_id=user.id,
+                run=run,
+                provider=FailingProvider(),
+                model_name="gpt-test",
+                publish=publish,
+            )
+
+        assert exc_info.value.code == "llm_provider_error"
+        assert "secret provider details" not in caplog.text
+        await session.refresh(run)
+        assert run.status == "pending"
+        assert run.error_code == ""
+        assert run.result_json == {}
+        assert [event.name for event in events] == ["progress"]

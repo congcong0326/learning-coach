@@ -137,24 +137,36 @@ async def run_goal_plan_generate(
     display_parts: list[str] = []
     final_text = ""
     # 模型输出只能作为草稿来源，正式计划必须经过本地题库校验后才能持久化。
-    async for chunk in provider.stream_text(
-        model=model_name,
-        instructions=PLAN_DRAFT_INSTRUCTIONS,
-        input_text=json.dumps(
-            {
-                "payload": draft.input_json,
-                "history": _list_of_dicts(draft.followup_messages_json),
-            },
-            ensure_ascii=False,
-        ),
-    ):
-        if chunk.text_delta:
-            display_parts.append(chunk.text_delta)
-            await publish(
-                LlmRunEvent("delta", {"run_id": run.id, "text": chunk.text_delta})
-            )
-        if chunk.final_text:
-            final_text = chunk.final_text
+    try:
+        async for chunk in provider.stream_text(
+            model=model_name,
+            instructions=PLAN_DRAFT_INSTRUCTIONS,
+            input_text=json.dumps(
+                {
+                    "payload": draft.input_json,
+                    "history": _list_of_dicts(draft.followup_messages_json),
+                },
+                ensure_ascii=False,
+            ),
+        ):
+            if chunk.text_delta:
+                display_parts.append(chunk.text_delta)
+                run.display_text_md = "".join(display_parts)
+                await publish(
+                    LlmRunEvent("delta", {"run_id": run.id, "text": chunk.text_delta})
+                )
+            if chunk.final_text:
+                final_text = chunk.final_text
+    except Exception as exc:
+        logger.warning(
+            "goal plan flow provider failed run_id=%s user_id=%s draft_id=%s "
+            "error_type=%s",
+            run.id,
+            user_id,
+            draft.id,
+            type(exc).__name__,
+        )
+        raise LearningFlowError("llm_provider_error") from exc
 
     raw_plan = _parse_plan_json(final_text)
     raw_stage_count, raw_item_count = _count_plan_items(raw_plan)
@@ -184,12 +196,8 @@ async def run_goal_plan_generate(
         draft.repair_log_json = repair_log
         draft.error_message = "plan_validation_failed"
         draft.updated_at = datetime.now(UTC)
-        run.status = "failed"
-        run.stage = "validation_failed"
-        run.error_code = "plan_validation_failed"
-        run.error_message = "plan_validation_failed"
+        run.display_text_md = "".join(display_parts)
         run.updated_at = datetime.now(UTC)
-        run.finished_at = datetime.now(UTC)
         await session.commit()
         logger.warning(
             "goal plan flow validation failed run_id=%s user_id=%s draft_id=%s "
@@ -220,12 +228,7 @@ async def run_goal_plan_generate(
     draft.error_message = ""
     draft.updated_at = datetime.now(UTC)
     run.display_text_md = "".join(display_parts)
-    run.result_json = result
-    run.status = "succeeded"
-    run.stage = "completed"
-    run.model_name = model_name
     run.updated_at = datetime.now(UTC)
-    run.finished_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(draft)
     await publish(
