@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
@@ -21,9 +21,26 @@ class LlmRunError(Exception):
         self.detail = detail
 
 
-def _ensure_mutable_run(run: LlmRun) -> None:
-    if run.status in TERMINAL_STATUSES or run.cancel_requested:
+async def _update_mutable_run(
+    session: AsyncSession,
+    run: LlmRun,
+    values: dict[str, Any],
+) -> LlmRun:
+    result = await session.execute(
+        update(LlmRun)
+        .where(
+            LlmRun.id == run.id,
+            LlmRun.status.not_in(TERMINAL_STATUSES),
+            LlmRun.cancel_requested.is_(False),
+        )
+        .values(**values),
+    )
+    if result.rowcount != 1:
+        await session.rollback()
         raise LlmRunError("run_status_conflict")
+    await session.commit()
+    await session.refresh(run)
+    return run
 
 
 async def create_llm_run(
@@ -78,18 +95,18 @@ async def mark_llm_run_running(
     llm_credential_id: int | None = None,
     model_name: str = "",
 ) -> LlmRun:
-    _ensure_mutable_run(run)
     now = datetime.now(UTC)
-    run.status = "running"
-    run.stage = stage
-    run.started_at = run.started_at or now
-    run.updated_at = now
+    values: dict[str, Any] = {
+        "status": "running",
+        "stage": stage,
+        "started_at": run.started_at or now,
+        "updated_at": now,
+    }
     if llm_credential_id is not None:
-        run.llm_credential_id = llm_credential_id
+        values["llm_credential_id"] = llm_credential_id
     if model_name:
-        run.model_name = model_name
-    await session.commit()
-    await session.refresh(run)
+        values["model_name"] = model_name
+    await _update_mutable_run(session, run, values)
     logger.info("llm run stage user_id=%s run_id=%s stage=%s", run.user_id, run.id, stage)
     return run
 
@@ -101,26 +118,39 @@ async def update_llm_run_stage(
     stage: str,
     display_text_md: str | None = None,
 ) -> LlmRun:
-    _ensure_mutable_run(run)
-    run.stage = stage
-    run.updated_at = datetime.now(UTC)
+    values: dict[str, Any] = {
+        "stage": stage,
+        "updated_at": datetime.now(UTC),
+    }
     if display_text_md is not None:
-        run.display_text_md = display_text_md
-    await session.commit()
-    await session.refresh(run)
+        values["display_text_md"] = display_text_md
+    await _update_mutable_run(session, run, values)
     logger.info("llm run stage user_id=%s run_id=%s stage=%s", run.user_id, run.id, stage)
     return run
 
 
 async def cancel_llm_run(session: AsyncSession, user: AppUser, run_id: int) -> LlmRun:
     run = await get_llm_run_for_user(session, user, run_id)
-    if run.status in TERMINAL_STATUSES:
+    now = datetime.now(UTC)
+    result = await session.execute(
+        update(LlmRun)
+        .where(
+            LlmRun.id == run.id,
+            LlmRun.user_id == user.id,
+            LlmRun.status.not_in(TERMINAL_STATUSES),
+            LlmRun.cancel_requested.is_(False),
+        )
+        .values(
+            cancel_requested=True,
+            status="canceled",
+            stage="canceled",
+            finished_at=now,
+            updated_at=now,
+        ),
+    )
+    if result.rowcount != 1:
+        await session.rollback()
         raise LlmRunError("run_status_conflict")
-    run.cancel_requested = True
-    run.status = "canceled"
-    run.stage = "canceled"
-    run.finished_at = datetime.now(UTC)
-    run.updated_at = run.finished_at
     await session.commit()
     await session.refresh(run)
     logger.info("llm run canceled user_id=%s run_id=%s stage=%s", user.id, run.id, run.stage)
@@ -134,16 +164,19 @@ async def succeed_llm_run(
     result: dict[str, Any],
     display_text_md: str,
 ) -> LlmRun:
-    await session.refresh(run)
-    _ensure_mutable_run(run)
-    run.status = "succeeded"
-    run.stage = "completed"
-    run.result_json = result
-    run.display_text_md = display_text_md
-    run.finished_at = datetime.now(UTC)
-    run.updated_at = run.finished_at
-    await session.commit()
-    await session.refresh(run)
+    now = datetime.now(UTC)
+    await _update_mutable_run(
+        session,
+        run,
+        {
+            "status": "succeeded",
+            "stage": "completed",
+            "result_json": result,
+            "display_text_md": display_text_md,
+            "finished_at": now,
+            "updated_at": now,
+        },
+    )
     logger.info("llm run completed user_id=%s run_id=%s status=%s", run.user_id, run.id, run.status)
     return run
 
@@ -155,16 +188,19 @@ async def fail_llm_run(
     error_code: str,
     error_message: str,
 ) -> LlmRun:
-    await session.refresh(run)
-    _ensure_mutable_run(run)
-    run.status = "failed"
-    run.stage = "failed"
-    run.error_code = error_code
-    run.error_message = error_message
-    run.finished_at = datetime.now(UTC)
-    run.updated_at = run.finished_at
-    await session.commit()
-    await session.refresh(run)
+    now = datetime.now(UTC)
+    await _update_mutable_run(
+        session,
+        run,
+        {
+            "status": "failed",
+            "stage": "failed",
+            "error_code": error_code,
+            "error_message": error_message,
+            "finished_at": now,
+            "updated_at": now,
+        },
+    )
     logger.warning(
         "llm run failed user_id=%s run_id=%s error_code=%s stage=%s",
         run.user_id,
