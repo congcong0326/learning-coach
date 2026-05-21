@@ -7,6 +7,7 @@ from backend.app.models.learning import (
     StudyPlanStage,
     StudyPlanVersion,
 )
+from backend.app.models.llm_run import LlmRun
 from backend.app.models.problem import (
     Base,
     Problem,
@@ -20,6 +21,7 @@ __all__ = [
     "Base",
     "GoalCalibrationDraft",
     "LlmCredential",
+    "LlmRun",
     "PlanChangeLog",
     "Problem",
     "ProblemCategory",
