@@ -2726,10 +2726,11 @@ git commit -m "docs: document llm streaming run layer"
 
 ## Final Verification Checklist
 
-- [ ] `uv run pytest backend/tests/test_llm_run_model.py backend/tests/test_llm_run_events.py backend/tests/test_llm_run_service.py backend/tests/test_llm_runs_api.py backend/tests/test_openai_responses_provider.py backend/tests/test_learning_flows.py -q`
-- [ ] `cd frontend && corepack pnpm test -- useLlmRun.test.tsx LlmStreamingPanel.test.tsx GoalCalibrationPage.test.tsx`
-- [ ] `make build`
-- [ ] `git status --short` shows only intentional changes.
+- [x] `uv run pytest backend/tests/test_llm_run_model.py backend/tests/test_llm_run_events.py backend/tests/test_llm_run_service.py backend/tests/test_llm_runs_api.py backend/tests/test_openai_responses_provider.py backend/tests/test_learning_flows.py -q`
+- [x] `cd frontend && corepack pnpm test -- useLlmRun.test.tsx LlmStreamingPanel.test.tsx GoalCalibrationPage.test.tsx`
+- [x] `cd frontend && corepack pnpm exec tsc -b`
+- [x] `make build`
+- [x] `git status --short` shows only intentional changes.
 
 ## Execution Notes
 
@@ -2737,3 +2738,5 @@ git commit -m "docs: document llm streaming run layer"
 - Keep the old synchronous learning APIs only as temporary compatibility until the migrated frontend and backend tests no longer use them.
 - Do not display model-generated problem slugs as formal plan items until `learning_plan_validator` has accepted or repaired them.
 - If SSE behavior becomes unreliable under multi-worker deployment, stop after this version and design a persistent event table or queue rather than adding ad hoc polling.
+- 2026-05-21 实施结果：目标校准、追问回答和计划草稿生成均已接入统一 LLM Run；正式 `result` 只在 orchestrator 成功提交后发布，取消或失败时前端只展示过程文本。
+- 2026-05-21 验证结果：后端专项 39 个测试通过，前端专项 33 个测试通过，`make build` 通过；Vite 仍提示主 bundle 超过 500 kB，属于现有打包体积提示，不影响本次功能验收。

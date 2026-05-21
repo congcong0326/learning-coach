@@ -86,6 +86,10 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/me/llm-credentials/{id}/default`
 - `POST /api/me/llm-credentials/{id}/test`
 - `DELETE /api/me/llm-credentials/{id}`
+- `POST /api/llm-runs`
+- `GET /api/llm-runs/{run_id}`
+- `GET /api/llm-runs/{run_id}/stream`
+- `POST /api/llm-runs/{run_id}/cancel`
 - `POST /api/goal-calibration`
 - `POST /api/goal-calibration/{draft_id}/followup`
 - `POST /api/goal-calibration/{draft_id}/generate`
@@ -111,6 +115,11 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.auth_service`：本地用户、Argon2id 密码 hash、session token hash、注册登录退出和当前用户查询。
 - `backend.app.services.credential_crypto`：Fernet API key 加密、解密和 mask。
 - `backend.app.services.llm_credential_service`：用户级 OpenAI API 资产 CRUD、首选/当前通讯资产处理、粘性路由、连续失败计数和所有权校验。
+- `backend.app.services.llm_run_service`：LLM Run 创建、状态迁移、取消、结果落库和终态并发保护。
+- `backend.app.services.llm_run_events`：单进程开发环境中的 SSE 事件编码和内存事件 hub。
+- `backend.app.services.llm_orchestrator`：统一执行 LLM Run，负责选择模型资产、解密 API key、创建 provider、调度具体学习 flow，并只在 run 成功提交后发布最终 result。
+- `backend.app.services.llm_providers`：大模型 provider 适配层，当前封装 OpenAI Responses 流式输出。
+- `backend.app.services.learning_flows`：可流式执行的学习业务 flow，当前包含目标校准追问、追问回答和学习计划草稿生成。
 - `backend.app.services.learning_plan_llm`：目标校准追问、学习计划草稿生成、OpenAI Responses client 和 LLM repair loop 编排。
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
@@ -172,6 +181,18 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `plan_change_log`，记录版本调整中的 preserved、added、removed 和 reordered 变化。
 
 T1 当前只把学习计划项和题库题目关联起来；真实训练会话、提交历史和代码快照将在 T2 通过稳定的 plan/version/item 标识继续关联。
+
+当前 LLM Run 相关 migration 会：
+
+- 创建 `llm_run`，保存用户、run kind、关联业务对象、输入摘要、阶段、可展示流式文本、最终 result、错误摘要、取消标记、使用的模型资产和时间戳。
+
+### 统一 LLM Run 流式层
+
+大模型调用统一通过后端 LLM Run 层发起。前端先创建 run，再通过 SSE 接收 `started`、`progress`、`delta`、`result`、`error`、`canceled` 和 `done` 事件。API key、模型资产选择、OpenAI Responses 调用、题库校验和 repair 仍在后端边界内完成。
+
+第一版持久化 run 状态、阶段、最终结果、错误摘要和取消状态，不保存完整 token 日志。页面刷新后可以恢复 run 状态和最终结果；未完成的运行在单进程开发环境中通过内存事件 hub 继续推送，后续多 worker 部署再引入外部队列或持久事件表。
+
+目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
 ## Docker Compose 角色
 

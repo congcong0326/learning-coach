@@ -17,7 +17,7 @@
 | 当前阶段 | 阶段 2：学习入口与训练状态底座 |
 | 当前主线任务 | T2：训练会话与工作台状态持久化 |
 | 当前任务状态 | 未开始 |
-| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划 |
+| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层 |
 | 下一步建议 | 开始 T2：把学习计划项和工作台训练会话、代码快照、提交结果关联起来 |
 | 第一版闭环状态 | 未闭环。当前已有题库、静态工作台、登录、API 资产池、目标校准和学习计划基础，尚缺训练会话、AI 教练、代码运行、复盘画像和推荐 |
 
@@ -27,7 +27,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 阶段 0 | 工程与题库基座 | 已完成 | 100% | B0、B1 | 本地全栈可运行，题库数据可导入、查询和展示 |
 | 阶段 1 | 本地用户与模型资产基础 | 已完成 | 100% | T0 | 用户可注册登录，并配置自己的 OpenAI API 资产池 |
-| 阶段 2 | 学习入口与训练状态底座 | 进行中 | 50% | T1、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
+| 阶段 2 | 学习入口与训练状态底座 | 进行中 | 60% | T1、T2.5、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
 | 阶段 3 | 基础反馈闭环 | 未开始 | 0% | T3、T5 | AI 可分层提示和 review，系统可运行 Python 代码并返回结构化结果 |
 | 阶段 4 | Agent 状态机与知识增强 | 未开始 | 0% | T4、T6 | LangGraph 可恢复状态机接入，RAG 教练知识库可检索并受 hint level 控制 |
 | 阶段 5 | 复盘画像与学习仪表盘 | 未开始 | 0% | T7 | 完成训练后生成复盘、画像增量、下一题推荐和仪表盘指标 |
@@ -146,13 +146,43 @@
 - `cd frontend && corepack pnpm test -- GoalCalibrationPage.test.tsx StudyPlanPage.test.tsx StudyPlanHistoryPage.test.tsx App.test.tsx`
 - `make build`
 
+### T2.5：统一 LLM Run 流式体验层
+
+| 字段 | 内容 |
+| --- | --- |
+| 优先级 | P0 |
+| 状态 | 已完成 |
+| 前置任务 | T1、T0 |
+| 当前阶段 | 阶段 2 |
+| 主要交付 | LLM Run 状态表、SSE 事件协议、停止生成、OpenAI Responses 流式 provider、目标校准和计划生成流式体验 |
+| 完成日期 | 2026-05-21 |
+
+**待办**
+
+- [x] 设计 `llm_run` 状态表和终态并发保护。
+- [x] 实现 LLM Run 创建、状态查询、SSE 订阅和取消 API。
+- [x] 实现 `started`、`progress`、`delta`、`result`、`error`、`canceled`、`done` 事件协议。
+- [x] 实现 OpenAI Responses 流式 provider。
+- [x] 将目标校准、追问回答和学习计划草稿生成迁移到 LLM Run flow。
+- [x] 前端目标校准页展示流式输出、阶段进度、失败状态和取消生成入口。
+- [x] 保证正式计划草稿只在本地题库校验、repair 和 run 成功提交后展示。
+- [x] 增加测试。
+- [x] 完成文档影响评估。
+
+**验证命令**
+
+- `uv run pytest backend/tests/test_llm_run_model.py backend/tests/test_llm_run_events.py backend/tests/test_llm_run_service.py backend/tests/test_llm_runs_api.py backend/tests/test_openai_responses_provider.py backend/tests/test_learning_flows.py -q`
+- `cd frontend && corepack pnpm test -- useLlmRun.test.tsx LlmStreamingPanel.test.tsx GoalCalibrationPage.test.tsx`
+- `cd frontend && corepack pnpm exec tsc -b`
+- `make build`
+
 ### T2：训练会话与工作台状态持久化
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
 | 状态 | 未开始 |
-| 前置任务 | T1 |
+| 前置任务 | T1、T2.5 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | `practice_session`、`practice_event`、`code_snapshot`、`submission_feedback`、工作台状态恢复 |
 | 完成日期 | 未完成 |
