@@ -11,7 +11,7 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { LlmStreamingPanel } from '../components/LlmStreamingPanel'
@@ -47,8 +47,16 @@ export function GoalCalibrationPage() {
   const [followupAnswer, setFollowupAnswer] = useState('')
   const navigate = useNavigate()
 
-  const calibrationRun = useLlmRun()
-  const planRun = useLlmRun()
+  const handleCalibrationResult = useCallback((result: unknown) => {
+    setDraft(result as GoalCalibrationStartResponse)
+    setFollowupAnswer('')
+  }, [])
+  const handlePlanResult = useCallback((result: unknown) => {
+    setPlanDraft(result as PlanDraftResponse)
+  }, [])
+
+  const calibrationRun = useLlmRun({ onResult: handleCalibrationResult })
+  const planRun = useLlmRun({ onResult: handlePlanResult })
   const confirmMutation = useMutation({
     mutationFn: () => confirmPlan(planDraft?.draft_id ?? 0),
     onSuccess: () => navigate('/study-plan'),
@@ -57,19 +65,6 @@ export function GoalCalibrationPage() {
   const hasError = confirmMutation.isError
   const showCalibrationForm =
     !draft && !calibrationRun.isRunning && calibrationRun.status !== 'succeeded'
-
-  useEffect(() => {
-    if (calibrationRun.status === 'succeeded' && calibrationRun.result) {
-      setDraft(calibrationRun.result as GoalCalibrationStartResponse)
-      setFollowupAnswer('')
-    }
-  }, [calibrationRun.status, calibrationRun.result])
-
-  useEffect(() => {
-    if (planRun.status === 'succeeded' && planRun.result) {
-      setPlanDraft(planRun.result as PlanDraftResponse)
-    }
-  }, [planRun.status, planRun.result])
 
   function submit(values: GoalCalibrationPayload) {
     setDraft(null)
@@ -81,6 +76,7 @@ export function GoalCalibrationPage() {
     if (!draft?.draft_id || !draft.followup_question_id || !followupAnswer.trim()) {
       return
     }
+    setFollowupAnswer('')
     void calibrationRun.startRun('goal_followup', {
       draft_id: draft.draft_id,
       question_id: draft.followup_question_id,

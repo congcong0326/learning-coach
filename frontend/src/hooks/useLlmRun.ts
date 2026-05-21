@@ -24,6 +24,10 @@ type LlmRunState = {
   error: RunError | null
 }
 
+type UseLlmRunOptions = {
+  onResult?: (result: unknown) => void
+}
+
 type SsePayload = {
   run_id?: number
   status?: LlmRunStatus
@@ -59,13 +63,19 @@ function toRunError(payload: SsePayload): RunError {
   }
 }
 
-export function useLlmRun() {
+export function useLlmRun(options: UseLlmRunOptions = {}) {
+  const { onResult } = options
   const [state, setState] = useState<LlmRunState>(initialState)
   const sourceRef = useRef<EventSource | null>(null)
   const runIdRef = useRef<number | null>(null)
   const requestSeqRef = useRef(0)
   const pendingCreateSeqRef = useRef<number | null>(null)
   const canceledCreateSeqsRef = useRef(new Set<number>())
+  const onResultRef = useRef(onResult)
+
+  useEffect(() => {
+    onResultRef.current = onResult
+  }, [onResult])
 
   const closeSource = useCallback(() => {
     sourceRef.current?.close()
@@ -128,13 +138,17 @@ export function useLlmRun() {
         if (!isCurrentEvent(payload)) {
           return
         }
+        const result = payload.result ?? null
         setState((current) => ({
           ...current,
           status: payload.status ?? 'succeeded',
           stage: payload.stage ?? current.stage,
-          result: payload.result ?? null,
+          result,
           error: null,
         }))
+        if (result !== null) {
+          onResultRef.current?.(result)
+        }
       })
 
       source.addEventListener('error', (event) => {
