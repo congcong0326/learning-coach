@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.api.auth import current_user_dependency
-from backend.app.main import app
 from backend.app.models.auth import AppUser
+from backend.app.services.llm_run_events import LlmRunEvent
+
+
+app = cast(Any, import_module("backend.app.main").app)
 
 
 def fake_user() -> AppUser:
@@ -33,7 +37,7 @@ async def fake_current_user_from_token(session: Any, token: str | None) -> AppUs
 
 @pytest.mark.asyncio
 async def test_observe_llm_task_logs_sanitized_exception(caplog) -> None:
-    from backend.app.api.llm_runs import _observe_llm_task
+    _observe_llm_task = cast(Any, import_module("backend.app.api.llm_runs"))._observe_llm_task
 
     async def fail_with_secret() -> None:
         raise RuntimeError("secret prompt text")
@@ -205,3 +209,302 @@ def test_stream_pending_run_emits_done_body(monkeypatch) -> None:
 
     assert "event: done" in body
     assert started == [99]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_goal_plan_success_publishes_result_after_success(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+
+    calls: list[str] = []
+    events: list[LlmRunEvent] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 9,
+            "user_id": 42,
+            "kind": "goal_plan_generate",
+            "status": "pending",
+            "display_text_md": "",
+        },
+    )()
+    user = fake_user()
+    credential = type(
+        "Credential",
+        (),
+        {
+            "id": 3,
+            "api_key_ciphertext": "ciphertext",
+            "base_url": "https://example.test/v1",
+            "model_name": "gpt-test",
+        },
+    )()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            calls.append("rollback")
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            assert run_id == 9
+            calls.append(f"publish:{event.name}")
+            events.append(event)
+
+    class FakeProvider:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            assert api_key == "plain-key"
+            assert base_url == credential.base_url
+            calls.append("provider")
+
+    async def fake_load(session: Any, run_id: int, user_id: int):
+        assert run_id == 9
+        assert user_id == 42
+        return run, user
+
+    async def fake_select(session: Any, selected_user: AppUser):
+        assert selected_user.id == user.id
+        calls.append("select")
+        return credential
+
+    def fake_decrypt(ciphertext: str, encryption_key: str) -> str:
+        assert ciphertext == "ciphertext"
+        calls.append("decrypt")
+        return "plain-key"
+
+    async def fake_mark_running(
+        session: Any,
+        selected_run: Any,
+        *,
+        stage: str,
+        llm_credential_id: int | None = None,
+        model_name: str = "",
+    ):
+        assert selected_run is run
+        assert stage == "selecting_credential"
+        assert llm_credential_id == credential.id
+        assert model_name == credential.model_name
+        calls.append("mark_running")
+        run.status = "running"
+        return run
+
+    async def fake_flow(
+        session: Any,
+        *,
+        user_id: int,
+        run: Any,
+        provider: Any,
+        model_name: str,
+        publish: Any,
+    ) -> dict[str, Any]:
+        assert user_id == 42
+        assert isinstance(provider, FakeProvider)
+        assert model_name == credential.model_name
+        calls.append("flow")
+        run.display_text_md = "draft text"
+        return {"draft_id": 7, "stage_count": 2, "item_count": 8}
+
+    async def fake_succeed(
+        session: Any,
+        selected_run: Any,
+        *,
+        result: dict[str, Any],
+        display_text_md: str,
+    ):
+        assert selected_run is run
+        assert result["draft_id"] == 7
+        assert display_text_md == "draft text"
+        calls.append("succeed")
+        run.status = "succeeded"
+        return run
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", fake_load)
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fake_select)
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fake_decrypt)
+    monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 9, 42)
+
+    assert [event.name for event in events] == ["started", "progress", "result", "done"]
+    assert calls == [
+        "publish:started",
+        "publish:progress",
+        "select",
+        "decrypt",
+        "mark_running",
+        "provider",
+        "flow",
+        "succeed",
+        "publish:result",
+        "publish:done",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_unsupported_kind_fails_and_publishes_error(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+
+    events: list[LlmRunEvent] = []
+    failed: list[tuple[str, str]] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 10,
+            "user_id": 42,
+            "kind": "study_plan_adjustment",
+            "status": "pending",
+            "display_text_md": "",
+        },
+    )()
+    credential = type(
+        "Credential",
+        (),
+        {
+            "id": 4,
+            "api_key_ciphertext": "ciphertext",
+            "base_url": "https://example.test/v1",
+            "model_name": "gpt-test",
+        },
+    )()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            events.append(event)
+
+    class FakeProvider:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            return None
+
+    async def fake_mark_running(*args: Any, **kwargs: Any):
+        run.status = "running"
+        return run
+
+    async def fake_fail(
+        session: Any,
+        selected_run: Any,
+        *,
+        error_code: str,
+        error_message: str,
+    ):
+        failed.append((error_code, error_message))
+        run.status = "failed"
+        return run
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", lambda session, run_id, user_id: _async_value((run, fake_user())))
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, user: _async_value(credential))
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
+    monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(llm_orchestrator, "fail_llm_run", fake_fail)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 10, 42)
+
+    assert failed == [("run_kind_unsupported", "当前生成类型暂未接入")]
+    assert [event.name for event in events] == ["started", "progress", "error", "done"]
+    assert events[2].data["error_code"] == "run_kind_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_status_conflict_rolls_back_without_result(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+    from backend.app.services.llm_run_service import LlmRunError
+
+    events: list[LlmRunEvent] = []
+    calls: list[str] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 11,
+            "user_id": 42,
+            "kind": "goal_plan_generate",
+            "status": "pending",
+            "cancel_requested": False,
+            "display_text_md": "",
+        },
+    )()
+    credential = type(
+        "Credential",
+        (),
+        {
+            "id": 5,
+            "api_key_ciphertext": "ciphertext",
+            "base_url": "https://example.test/v1",
+            "model_name": "gpt-test",
+        },
+    )()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            calls.append("rollback")
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            calls.append(f"publish:{event.name}")
+            events.append(event)
+
+    class FakeProvider:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            return None
+
+    async def fake_mark_running(*args: Any, **kwargs: Any):
+        run.status = "running"
+        return run
+
+    async def fake_flow(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        run.display_text_md = "flushed draft text"
+        return {"draft_id": 8}
+
+    async def fake_succeed(*args: Any, **kwargs: Any):
+        run.status = "canceled"
+        run.cancel_requested = True
+        raise LlmRunError("run_status_conflict")
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", lambda session, run_id, user_id: _async_value((run, fake_user())))
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, user: _async_value(credential))
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
+    monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 11, 42)
+
+    assert [event.name for event in events] == ["started", "progress", "canceled", "done"]
+    assert "publish:result" not in calls
+    assert "rollback" in calls
+
+
+async def _async_value(value: Any) -> Any:
+    return value
