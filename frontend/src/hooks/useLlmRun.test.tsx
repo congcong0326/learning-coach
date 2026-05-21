@@ -381,4 +381,146 @@ describe('useLlmRun', () => {
     expect(result.current.status).toBe('canceled')
     expect(FakeEventSource.instances).toHaveLength(0)
   })
+
+  it('still cancels a pending create even if another run starts later', async () => {
+    const first = deferred<Response>()
+    const second = deferred<Response>()
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 401,
+          status: 'canceled',
+          cancel_requested: true,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    let firstStart!: Promise<unknown>
+    let secondStart!: Promise<unknown>
+    act(() => {
+      firstStart = result.current.startRun('coach_message', { message: 'first' })
+    })
+    await act(async () => {
+      await result.current.cancelRun()
+    })
+    act(() => {
+      secondStart = result.current.startRun('coach_message', { message: 'second' })
+    })
+    second.resolve(
+      okJson({
+        run_id: 402,
+        kind: 'coach_message',
+        status: 'pending',
+        stage: 'queued',
+        stream_url: '/api/llm-runs/402/stream',
+      }),
+    )
+    await act(async () => {
+      await secondStart
+    })
+    first.resolve(
+      okJson({
+        run_id: 401,
+        kind: 'coach_message',
+        status: 'pending',
+        stage: 'queued',
+        stream_url: '/api/llm-runs/401/stream',
+      }),
+    )
+    await act(async () => {
+      await firstStart
+    })
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/llm-runs/401/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(result.current.runId).toBe(402)
+    expect(result.current.status).toBe('pending')
+  })
+
+  it('ignores stale cancel responses after a new run starts', async () => {
+    const cancel = deferred<Response>()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 501,
+          kind: 'coach_message',
+          status: 'pending',
+          stage: 'queued',
+          stream_url: '/api/llm-runs/501/stream',
+        }),
+      )
+      .mockReturnValueOnce(cancel.promise)
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 502,
+          kind: 'coach_message',
+          status: 'pending',
+          stage: 'queued',
+          stream_url: '/api/llm-runs/502/stream',
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    await act(async () => {
+      await result.current.startRun('coach_message', { message: 'first' })
+    })
+    let cancelRun!: Promise<unknown>
+    act(() => {
+      cancelRun = result.current.cancelRun()
+    })
+    await act(async () => {
+      await result.current.startRun('coach_message', { message: 'second' })
+    })
+    cancel.resolve(
+      okJson({
+        run_id: 501,
+        status: 'canceled',
+        cancel_requested: true,
+      }),
+    )
+    await act(async () => {
+      await cancelRun
+    })
+
+    expect(result.current.runId).toBe(502)
+    expect(result.current.status).toBe('pending')
+  })
+
+  it('stores create failures and clears pending state', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: 'llm_credential_unavailable' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    await act(async () => {
+      await expect(
+        result.current.startRun('coach_message', { message: 'fail' }),
+      ).rejects.toThrow('llm_credential_unavailable')
+    })
+    await act(async () => {
+      await result.current.cancelRun()
+    })
+
+    expect(result.current.status).toBe('failed')
+    expect(result.current.error).toEqual({
+      code: 'request_failed',
+      message: 'llm_credential_unavailable',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

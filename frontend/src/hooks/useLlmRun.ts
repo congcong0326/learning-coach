@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { ApiError } from '../api/client'
 import {
   cancelLlmRun,
   createLlmRun,
@@ -63,8 +64,8 @@ export function useLlmRun() {
   const sourceRef = useRef<EventSource | null>(null)
   const runIdRef = useRef<number | null>(null)
   const requestSeqRef = useRef(0)
-  const createPendingRef = useRef(false)
-  const cancelPendingCreateRef = useRef(false)
+  const pendingCreateSeqRef = useRef<number | null>(null)
+  const canceledCreateSeqsRef = useRef(new Set<number>())
 
   const closeSource = useCallback(() => {
     sourceRef.current?.close()
@@ -180,8 +181,7 @@ export function useLlmRun() {
     async (kind: LlmRunKind, payload: Record<string, unknown>) => {
       const requestSeq = requestSeqRef.current + 1
       requestSeqRef.current = requestSeq
-      createPendingRef.current = true
-      cancelPendingCreateRef.current = false
+      pendingCreateSeqRef.current = requestSeq
       closeSource()
       runIdRef.current = null
       setState({
@@ -190,14 +190,39 @@ export function useLlmRun() {
         stage: 'queued',
       })
 
-      const created = await createLlmRun(kind, payload)
+      let created: Awaited<ReturnType<typeof createLlmRun>>
+      try {
+        created = await createLlmRun(kind, payload)
+      } catch (error) {
+        if (requestSeqRef.current === requestSeq) {
+          pendingCreateSeqRef.current = null
+          setState((current) => ({
+            ...current,
+            status: 'failed',
+            stage: 'failed',
+            error: {
+              code: 'request_failed',
+              message:
+                error instanceof ApiError
+                  ? error.detail
+                  : '创建生成任务失败，请稍后重试',
+            },
+          }))
+        }
+        throw error
+      }
+
+      const shouldCancelCreated = canceledCreateSeqsRef.current.has(requestSeq)
+      canceledCreateSeqsRef.current.delete(requestSeq)
       if (requestSeqRef.current !== requestSeq) {
+        if (shouldCancelCreated) {
+          await cancelLlmRun(created.run_id)
+        }
         return created
       }
-      createPendingRef.current = false
+      pendingCreateSeqRef.current = null
 
-      if (cancelPendingCreateRef.current) {
-        cancelPendingCreateRef.current = false
+      if (shouldCancelCreated) {
         const canceled = await cancelLlmRun(created.run_id)
         if (requestSeqRef.current === requestSeq) {
           runIdRef.current = null
@@ -230,8 +255,8 @@ export function useLlmRun() {
   const cancelRun = useCallback(async () => {
     const runId = runIdRef.current
     if (runId === null) {
-      if (createPendingRef.current) {
-        cancelPendingCreateRef.current = true
+      if (pendingCreateSeqRef.current !== null) {
+        canceledCreateSeqsRef.current.add(pendingCreateSeqRef.current)
         setState((current) => ({
           ...current,
           status: 'canceled',
@@ -244,13 +269,16 @@ export function useLlmRun() {
 
     closeSource()
     runIdRef.current = null
+    const requestSeq = requestSeqRef.current
     const canceled = await cancelLlmRun(runId)
-    setState((current) => ({
-      ...current,
-      status: canceled.status,
-      stage: 'canceled',
-      error: null,
-    }))
+    if (requestSeqRef.current === requestSeq) {
+      setState((current) => ({
+        ...current,
+        status: canceled.status,
+        stage: 'canceled',
+        error: null,
+      }))
+    }
     return canceled
   }, [closeSource])
 
