@@ -12,7 +12,7 @@ class ProviderChunk:
 
 
 class LlmProvider(Protocol):
-    async def stream_text(
+    def stream_text(
         self,
         *,
         model: str,
