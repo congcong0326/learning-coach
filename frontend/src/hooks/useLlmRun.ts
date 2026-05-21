@@ -32,6 +32,7 @@ type SsePayload = {
   result?: unknown
   error_code?: string | null
   error_message?: string | null
+  message?: string | null
 }
 
 const initialState: LlmRunState = {
@@ -54,7 +55,7 @@ function parsePayload(event: Event): SsePayload {
 function toRunError(payload: SsePayload): RunError {
   return {
     code: payload.error_code ?? 'llm_run_error',
-    message: payload.error_message ?? '生成失败，请稍后重试',
+    message: payload.message ?? payload.error_message ?? '生成失败，请稍后重试',
   }
 }
 
@@ -180,16 +181,8 @@ export function useLlmRun() {
     setState((current) => ({
       ...current,
       status: canceled.status,
-      stage: canceled.stage,
-      displayText: canceled.display_text_md ?? current.displayText,
-      result: canceled.result ?? null,
-      error:
-        canceled.error_code || canceled.error_message
-          ? {
-              code: canceled.error_code ?? 'run_canceled',
-              message: canceled.error_message ?? '已停止生成',
-            }
-          : null,
+      stage: 'canceled',
+      error: null,
     }))
     return canceled
   }, [closeSource])

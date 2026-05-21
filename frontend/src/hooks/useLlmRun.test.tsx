@@ -129,14 +129,8 @@ describe('useLlmRun', () => {
       .mockResolvedValueOnce(
         okJson({
           run_id: 99,
-          kind: 'coach_message',
           status: 'canceled',
-          stage: 'canceled',
-          display_text_md: '',
-          result: null,
-          error_code: null,
-          error_message: null,
-          can_retry: true,
+          cancel_requested: true,
         }),
       )
     vi.stubGlobal('fetch', fetchMock)
@@ -178,7 +172,7 @@ describe('useLlmRun', () => {
         run_id: 101,
         stage: 'streaming_model',
         error_code: 'llm_provider_error',
-        error_message: '模型服务暂时不可用',
+        message: '模型服务暂时不可用',
       })
     })
 

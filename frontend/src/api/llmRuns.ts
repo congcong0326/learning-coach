@@ -37,6 +37,12 @@ export type LlmRunStatusResponse = {
   finished_at?: string | null
 }
 
+export type LlmRunCancelResponse = {
+  run_id: number
+  status: LlmRunStatus
+  cancel_requested: boolean
+}
+
 export function createLlmRun(kind: LlmRunKind, payload: Record<string, unknown>) {
   return requestJson<CreateLlmRunResponse>('/api/llm-runs', {
     method: 'POST',
@@ -49,7 +55,7 @@ export function getLlmRunStatus(runId: number) {
 }
 
 export function cancelLlmRun(runId: number) {
-  return requestJson<LlmRunStatusResponse>(`/api/llm-runs/${runId}/cancel`, {
+  return requestJson<LlmRunCancelResponse>(`/api/llm-runs/${runId}/cancel`, {
     method: 'POST',
   })
 }
