@@ -10,11 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import settings
 from backend.app.models.auth import AppUser, LlmCredential
 from backend.app.services.credential_crypto import decrypt_api_key
+from backend.app.services.learning_flows.goal_plan import PROMPT_VERSION
 from backend.app.services.learning_plan_validator import validate_and_repair_plan_draft
 from backend.app.services.llm_credential_service import select_llm_credential_for_user
 
 
-PROMPT_VERSION = "goal-plan-v2"
 logger = logging.getLogger(__name__)
 
 # The model receives this schema to stay close to the API contract, but the
