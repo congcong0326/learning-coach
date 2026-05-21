@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from typing import Any
 
 
 SOLUTION_HEADING = "\n## solution 题解"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,8 @@ class PrepareStats:
 
 
 def split_statement_markdown(markdown: str) -> SplitMarkdownResult:
+    # Public seed data keeps the problem statement only; solution text stays out
+    # of the app so the coach can guide practice instead of leaking answers.
     index = markdown.find(SOLUTION_HEADING)
     if index < 0:
         return SplitMarkdownResult(markdown.rstrip(), False)
@@ -51,7 +55,8 @@ def _question(json_path: Path) -> dict[str, Any]:
 
 def _metadata(question: dict[str, Any]) -> dict[str, Any]:
     python3_snippet = ""
-    for snippet in question.get("codeSnippets", []):
+    code_snippets = question.get("codeSnippets") or []
+    for snippet in code_snippets:
         if snippet.get("langSlug") == "python3":
             python3_snippet = snippet.get("code", "")
             break
@@ -100,6 +105,11 @@ def prepare_problem_seed(source_dir: Path, output_dir: Path) -> PrepareStats:
             f"Expected problemset_md and problemset under {source_dir}"
         )
 
+    logger.info(
+        "problem seed preparation started source_dir=%s output_dir=%s",
+        source_dir,
+        output_dir,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
     skipped_count = 0
@@ -109,6 +119,11 @@ def prepare_problem_seed(source_dir: Path, output_dir: Path) -> PrepareStats:
             skipped_count += 1
             continue
         records.append(_problem_record(md_path, json_path))
+    logger.info(
+        "problem seed preparation parsed records=%s skipped=%s",
+        len(records),
+        skipped_count,
+    )
 
     with (output_dir / "problems.jsonl").open("w", encoding="utf-8") as file:
         for record in records:
@@ -130,10 +145,16 @@ def prepare_problem_seed(source_dir: Path, output_dir: Path) -> PrepareStats:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    logger.info(
+        "problem seed preparation completed problem_count=%s skipped=%s",
+        len(records),
+        skipped_count,
+    )
     return PrepareStats(problem_count=len(records), skipped_count=skipped_count)
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

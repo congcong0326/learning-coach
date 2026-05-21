@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,9 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
 from backend.app.models.auth import AppUser, AuthSession, LlmCredential
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuthError(RuntimeError):
@@ -42,6 +46,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def session_token_hash(token: str) -> str:
+    # Only the hash is persisted; raw session tokens stay in the HttpOnly cookie
+    # boundary and must never be logged.
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -70,6 +76,7 @@ async def register_user(
     normalized_email = email.strip().lower()
     normalized_username = username.strip()
     if "@" not in normalized_email:
+        logger.warning("user registration rejected reason=invalid_email")
         raise AuthError("invalid_email")
 
     existing = await db.execute(
@@ -81,6 +88,7 @@ async def register_user(
         )
     )
     if existing.scalar_one_or_none() is not None:
+        logger.warning("user registration rejected reason=user_already_exists")
         raise AuthError("user_already_exists")
 
     now = datetime.now(UTC)
@@ -99,6 +107,7 @@ async def register_user(
     created_session = await create_session(db, user)
     await db.commit()
     await db.refresh(user)
+    logger.info("user registered user_id=%s", user.id)
     return user, created_session
 
 
@@ -119,14 +128,17 @@ async def login_user(
     )
     user = result.scalar_one_or_none()
     if user is None or not verify_password(password, user.password_hash):
+        logger.warning("user login rejected reason=invalid_credentials")
         raise AuthError("invalid_credentials")
     if user.status != "active":
+        logger.warning("user login rejected user_id=%s reason=user_disabled", user.id)
         raise AuthError("user_disabled")
 
     user.last_login_at = datetime.now(UTC)
     created_session = await create_session(db, user)
     await db.commit()
     await db.refresh(user)
+    logger.info("user login completed user_id=%s", user.id)
     return user, created_session
 
 
@@ -142,6 +154,9 @@ async def logout_token(db: AsyncSession, token: str | None) -> None:
     if record is not None:
         record.revoked_at = datetime.now(UTC)
         await db.commit()
+        logger.info(
+            "user logout completed session_id=%s user_id=%s", record.id, record.user_id
+        )
 
 
 async def get_current_user_from_token(
@@ -172,10 +187,12 @@ async def get_current_user_from_token(
 
 async def has_default_llm_credential(db: AsyncSession, user: AppUser) -> bool:
     result = await db.execute(
-        select(LlmCredential.id).where(
+        select(LlmCredential.id)
+        .where(
             LlmCredential.user_id == user.id,
             LlmCredential.is_preferred.is_(True),
             LlmCredential.is_enabled.is_(True),
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalars().first() is not None

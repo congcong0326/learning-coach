@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.problem import Problem, ProblemCategory, ProblemCategoryItem
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,10 @@ async def import_problem_seed(seed_dir: Path, session: AsyncSession) -> SeedImpo
     if not (seed_dir / "manifest.json").exists():
         raise FileNotFoundError(seed_dir / "manifest.json")
 
+    logger.info("problem seed import started seed_dir=%s", seed_dir)
     inserted_problems = 0
+    # The import is idempotent by slug, so local seed refreshes can be rerun
+    # without duplicating existing problem-library rows.
     for record in _jsonl(seed_dir / "problems.jsonl"):
         if await _problem_by_slug(session, record["slug"]):
             continue
@@ -66,6 +73,7 @@ async def import_problem_seed(seed_dir: Path, session: AsyncSession) -> SeedImpo
         )
         inserted_problems += 1
     await session.flush()
+    logger.info("problem seed import problems flushed inserted=%s", inserted_problems)
 
     inserted_categories = 0
     for record in _jsonl(seed_dir / "problem_categories.jsonl"):
@@ -80,6 +88,10 @@ async def import_problem_seed(seed_dir: Path, session: AsyncSession) -> SeedImpo
         )
         inserted_categories += 1
     await session.flush()
+    logger.info(
+        "problem seed import categories flushed inserted=%s",
+        inserted_categories,
+    )
 
     inserted_category_items = 0
     for record in _jsonl(seed_dir / "problem_category_items.jsonl"):
@@ -105,6 +117,13 @@ async def import_problem_seed(seed_dir: Path, session: AsyncSession) -> SeedImpo
         inserted_category_items += 1
 
     await session.commit()
+    logger.info(
+        "problem seed import completed inserted_problems=%s inserted_categories=%s "
+        "inserted_category_items=%s",
+        inserted_problems,
+        inserted_categories,
+        inserted_category_items,
+    )
     return SeedImportStats(
         inserted_problems=inserted_problems,
         inserted_categories=inserted_categories,

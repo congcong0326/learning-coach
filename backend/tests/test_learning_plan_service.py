@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from backend.app.schemas.learning import (
     PlanAdjustmentRequest,
     StudyPlanResponse,
 )
+from backend.app.services.learning_plan_llm import PROMPT_VERSION
 from backend.app.services.study_plan_service import (
     StudyPlanError,
     activate_plan_version,
@@ -395,7 +397,7 @@ async def create_ready_draft(
         draft_plan_json=plan_json or draft_plan_json(title),
         validation_report_json={"valid": True},
         repair_log_json=[],
-        prompt_version="goal-plan-v1",
+        prompt_version=PROMPT_VERSION,
         model_name="test-model",
         status="ready_for_review",
         error_message="",
@@ -527,6 +529,192 @@ async def test_goal_calibration_start_answer_and_generate_persists_draft(
         assert saved_draft.status == "ready_for_review"
         assert saved_draft.model_name == "test-model"
         assert saved_draft.repair_log_json
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generation_logs_validation_failure(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    credential = SimpleNamespace(id=7, model_name="test-model")
+
+    async def fake_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        return FakeGoalCalibrationClient(), credential
+
+    async def fake_generate_plan_with_repair(
+        session: AsyncSession,
+        client: FakeGoalCalibrationClient,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        max_repairs: int = 2,
+        locked_problem_slugs: set[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        return (
+            draft_plan_json(),
+            {"valid": False, "issues": ["empty_problem_library"], "item_count": 0},
+            [],
+        )
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        fake_client_for_user,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.generate_plan_with_repair",
+        fake_generate_plan_with_repair,
+        raising=False,
+    )
+    caplog.set_level(logging.WARNING, logger="backend.app.services.study_plan_service")
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+        draft.status = "collecting_input"
+        await session.commit()
+
+        with pytest.raises(StudyPlanError, match="empty_problem_library"):
+            await generate_goal_plan_draft(session, user, draft.id)
+
+        assert (
+            "goal plan draft generation failed validation "
+            f"draft_id={draft.id} user_id={user.id} credential_id=7 "
+            "model=test-model issues=empty_problem_library item_count=0"
+        ) in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generation_can_retry_failed_draft(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = SimpleNamespace(id=7, model_name="test-model")
+
+    async def fake_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        return FakeGoalCalibrationClient(), credential
+
+    async def fake_generate_plan_with_repair(
+        session: AsyncSession,
+        client: FakeGoalCalibrationClient,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        max_repairs: int = 2,
+        locked_problem_slugs: set[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        return draft_plan_json(), {"valid": True, "issues": [], "item_count": 2}, []
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        fake_client_for_user,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.generate_plan_with_repair",
+        fake_generate_plan_with_repair,
+        raising=False,
+    )
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+        draft.status = "failed"
+        draft.error_message = "empty_problem_library"
+        await session.commit()
+
+        generated = await generate_goal_plan_draft(session, user, draft.id)
+
+        saved_draft = await session.get(GoalCalibrationDraft, draft.id)
+        assert saved_draft is not None
+        assert generated["status"] == "ready_for_review"
+        assert saved_draft.status == "ready_for_review"
+        assert saved_draft.error_message == ""
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generation_returns_existing_ready_draft_without_llm(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        raise AssertionError("ready draft should not call LLM")
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        unexpected_client_for_user,
+        raising=False,
+    )
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+
+        generated = await generate_goal_plan_draft(session, user, draft.id)
+
+        assert generated["status"] == "ready_for_review"
+        assert generated["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generation_regenerates_stale_ready_draft(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = SimpleNamespace(id=7, model_name="test-model")
+
+    async def fake_client_for_user(
+        session: AsyncSession,
+        user: AppUser,
+    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
+        return FakeGoalCalibrationClient(), credential
+
+    async def fake_generate_plan_with_repair(
+        session: AsyncSession,
+        client: FakeGoalCalibrationClient,
+        payload: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        max_repairs: int = 2,
+        locked_problem_slugs: set[str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        plan = draft_plan_json("中文学习计划")
+        return plan, {"valid": True, "issues": [], "item_count": 2}, []
+
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.client_for_user",
+        fake_client_for_user,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.study_plan_service.generate_plan_with_repair",
+        fake_generate_plan_with_repair,
+        raising=False,
+    )
+
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, title="Old English Plan")
+        draft.prompt_version = "goal-plan-v1"
+        await session.commit()
+
+        generated = await generate_goal_plan_draft(session, user, draft.id)
+
+        saved_draft = await session.get(GoalCalibrationDraft, draft.id)
+        assert saved_draft is not None
+        assert generated["generation_summary_md"] == "按当前目标生成的训练计划"
+        assert saved_draft.prompt_version == PROMPT_VERSION
+        assert saved_draft.draft_plan_json["title"] == "中文学习计划"
 
 
 @pytest.mark.asyncio

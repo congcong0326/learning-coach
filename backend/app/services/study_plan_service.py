@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,9 +32,18 @@ from backend.app.services.learning_plan_llm import (
 from backend.app.services.llm_credential_service import LlmCredentialError
 
 
+# Progress-bearing items are carried into adjusted versions so user work is not
+# lost when the LLM proposes a new plan structure.
 PRESERVED_ITEM_STATUSES = {"completed", "in_progress", "skipped"}
 ACTIVE_VERSION_STATUSES = {"active", "draft"}
+GENERATABLE_DRAFT_STATUSES = {
+    "collecting_input",
+    "asking_followup",
+    "ready_for_review",
+    "failed",
+}
 MAX_FOLLOWUPS = 3
+logger = logging.getLogger(__name__)
 
 
 class StudyPlanError(RuntimeError):
@@ -81,8 +91,7 @@ def _goal_calibration_start_response(draft: GoalCalibrationDraft) -> dict[str, A
     last_message = history[-1] if history else {}
     last_question = (
         last_message
-        if draft.status == "asking_followup"
-        and last_message.get("role") == "assistant"
+        if draft.status == "asking_followup" and last_message.get("role") == "assistant"
         else {}
     )
     question_count = _followup_question_count(history)
@@ -99,6 +108,19 @@ def _goal_calibration_start_response(draft: GoalCalibrationDraft) -> dict[str, A
     }
 
 
+def _format_report_issues(report: dict[str, Any]) -> str:
+    issues = report.get("issues", [])
+    if isinstance(issues, list):
+        return ",".join(str(issue) for issue in issues) or "none"
+    return str(issues) if issues else "none"
+
+
+def _draft_plan_counts(draft_plan_json: dict[str, Any]) -> tuple[int, int]:
+    stages = _list_of_dicts(draft_plan_json.get("stages", []))
+    item_count = sum(len(_list_of_dicts(stage.get("items", []))) for stage in stages)
+    return len(stages), item_count
+
+
 def _plan_draft_response_from_json(
     *,
     draft_id: int,
@@ -112,9 +134,7 @@ def _plan_draft_response_from_json(
         "draft_id": draft_id,
         "status": status,
         "target_snapshot": target_snapshot,
-        "generation_summary_md": str(
-            draft_plan_json.get("generation_summary_md", "")
-        ),
+        "generation_summary_md": str(draft_plan_json.get("generation_summary_md", "")),
         "stages": _list_of_dicts(draft_plan_json.get("stages", [])),
         "validation_report": validation_report,
         "repair_log": repair_log,
@@ -174,8 +194,17 @@ async def start_goal_calibration(
     user: AppUser,
     payload: GoalCalibrationInput,
 ) -> dict[str, Any]:
-    client, credential = await _client_for_user_or_error(db, user)
     payload_json = payload.model_dump()
+    logger.info(
+        "goal calibration start requested user_id=%s goal_type=%s "
+        "timeline=%s preferred_language=%s weakness_count=%s",
+        user.id,
+        payload_json.get("goal_type"),
+        payload_json.get("target_timeline"),
+        payload_json.get("preferred_language"),
+        len(payload_json.get("self_reported_weaknesses", [])),
+    )
+    client, credential = await _client_for_user_or_error(db, user)
     question = _normalise_followup_question(
         await client.followup_question(payload_json, [])
     )
@@ -200,6 +229,16 @@ async def start_goal_calibration(
     db.add(draft)
     await db.commit()
     await db.refresh(draft)
+    logger.info(
+        "goal calibration start completed user_id=%s draft_id=%s status=%s "
+        "credential_id=%s model=%s has_followup=%s",
+        user.id,
+        draft.id,
+        draft.status,
+        credential.id,
+        credential.model_name,
+        question is not None,
+    )
     return _goal_calibration_start_response(draft)
 
 
@@ -228,9 +267,24 @@ async def answer_goal_followup(
 ) -> dict[str, Any]:
     draft = await _load_goal_draft(db, user, draft_id)
     if draft.status not in {"asking_followup", "collecting_input"}:
+        logger.warning(
+            "goal calibration followup rejected draft_id=%s user_id=%s "
+            "status=%s reason=goal_calibration_draft_not_editable",
+            draft.id,
+            user.id,
+            draft.status,
+        )
         raise StudyPlanError("goal_calibration_draft_not_editable")
 
     history = _list_of_dicts(draft.followup_messages_json)
+    logger.info(
+        "goal calibration followup received draft_id=%s user_id=%s status=%s "
+        "history_messages=%s",
+        draft.id,
+        user.id,
+        draft.status,
+        len(history),
+    )
     history.append(
         {
             "role": "user",
@@ -257,7 +311,17 @@ async def answer_goal_followup(
     draft.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(draft)
-    return _goal_calibration_start_response(draft)
+    response = _goal_calibration_start_response(draft)
+    logger.info(
+        "goal calibration followup completed draft_id=%s user_id=%s status=%s "
+        "history_messages=%s remaining_followups=%s",
+        draft.id,
+        user.id,
+        draft.status,
+        len(history),
+        response["remaining_followups"],
+    )
+    return response
 
 
 async def generate_goal_plan_draft(
@@ -266,18 +330,71 @@ async def generate_goal_plan_draft(
     draft_id: int,
 ) -> dict[str, Any]:
     draft = await _load_goal_draft(db, user, draft_id)
-    if draft.status not in {"collecting_input", "asking_followup", "ready_for_review"}:
+    if draft.status not in GENERATABLE_DRAFT_STATUSES:
+        logger.warning(
+            "goal plan draft generation rejected "
+            "draft_id=%s user_id=%s status=%s reason=goal_calibration_draft_not_generatable",
+            draft.id,
+            user.id,
+            draft.status,
+        )
         raise StudyPlanError("goal_calibration_draft_not_generatable")
+    if (
+        draft.status == "ready_for_review"
+        and draft.draft_plan_json
+        and draft.prompt_version == PROMPT_VERSION
+    ):
+        logger.info(
+            "goal plan draft generation reused existing draft "
+            "draft_id=%s user_id=%s status=%s",
+            draft.id,
+            user.id,
+            draft.status,
+        )
+        return _plan_draft_response_from_goal_draft(draft)
 
-    client, credential = await _client_for_user_or_error(db, user)
+    try:
+        client, credential = await _client_for_user_or_error(db, user)
+    except StudyPlanError as exc:
+        logger.warning(
+            "goal plan draft generation unavailable "
+            "draft_id=%s user_id=%s status=%s detail=%s",
+            draft.id,
+            user.id,
+            draft.status,
+            exc.detail,
+        )
+        raise
+    logger.info(
+        "goal plan draft generation started "
+        "draft_id=%s user_id=%s status=%s credential_id=%s model=%s",
+        draft.id,
+        user.id,
+        draft.status,
+        credential.id,
+        credential.model_name,
+    )
     draft.status = "generating"
     draft.updated_at = datetime.now(UTC)
-    plan_json, report, repair_log = await generate_plan_with_repair(
-        db,
-        client,
-        draft.input_json,
-        _list_of_dicts(draft.followup_messages_json),
-    )
+    try:
+        # The service does not persist the LLM draft until it passes local
+        # validation, keeping official study-plan items tied to known problems.
+        plan_json, report, repair_log = await generate_plan_with_repair(
+            db,
+            client,
+            draft.input_json,
+            _list_of_dicts(draft.followup_messages_json),
+        )
+    except Exception:
+        logger.exception(
+            "goal plan draft generation crashed "
+            "draft_id=%s user_id=%s credential_id=%s model=%s",
+            draft.id,
+            user.id,
+            credential.id,
+            credential.model_name,
+        )
+        raise
     if not report.get("valid"):
         draft.status = "failed"
         draft.validation_report_json = report
@@ -285,6 +402,18 @@ async def generate_goal_plan_draft(
         draft.error_message = str((report.get("issues") or ["invalid_plan"])[0])
         draft.updated_at = datetime.now(UTC)
         await db.commit()
+        logger.warning(
+            "goal plan draft generation failed validation "
+            "draft_id=%s user_id=%s credential_id=%s model=%s issues=%s item_count=%s "
+            "repair_log_count=%s",
+            draft.id,
+            user.id,
+            credential.id,
+            credential.model_name,
+            _format_report_issues(report),
+            report.get("item_count", 0),
+            len(repair_log),
+        )
         raise StudyPlanError(draft.error_message)
 
     draft.llm_credential_id = credential.id
@@ -299,6 +428,19 @@ async def generate_goal_plan_draft(
     draft.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(draft)
+    stage_count, item_count = _draft_plan_counts(plan_json)
+    logger.info(
+        "goal plan draft generation completed "
+        "draft_id=%s user_id=%s credential_id=%s model=%s stage_count=%s "
+        "item_count=%s repair_log_count=%s",
+        draft.id,
+        user.id,
+        credential.id,
+        credential.model_name,
+        stage_count,
+        item_count,
+        len(repair_log),
+    )
     return _plan_draft_response_from_goal_draft(draft)
 
 
@@ -313,7 +455,18 @@ async def pause_other_active_plans(
     )
     if keep_plan_id is not None:
         query = query.where(StudyPlan.id != keep_plan_id)
-    await db.execute(query.values(status="paused", updated_at=datetime.now(UTC)))
+    result = await db.execute(
+        query.values(status="paused", updated_at=datetime.now(UTC))
+    )
+    paused_count = getattr(result, "rowcount", 0)
+    if paused_count:
+        logger.info(
+            "study plan paused other active plans user_id=%s keep_plan_id=%s "
+            "paused_count=%s",
+            user.id,
+            keep_plan_id,
+            paused_count,
+        )
 
 
 async def get_active_plan_version(
@@ -344,6 +497,14 @@ async def get_active_plan_version(
         raise StudyPlanError("active_study_plan_version_inconsistent")
     repaired = await _set_only_active_version(db, version)
     if repaired and commit_repair:
+        logger.warning(
+            "study plan active version invariant repaired user_id=%s plan_id=%s "
+            "version_id=%s version_number=%s",
+            user.id,
+            plan.id,
+            version.id,
+            version.version_number,
+        )
         await db.commit()
         await db.refresh(
             version,
@@ -409,6 +570,8 @@ async def _normalized_stage_payloads(
     db: AsyncSession,
     draft_plan_json: dict[str, Any],
 ) -> list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]]:
+    # Re-resolve every slug at write time so persisted plan items always point
+    # at local Problem rows, even if a caller passes a stale validated draft.
     seen_problem_ids: set[int] = set()
     normalized: list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]] = []
     for stage_payload in _list_of_dicts(draft_plan_json.get("stages", [])):
@@ -432,10 +595,12 @@ async def _write_version_content(
     draft_plan_json: dict[str, Any],
 ) -> None:
     normalized_stages = await _normalized_stage_payloads(db, draft_plan_json)
+    item_count = 0
     for stage_index, (stage_payload, item_payloads) in enumerate(
         normalized_stages,
         start=1,
     ):
+        item_count += len(item_payloads)
         stage = StudyPlanStage(
             version_id=version.id,
             stage_index=stage_index,
@@ -476,6 +641,12 @@ async def _write_version_content(
                     updated_at=datetime.now(UTC),
                 )
             )
+    logger.info(
+        "study plan version content written version_id=%s stage_count=%s item_count=%s",
+        version.id,
+        len(normalized_stages),
+        item_count,
+    )
 
 
 async def confirm_plan_draft(
@@ -483,6 +654,9 @@ async def confirm_plan_draft(
     user: AppUser,
     draft_id: int,
 ) -> StudyPlan:
+    logger.info(
+        "study plan confirmation started user_id=%s draft_id=%s", user.id, draft_id
+    )
     try:
         result = await db.execute(
             select(GoalCalibrationDraft).where(
@@ -493,9 +667,16 @@ async def confirm_plan_draft(
         )
         draft = result.scalar_one_or_none()
         if draft is None:
+            logger.warning(
+                "study plan confirmation rejected user_id=%s draft_id=%s "
+                "reason=plan_draft_not_ready",
+                user.id,
+                draft_id,
+            )
             raise StudyPlanError("plan_draft_not_ready")
 
         await pause_other_active_plans(db, user)
+        stage_count, item_count = _draft_plan_counts(draft.draft_plan_json)
         now = datetime.now(UTC)
         plan = StudyPlan(
             user_id=user.id,
@@ -532,9 +713,27 @@ async def confirm_plan_draft(
         draft.updated_at = now
         await db.commit()
         await db.refresh(plan)
+        logger.info(
+            "study plan confirmation completed user_id=%s draft_id=%s plan_id=%s "
+            "version_id=%s stage_count=%s item_count=%s",
+            user.id,
+            draft.id,
+            plan.id,
+            version.id,
+            stage_count,
+            item_count,
+        )
         return plan
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan confirmation crashed user_id=%s draft_id=%s",
+            user.id,
+            draft_id,
+        )
         raise
 
 
@@ -588,6 +787,8 @@ def _merged_adjustment_draft(
     old_version: StudyPlanVersion,
     draft_plan_json: dict[str, Any],
 ) -> dict[str, Any]:
+    # Preserve locked/progress items that the LLM did not include, so an
+    # adjustment cannot silently drop work the user has already acted on.
     preserved = _preserved_items(old_version)
     draft_slugs = _draft_problem_slugs(draft_plan_json)
     preserved_stages: list[dict[str, Any]] = []
@@ -595,15 +796,13 @@ def _merged_adjustment_draft(
         preserved_items = [
             item
             for item in _sort_items(stage.items)
-            if item.problem_slug in preserved
-            and item.problem_slug not in draft_slugs
+            if item.problem_slug in preserved and item.problem_slug not in draft_slugs
         ]
         if preserved_items:
             preserved_stages.append(_stage_payload_from_items(stage, preserved_items))
     return {
         **draft_plan_json,
-        "stages": preserved_stages
-        + _list_of_dicts(draft_plan_json.get("stages", [])),
+        "stages": preserved_stages + _list_of_dicts(draft_plan_json.get("stages", [])),
     }
 
 
@@ -722,6 +921,11 @@ async def clone_adjusted_version(
     validation_report_json: dict[str, Any],
     repair_log_json: list[dict[str, Any]],
 ) -> StudyPlanVersion:
+    logger.info(
+        "study plan adjusted version clone started user_id=%s plan_id=%s",
+        user.id,
+        plan_id,
+    )
     try:
         plan = await _load_plan(db, user, plan_id)
         old_version = await get_active_plan_version(
@@ -749,6 +953,7 @@ async def clone_adjusted_version(
         await db.flush()
         preserved_by_slug = _preserved_items(old_version)
         merged_draft = _merged_adjustment_draft(old_version, draft_plan_json)
+        stage_count, item_count = _draft_plan_counts(merged_draft)
         await _write_version_content(db, new_version, merged_draft)
         await db.flush()
         await db.refresh(
@@ -767,9 +972,30 @@ async def clone_adjusted_version(
         plan.active_version_number = new_version.version_number
         plan.updated_at = now
         await db.commit()
+        logger.info(
+            "study plan adjusted version clone completed user_id=%s plan_id=%s "
+            "old_version_id=%s new_version_id=%s version_number=%s "
+            "stage_count=%s item_count=%s preserved_count=%s",
+            user.id,
+            plan.id,
+            old_version.id,
+            new_version.id,
+            new_version.version_number,
+            stage_count,
+            item_count,
+            len(preserved_by_slug),
+        )
         return await get_active_plan_version(db, user, plan.id)
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan adjusted version clone crashed user_id=%s plan_id=%s",
+            user.id,
+            plan_id,
+        )
         raise
 
 
@@ -820,6 +1046,12 @@ async def create_adjustment_draft(
     plan_id: int,
     payload: PlanAdjustmentRequest,
 ) -> dict[str, Any]:
+    logger.info(
+        "study plan adjustment draft requested user_id=%s plan_id=%s reason=%s",
+        user.id,
+        plan_id,
+        payload.reason,
+    )
     try:
         plan = await _load_plan(db, user, plan_id)
         old_version = await get_active_plan_version(
@@ -828,8 +1060,18 @@ async def create_adjustment_draft(
             plan_id,
             commit_repair=False,
         )
-        client, _credential = await _client_for_user_or_error(db, user)
+        client, credential = await _client_for_user_or_error(db, user)
         preserved_by_slug = _preserved_items(old_version)
+        logger.info(
+            "study plan adjustment draft generation started user_id=%s plan_id=%s "
+            "active_version_id=%s preserved_count=%s credential_id=%s model=%s",
+            user.id,
+            plan.id,
+            old_version.id,
+            len(preserved_by_slug),
+            credential.id,
+            credential.model_name,
+        )
         plan_json, report, repair_log = await generate_plan_with_repair(
             db,
             client,
@@ -838,6 +1080,15 @@ async def create_adjustment_draft(
             locked_problem_slugs=set(preserved_by_slug),
         )
         if not report.get("valid"):
+            logger.warning(
+                "study plan adjustment draft generation failed validation "
+                "user_id=%s plan_id=%s active_version_id=%s issues=%s item_count=%s",
+                user.id,
+                plan.id,
+                old_version.id,
+                _format_report_issues(report),
+                report.get("item_count", 0),
+            )
             raise StudyPlanError(str((report.get("issues") or ["invalid_plan"])[0]))
 
         now = datetime.now(UTC)
@@ -857,6 +1108,7 @@ async def create_adjustment_draft(
         db.add(new_version)
         await db.flush()
         merged_draft = _merged_adjustment_draft(old_version, plan_json)
+        stage_count, item_count = _draft_plan_counts(merged_draft)
         await _write_version_content(db, new_version, merged_draft)
         await db.flush()
         await db.refresh(
@@ -874,9 +1126,31 @@ async def create_adjustment_draft(
         )
         plan.updated_at = now
         await db.commit()
+        logger.info(
+            "study plan adjustment draft completed user_id=%s plan_id=%s "
+            "draft_version_id=%s version_number=%s stage_count=%s item_count=%s "
+            "preserved_count=%s repair_log_count=%s",
+            user.id,
+            plan.id,
+            new_version.id,
+            new_version.version_number,
+            stage_count,
+            item_count,
+            len(preserved_by_slug),
+            len(repair_log),
+        )
         return _plan_draft_response_from_version(new_version)
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan adjustment draft crashed user_id=%s plan_id=%s reason=%s",
+            user.id,
+            plan_id,
+            payload.reason,
+        )
         raise
 
 
@@ -886,6 +1160,12 @@ async def activate_plan_version(
     plan_id: int,
     version_id: int,
 ) -> StudyPlanVersion:
+    logger.info(
+        "study plan version activation requested user_id=%s plan_id=%s version_id=%s",
+        user.id,
+        plan_id,
+        version_id,
+    )
     try:
         plan = await _load_plan(db, user, plan_id)
         result = await db.execute(
@@ -896,8 +1176,23 @@ async def activate_plan_version(
         )
         version = result.scalar_one_or_none()
         if version is None:
+            logger.warning(
+                "study plan version activation rejected user_id=%s plan_id=%s "
+                "version_id=%s reason=study_plan_version_not_found",
+                user.id,
+                plan.id,
+                version_id,
+            )
             raise StudyPlanError("study_plan_version_not_found")
         if version.status not in {"draft", "active"}:
+            logger.warning(
+                "study plan version activation rejected user_id=%s plan_id=%s "
+                "version_id=%s status=%s reason=study_plan_version_cannot_be_activated",
+                user.id,
+                plan.id,
+                version.id,
+                version.status,
+            )
             raise StudyPlanError("study_plan_version_cannot_be_activated")
 
         await pause_other_active_plans(db, user, keep_plan_id=plan.id)
@@ -909,9 +1204,26 @@ async def activate_plan_version(
         plan.updated_at = now
         await db.commit()
         await db.refresh(version)
+        logger.info(
+            "study plan version activation completed user_id=%s plan_id=%s "
+            "version_id=%s version_number=%s",
+            user.id,
+            plan.id,
+            version.id,
+            version.version_number,
+        )
         return version
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan version activation crashed user_id=%s plan_id=%s version_id=%s",
+            user.id,
+            plan_id,
+            version_id,
+        )
         raise
 
 
@@ -920,9 +1232,19 @@ async def activate_plan(
     user: AppUser,
     plan_id: int,
 ) -> StudyPlan:
+    logger.info(
+        "study plan activation requested user_id=%s plan_id=%s", user.id, plan_id
+    )
     try:
         plan = await _load_plan(db, user, plan_id)
         if plan.status not in {"active", "paused", "completed"}:
+            logger.warning(
+                "study plan activation rejected user_id=%s plan_id=%s status=%s "
+                "reason=study_plan_cannot_be_activated",
+                user.id,
+                plan.id,
+                plan.status,
+            )
             raise StudyPlanError("study_plan_cannot_be_activated")
         await pause_other_active_plans(db, user, keep_plan_id=plan.id)
         result = await db.execute(
@@ -940,9 +1262,24 @@ async def activate_plan(
         plan.updated_at = datetime.now(UTC)
         await db.commit()
         await db.refresh(plan)
+        logger.info(
+            "study plan activation completed user_id=%s plan_id=%s "
+            "active_version_number=%s",
+            user.id,
+            plan.id,
+            plan.active_version_number,
+        )
         return plan
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan activation crashed user_id=%s plan_id=%s",
+            user.id,
+            plan_id,
+        )
         raise
 
 
@@ -987,6 +1324,13 @@ async def get_active_study_plan(db: AsyncSession, user: AppUser) -> StudyPlan:
             plan.updated_at = now
         await db.commit()
         await db.refresh(selected_plan)
+        logger.warning(
+            "study plan active invariant repaired user_id=%s selected_plan_id=%s "
+            "paused_count=%s",
+            user.id,
+            selected_plan.id,
+            len(active_plans) - 1,
+        )
     return selected_plan
 
 
@@ -1099,7 +1443,20 @@ async def update_plan_item_status(
     status: str,
 ) -> int:
     if status not in {"pending", "skipped"}:
+        logger.warning(
+            "study plan item status update rejected user_id=%s item_id=%s "
+            "status=%s reason=invalid_plan_item_status",
+            user.id,
+            item_id,
+            status,
+        )
         raise StudyPlanError("invalid_plan_item_status")
+    logger.info(
+        "study plan item status update requested user_id=%s item_id=%s status=%s",
+        user.id,
+        item_id,
+        status,
+    )
     try:
         result = await db.execute(
             select(StudyPlanItem, StudyPlan)
@@ -1115,17 +1472,48 @@ async def update_plan_item_status(
         )
         row = result.one_or_none()
         if row is None:
+            logger.warning(
+                "study plan item status update rejected user_id=%s item_id=%s "
+                "status=%s reason=active_plan_item_not_found",
+                user.id,
+                item_id,
+                status,
+            )
             raise StudyPlanError("active_plan_item_not_found")
         item, plan = row
         if item.locked:
+            logger.warning(
+                "study plan item status update rejected user_id=%s plan_id=%s "
+                "item_id=%s reason=locked_plan_item_cannot_be_updated",
+                user.id,
+                plan.id,
+                item.id,
+            )
             raise StudyPlanError("locked_plan_item_cannot_be_updated")
         item.status = status
         item.updated_at = datetime.now(UTC)
         plan.updated_at = datetime.now(UTC)
         await db.commit()
+        logger.info(
+            "study plan item status update completed user_id=%s plan_id=%s "
+            "item_id=%s status=%s",
+            user.id,
+            plan.id,
+            item.id,
+            status,
+        )
         return plan.id
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan item status update crashed user_id=%s item_id=%s status=%s",
+            user.id,
+            item_id,
+            status,
+        )
         raise
 
 
@@ -1135,6 +1523,12 @@ async def reorder_stage_items(
     stage_id: int,
     item_ids: list[int],
 ) -> int:
+    logger.info(
+        "study plan stage reorder requested user_id=%s stage_id=%s item_count=%s",
+        user.id,
+        stage_id,
+        len(item_ids),
+    )
     try:
         result = await db.execute(
             select(StudyPlanStage, StudyPlan)
@@ -1151,10 +1545,26 @@ async def reorder_stage_items(
         )
         row = result.one_or_none()
         if row is None:
+            logger.warning(
+                "study plan stage reorder rejected user_id=%s stage_id=%s "
+                "reason=active_plan_stage_not_found",
+                user.id,
+                stage_id,
+            )
             raise StudyPlanError("active_plan_stage_not_found")
         stage, plan = row
         current_ids = {item.id for item in stage.items}
         if set(item_ids) != current_ids or len(item_ids) != len(current_ids):
+            logger.warning(
+                "study plan stage reorder rejected user_id=%s plan_id=%s "
+                "stage_id=%s requested_count=%s actual_count=%s "
+                "reason=stage_item_set_mismatch",
+                user.id,
+                plan.id,
+                stage.id,
+                len(item_ids),
+                len(current_ids),
+            )
             raise StudyPlanError("stage_item_set_mismatch")
         items_by_id = {item.id: item for item in stage.items}
         now = datetime.now(UTC)
@@ -1167,9 +1577,26 @@ async def reorder_stage_items(
             item.updated_at = now
         plan.updated_at = now
         await db.commit()
+        logger.info(
+            "study plan stage reorder completed user_id=%s plan_id=%s "
+            "stage_id=%s item_count=%s",
+            user.id,
+            plan.id,
+            stage.id,
+            len(item_ids),
+        )
         return plan.id
+    except StudyPlanError:
+        await db.rollback()
+        raise
     except Exception:
         await db.rollback()
+        logger.exception(
+            "study plan stage reorder crashed user_id=%s stage_id=%s item_count=%s",
+            user.id,
+            stage_id,
+            len(item_ids),
+        )
         raise
 
 

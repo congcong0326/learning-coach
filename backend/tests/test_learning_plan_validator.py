@@ -23,13 +23,19 @@ async def validator_session_factory():
     await engine.dispose()
 
 
-def problem(slug: str, *, paid: bool = False, tag: str = "array") -> Problem:
+def problem(
+    slug: str,
+    *,
+    paid: bool = False,
+    tag: str = "array",
+    translated_title: str | None = None,
+) -> Problem:
     now = datetime.now(UTC)
     return Problem(
         frontend_id=slug,
         slug=slug,
         title=slug.replace("-", " ").title(),
-        translated_title=slug,
+        translated_title=translated_title or slug,
         difficulty="Easy",
         statement_md="# statement",
         metadata_json={
@@ -84,6 +90,36 @@ async def test_validator_replaces_missing_problem_with_same_tag_candidate(
 
 
 @pytest.mark.asyncio
+async def test_validator_uses_translated_problem_title_for_draft_items(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum", translated_title="两数之和"))
+        await session.commit()
+
+        repaired, report, _repair_log = await validate_and_repair_plan_draft(
+            session,
+            {
+                "stages": [
+                    {
+                        "title": "基础",
+                        "items": [
+                            {
+                                "problem_slug": "missing-problem",
+                                "skill_tags": ["array"],
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        assert report["valid"] is True
+        assert repaired["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert repaired["stages"][0]["items"][0]["title"] == "两数之和"
+
+
+@pytest.mark.asyncio
 async def test_validator_reports_empty_problem_library(
     validator_session_factory,
 ) -> None:
@@ -97,6 +133,71 @@ async def test_validator_reports_empty_problem_library(
         assert report["valid"] is False
         assert ValidationIssue.EMPTY_PROBLEM_LIBRARY.value in report["issues"]
         assert repair_log == []
+
+
+@pytest.mark.asyncio
+async def test_validator_fills_empty_stage_items_from_local_problem(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        draft = {
+            "title": "面试冲刺计划",
+            "generation_summary_md": "按目标生成计划",
+            "stages": [
+                {
+                    "title": "数组基础",
+                    "objective_md": "补齐数组基础。",
+                    "focus_tags": ["array"],
+                    "assessment_criteria": ["能讲清哈希表"],
+                    "items": [],
+                }
+            ],
+        }
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            draft,
+        )
+
+        assert report["valid"] is True
+        assert report["issues"] == []
+        assert report["item_count"] == 1
+        assert repaired["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert repair_log == [
+            {
+                "reason": ValidationIssue.EMPTY_STAGE_ITEMS.value,
+                "original_problem_slug": "",
+                "replacement_problem_slug": "two-sum",
+            }
+        ]
+
+
+@pytest.mark.asyncio
+async def test_validator_creates_fallback_stage_when_plan_has_no_stages(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            {
+                "title": "面试冲刺计划",
+                "generation_summary_md": "按目标生成计划",
+                "stages": [],
+            },
+        )
+
+        assert report["valid"] is True
+        assert report["issues"] == []
+        assert report["item_count"] == 1
+        assert repaired["stages"][0]["title"] == "当前阶段"
+        assert repaired["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert repair_log[0]["reason"] == ValidationIssue.EMPTY_PLAN_STAGES.value
 
 
 @pytest.mark.asyncio
@@ -290,7 +391,7 @@ async def test_validator_normalizes_malformed_skill_tags(
 
 
 @pytest.mark.asyncio
-async def test_validator_ignores_null_stages_and_items(
+async def test_validator_fills_null_stage_items(
     validator_session_factory,
 ) -> None:
     async with validator_session_factory() as session:
@@ -302,7 +403,8 @@ async def test_validator_ignores_null_stages_and_items(
             {"stages": [None, {"title": "基础", "items": None}]},
         )
 
-        assert repaired["stages"] == [{"title": "基础", "items": []}]
-        assert report["valid"] is False
-        assert report["item_count"] == 0
-        assert repair_log == []
+        assert repaired["stages"][0]["title"] == "基础"
+        assert repaired["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert report["valid"] is True
+        assert report["item_count"] == 1
+        assert repair_log[0]["reason"] == ValidationIssue.EMPTY_STAGE_ITEMS.value

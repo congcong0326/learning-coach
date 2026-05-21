@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import case, select, update
@@ -14,7 +15,10 @@ from backend.app.schemas.llm_credential import (
 from backend.app.services.credential_crypto import encrypt_api_key, mask_api_key
 
 
+# After this many consecutive failures the sticky router stops using an active
+# credential and lets the next selection pick another enabled asset.
 LLM_CREDENTIAL_FAILURE_THRESHOLD = 3
+logger = logging.getLogger(__name__)
 
 
 class LlmCredentialError(RuntimeError):
@@ -90,6 +94,7 @@ async def select_llm_credential_for_user(
     db: AsyncSession,
     user: AppUser,
 ) -> LlmCredential:
+    selection_source = "active"
     active_result = await db.execute(
         select(LlmCredential)
         .where(
@@ -103,6 +108,7 @@ async def select_llm_credential_for_user(
     selected = active_result.scalars().first()
 
     if selected is None:
+        selection_source = "preferred"
         preferred_result = await db.execute(
             select(LlmCredential)
             .where(
@@ -116,6 +122,7 @@ async def select_llm_credential_for_user(
         selected = preferred_result.scalars().first()
 
     if selected is None:
+        selection_source = "fallback"
         fallback_result = await db.execute(
             select(LlmCredential)
             .where(
@@ -133,6 +140,9 @@ async def select_llm_credential_for_user(
         selected = fallback_result.scalars().first()
 
     if selected is None:
+        logger.warning(
+            "llm credential selection failed user_id=%s reason=unavailable", user.id
+        )
         raise LlmCredentialError("llm_credential_unavailable")
 
     await _clear_active(db, user)
@@ -140,6 +150,16 @@ async def select_llm_credential_for_user(
     selected.last_used_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(selected)
+    logger.info(
+        "llm credential selected user_id=%s credential_id=%s source=%s "
+        "provider=%s model=%s failure_count=%s",
+        user.id,
+        selected.id,
+        selection_source,
+        selected.provider,
+        selected.model_name,
+        selected.failure_count,
+    )
     return selected
 
 
@@ -155,6 +175,11 @@ async def record_llm_credential_success(
     credential.updated_at = now
     await db.commit()
     await db.refresh(credential)
+    logger.info(
+        "llm credential success recorded credential_id=%s user_id=%s",
+        credential.id,
+        credential.user_id,
+    )
     return credential
 
 
@@ -185,6 +210,15 @@ async def record_llm_credential_failure(
     )
     await db.commit()
     await db.refresh(credential)
+    logger.warning(
+        "llm credential failure recorded credential_id=%s user_id=%s "
+        "failure_count=%s threshold=%s is_active=%s",
+        credential.id,
+        credential.user_id,
+        credential.failure_count,
+        LLM_CREDENTIAL_FAILURE_THRESHOLD,
+        credential.is_active,
+    )
     return credential
 
 
@@ -232,6 +266,16 @@ async def create_credential(
     db.add(credential)
     await db.commit()
     await db.refresh(credential)
+    logger.info(
+        "llm credential created user_id=%s credential_id=%s provider=%s model=%s "
+        "is_preferred=%s is_enabled=%s",
+        user.id,
+        credential.id,
+        credential.provider,
+        credential.model_name,
+        credential.is_preferred,
+        credential.is_enabled,
+    )
     return credential
 
 
@@ -272,6 +316,15 @@ async def update_credential(
     credential.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(credential)
+    logger.info(
+        "llm credential updated user_id=%s credential_id=%s is_enabled=%s "
+        "is_preferred=%s status=%s",
+        user.id,
+        credential.id,
+        credential.is_enabled,
+        credential.is_preferred,
+        credential.status,
+    )
     return credential
 
 
@@ -301,6 +354,12 @@ async def set_preferred_credential(
     credential.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(credential)
+    logger.info(
+        "llm credential preferred user_id=%s credential_id=%s is_active=%s",
+        user.id,
+        credential.id,
+        credential.is_active,
+    )
     return credential
 
 
@@ -312,6 +371,9 @@ async def delete_credential(
     credential = await get_credential(db, user, credential_id)
     await db.delete(credential)
     await db.commit()
+    logger.info(
+        "llm credential deleted user_id=%s credential_id=%s", user.id, credential_id
+    )
 
 
 async def update_test_status(
@@ -327,4 +389,10 @@ async def update_test_status(
     credential.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(credential)
+    logger.info(
+        "llm credential test status updated credential_id=%s user_id=%s status=%s",
+        credential.id,
+        credential.user_id,
+        credential.status,
+    )
     return credential
