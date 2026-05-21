@@ -189,7 +189,7 @@ async def create_draft_run(
 
 
 @pytest.mark.asyncio
-async def test_goal_plan_generate_flow_updates_draft_and_emits_result(
+async def test_goal_plan_generate_flow_updates_draft_without_final_result_event(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
