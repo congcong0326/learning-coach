@@ -111,3 +111,42 @@ async def test_cancel_terminal_run_is_rejected(
 
         with pytest.raises(LlmRunError, match="run_status_conflict"):
             await cancel_llm_run(session, user, run.id)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_cannot_be_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        run = await create_llm_run(session, user, kind="goal_plan_generate")
+
+        await cancel_llm_run(session, user, run.id)
+
+        with pytest.raises(LlmRunError, match="run_status_conflict"):
+            await succeed_llm_run(
+                session,
+                run,
+                result={"draft_id": 12},
+                display_text_md="计划生成完成",
+            )
+
+        fetched = await get_llm_run_for_user(session, user, run.id)
+        assert fetched.status == "canceled"
+        assert fetched.stage == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_other_user_cannot_fetch_or_cancel_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        owner = await create_user(session)
+        other_user = await create_user(session)
+        run = await create_llm_run(session, owner, kind="goal_plan_generate")
+
+        with pytest.raises(LlmRunError, match="run_not_found"):
+            await get_llm_run_for_user(session, other_user, run.id)
+
+        with pytest.raises(LlmRunError, match="run_not_found"):
+            await cancel_llm_run(session, other_user, run.id)

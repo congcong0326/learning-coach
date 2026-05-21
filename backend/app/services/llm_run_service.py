@@ -21,6 +21,11 @@ class LlmRunError(Exception):
         self.detail = detail
 
 
+def _ensure_mutable_run(run: LlmRun) -> None:
+    if run.status in TERMINAL_STATUSES or run.cancel_requested:
+        raise LlmRunError("run_status_conflict")
+
+
 async def create_llm_run(
     session: AsyncSession,
     user: AppUser,
@@ -73,8 +78,7 @@ async def mark_llm_run_running(
     llm_credential_id: int | None = None,
     model_name: str = "",
 ) -> LlmRun:
-    if run.status in TERMINAL_STATUSES:
-        raise LlmRunError("run_status_conflict")
+    _ensure_mutable_run(run)
     now = datetime.now(UTC)
     run.status = "running"
     run.stage = stage
@@ -97,8 +101,7 @@ async def update_llm_run_stage(
     stage: str,
     display_text_md: str | None = None,
 ) -> LlmRun:
-    if run.status in TERMINAL_STATUSES:
-        raise LlmRunError("run_status_conflict")
+    _ensure_mutable_run(run)
     run.stage = stage
     run.updated_at = datetime.now(UTC)
     if display_text_md is not None:
@@ -131,6 +134,8 @@ async def succeed_llm_run(
     result: dict[str, Any],
     display_text_md: str,
 ) -> LlmRun:
+    await session.refresh(run)
+    _ensure_mutable_run(run)
     run.status = "succeeded"
     run.stage = "completed"
     run.result_json = result
@@ -150,6 +155,8 @@ async def fail_llm_run(
     error_code: str,
     error_message: str,
 ) -> LlmRun:
+    await session.refresh(run)
+    _ensure_mutable_run(run)
     run.status = "failed"
     run.stage = "failed"
     run.error_code = error_code
