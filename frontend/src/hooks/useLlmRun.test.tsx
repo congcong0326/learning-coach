@@ -51,6 +51,14 @@ function okJson(payload: unknown) {
   })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve
+  })
+  return { promise, resolve }
+}
+
 describe('useLlmRun', () => {
   beforeEach(() => {
     FakeEventSource.instances = []
@@ -262,5 +270,115 @@ describe('useLlmRun', () => {
       '/api/llm-runs/77',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  it('ignores stale create responses and stale stream events', async () => {
+    const first = deferred<Response>()
+    const second = deferred<Response>()
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    let firstStart!: Promise<unknown>
+    let secondStart!: Promise<unknown>
+    act(() => {
+      firstStart = result.current.startRun('coach_message', { message: 'first' })
+    })
+    act(() => {
+      secondStart = result.current.startRun('coach_message', { message: 'second' })
+    })
+
+    second.resolve(
+      okJson({
+        run_id: 202,
+        kind: 'coach_message',
+        status: 'pending',
+        stage: 'queued',
+        stream_url: '/api/llm-runs/202/stream',
+      }),
+    )
+    await act(async () => {
+      await secondStart
+    })
+
+    expect(result.current.runId).toBe(202)
+    expect(FakeEventSource.instances).toHaveLength(1)
+
+    first.resolve(
+      okJson({
+        run_id: 201,
+        kind: 'coach_message',
+        status: 'pending',
+        stage: 'queued',
+        stream_url: '/api/llm-runs/201/stream',
+      }),
+    )
+    await act(async () => {
+      await firstStart
+    })
+
+    expect(result.current.runId).toBe(202)
+    expect(FakeEventSource.instances).toHaveLength(1)
+
+    act(() => {
+      FakeEventSource.instances[0].emit('delta', {
+        run_id: 201,
+        text: '旧输出',
+      })
+      FakeEventSource.instances[0].emit('delta', {
+        run_id: 202,
+        text: '新输出',
+      })
+    })
+
+    expect(result.current.displayText).toBe('新输出')
+  })
+
+  it('cancels a run that resolves after cancel was requested', async () => {
+    const create = deferred<Response>()
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(create.promise)
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 303,
+          status: 'canceled',
+          cancel_requested: true,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useLlmRun())
+
+    let start!: Promise<unknown>
+    act(() => {
+      start = result.current.startRun('coach_message', { message: 'cancel soon' })
+    })
+    await act(async () => {
+      await result.current.cancelRun()
+    })
+    create.resolve(
+      okJson({
+        run_id: 303,
+        kind: 'coach_message',
+        status: 'pending',
+        stage: 'queued',
+        stream_url: '/api/llm-runs/303/stream',
+      }),
+    )
+    await act(async () => {
+      await start
+    })
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/llm-runs/303/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(result.current.status).toBe('canceled')
+    expect(FakeEventSource.instances).toHaveLength(0)
   })
 })
