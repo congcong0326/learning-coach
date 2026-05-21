@@ -230,6 +230,59 @@ async def create_followup_run(session: AsyncSession, user: AppUser) -> LlmRun:
     return run
 
 
+async def create_followup_answer_run(
+    session: AsyncSession,
+    user: AppUser,
+) -> tuple[GoalCalibrationDraft, LlmRun]:
+    now = datetime.now(UTC)
+    draft = GoalCalibrationDraft(
+        user_id=user.id,
+        input_json={
+            "goal_type": "interview_sprint",
+            "target_timeline": "within_1_month",
+            "weekly_days": 5,
+            "session_minutes": 60,
+            "current_level": "easy_started",
+            "preferred_language": "python3",
+            "self_reported_weaknesses": ["interview_expression"],
+            "extra_notes": "想准备后端面试",
+            "training_preference": "guided",
+        },
+        followup_messages_json=[
+            {
+                "role": "assistant",
+                "question_id": "q1",
+                "question": "你的面试时间是？",
+            }
+        ],
+        draft_goal_json={},
+        draft_plan_json={},
+        validation_report_json={},
+        repair_log_json=[],
+        status="asking_followup",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(draft)
+    await session.flush()
+    run = LlmRun(
+        user_id=user.id,
+        kind="goal_followup",
+        related_type="goal_calibration_draft",
+        related_id=draft.id,
+        input_json={
+            "draft_id": draft.id,
+            "question_id": "q1",
+            "answer": "三周后面试，主要是后端岗位。",
+        },
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(draft)
+    await session.refresh(run)
+    return draft, run
+
+
 @pytest.mark.asyncio
 async def test_goal_followup_flow_creates_draft_from_payload(
     session_factory: async_sessionmaker[AsyncSession],
@@ -286,6 +339,61 @@ async def test_goal_followup_flow_creates_draft_from_payload(
         assert run.status == "pending"
         assert run.related_type == "goal_calibration_draft"
         assert run.related_id == draft.id
+        assert run.result_json == {}
+        assert run.display_text_md == "我需要再确认一个问题。"
+        assert [event.name for event in events] == ["progress", "delta"]
+        assert all(event.name != "result" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_goal_followup_flow_answers_existing_draft_through_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        draft, run = await create_followup_answer_run(session, user)
+        provider = FakeFollowupProvider("null")
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        result = await run_goal_followup(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        await session.refresh(draft)
+        assert draft.status == "collecting_input"
+        assert draft.followup_messages_json == [
+            {
+                "role": "assistant",
+                "question_id": "q1",
+                "question": "你的面试时间是？",
+            },
+            {
+                "role": "user",
+                "question_id": "q1",
+                "answer": "三周后面试，主要是后端岗位。",
+            },
+        ]
+        assert result == {
+            "draft_id": draft.id,
+            "status": "collecting_input",
+            "followup_question": None,
+            "followup_question_id": None,
+            "remaining_followups": 0,
+        }
+        assert json.loads(provider.calls[0]["input_text"]) == {
+            "payload": draft.input_json,
+            "history": draft.followup_messages_json,
+        }
+        await session.refresh(run)
+        assert run.status == "pending"
         assert run.result_json == {}
         assert run.display_text_md == "我需要再确认一个问题。"
         assert [event.name for event in events] == ["progress", "delta"]

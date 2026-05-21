@@ -40,6 +40,8 @@ ERROR_MESSAGES = {
     "credential_encryption_key_missing": "模型资产加密配置缺失",
     "credential_encryption_key_invalid": "模型资产加密配置无效",
     "llm_provider_error": "模型生成失败",
+    "goal_calibration_draft_not_editable": "目标校准草稿当前不可编辑",
+    "goal_followup_payload_invalid": "追问回答参数无效",
     "followup_json_invalid": "模型返回的追问格式无效",
     "plan_json_invalid": "模型返回的计划格式无效",
     "plan_validation_failed": "计划生成结果未通过题库校验",
