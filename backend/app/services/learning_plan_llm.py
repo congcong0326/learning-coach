@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import settings
 from backend.app.models.auth import AppUser, LlmCredential
 from backend.app.services.credential_crypto import decrypt_api_key
-from backend.app.services.learning_flows.goal_plan import PROMPT_VERSION
+from backend.app.services.learning_flows.goal_plan import PROMPT_VERSION as PROMPT_VERSION
 from backend.app.services.learning_plan_validator import validate_and_repair_plan_draft
 from backend.app.services.llm_credential_service import select_llm_credential_for_user
 
