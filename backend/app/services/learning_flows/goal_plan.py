@@ -14,6 +14,11 @@ from backend.app.models.llm_run import LlmRun
 from backend.app.services.learning_plan_validator import validate_and_repair_plan_draft
 from backend.app.services.llm_providers.base import LlmProvider
 from backend.app.services.llm_run_events import LlmRunEvent
+from backend.app.services.llm_run_service import (
+    LlmRunError,
+    ensure_llm_run_mutable,
+    update_llm_run_display_text,
+)
 
 
 PROMPT_VERSION = "goal-plan-v3-streaming"
@@ -120,6 +125,7 @@ async def run_goal_plan_generate(
     publish: Callable[[LlmRunEvent], Awaitable[None]],
 ) -> dict[str, Any]:
     draft = await _draft_for_run(session, user_id=user_id, run=run)
+    await _ensure_run_mutable(session, run)
     logger.info(
         "goal plan flow started run_id=%s user_id=%s draft_id=%s model=%s",
         run.id,
@@ -151,10 +157,10 @@ async def run_goal_plan_generate(
         ):
             if chunk.text_delta:
                 display_parts.append(chunk.text_delta)
-                run.display_text_md = "".join(display_parts)
                 await publish(
                     LlmRunEvent("delta", {"run_id": run.id, "text": chunk.text_delta})
                 )
+                await _update_display_text(session, run, "".join(display_parts))
             if chunk.final_text:
                 final_text = chunk.final_text
     except Exception as exc:
@@ -166,8 +172,9 @@ async def run_goal_plan_generate(
             draft.id,
             type(exc).__name__,
         )
-        raise LearningFlowError("llm_provider_error") from exc
+        raise LearningFlowError("llm_provider_error") from None
 
+    await _ensure_run_mutable(session, run)
     raw_plan = _parse_plan_json(final_text)
     raw_stage_count, raw_item_count = _count_plan_items(raw_plan)
     logger.info(
@@ -190,14 +197,13 @@ async def run_goal_plan_generate(
         session,
         raw_plan,
     )
+    await _ensure_run_mutable(session, run)
     if not report.get("valid"):
         draft.status = "failed"
         draft.validation_report_json = report
         draft.repair_log_json = repair_log
         draft.error_message = "plan_validation_failed"
         draft.updated_at = datetime.now(UTC)
-        run.display_text_md = "".join(display_parts)
-        run.updated_at = datetime.now(UTC)
         await session.commit()
         logger.warning(
             "goal plan flow validation failed run_id=%s user_id=%s draft_id=%s "
@@ -227,8 +233,6 @@ async def run_goal_plan_generate(
     draft.status = "ready_for_review"
     draft.error_message = ""
     draft.updated_at = datetime.now(UTC)
-    run.display_text_md = "".join(display_parts)
-    run.updated_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(draft)
     await publish(
@@ -248,3 +252,25 @@ async def run_goal_plan_generate(
         len(repair_log),
     )
     return result
+
+
+async def _ensure_run_mutable(session: AsyncSession, run: LlmRun) -> None:
+    try:
+        await ensure_llm_run_mutable(session, run)
+    except LlmRunError as exc:
+        raise LearningFlowError(exc.detail) from None
+
+
+async def _update_display_text(
+    session: AsyncSession,
+    run: LlmRun,
+    display_text_md: str,
+) -> None:
+    try:
+        await update_llm_run_display_text(
+            session,
+            run,
+            display_text_md=display_text_md,
+        )
+    except LlmRunError as exc:
+        raise LearningFlowError(exc.detail) from None

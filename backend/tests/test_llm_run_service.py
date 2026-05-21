@@ -19,6 +19,7 @@ from backend.app.services.llm_run_service import (
     get_llm_run_for_user,
     mark_llm_run_running,
     succeed_llm_run,
+    update_llm_run_display_text,
 )
 
 
@@ -231,3 +232,25 @@ async def test_stale_run_cannot_mark_running_after_cancel(
         assert refreshed_user is not None
         fetched = await get_llm_run_for_user(session_a, refreshed_user, run_id)
         assert fetched.status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_stale_run_cannot_update_display_text_after_cancel(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    session_a, user, run = await cancel_run_from_second_session(session_factory)
+    user_id = user.id
+    run_id = run.id
+    async with session_a:
+        with pytest.raises(LlmRunError, match="run_status_conflict"):
+            await update_llm_run_display_text(
+                session_a,
+                run,
+                display_text_md="计划生成中",
+            )
+
+        refreshed_user = await session_a.get(AppUser, user_id)
+        assert refreshed_user is not None
+        fetched = await get_llm_run_for_user(session_a, refreshed_user, run_id)
+        assert fetched.status == "canceled"
+        assert fetched.display_text_md == ""

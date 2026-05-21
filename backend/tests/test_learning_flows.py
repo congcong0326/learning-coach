@@ -21,6 +21,7 @@ from backend.app.services.learning_flows.goal_plan import (
 )
 from backend.app.services.llm_providers.base import ProviderChunk
 from backend.app.services.llm_run_events import LlmRunEvent
+from backend.app.services.llm_run_service import cancel_llm_run
 
 
 class FakePlanProvider:
@@ -75,6 +76,36 @@ class FailingProvider:
     ) -> AsyncGenerator[ProviderChunk, None]:
         raise RuntimeError("secret provider details")
         yield ProviderChunk(text_delta="unreachable")
+
+
+class CancelingProvider(FakePlanProvider):
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        user_id: int,
+        run_id: int,
+    ) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+        self.user_id = user_id
+        self.run_id = run_id
+
+    async def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncGenerator[ProviderChunk, None]:
+        yield ProviderChunk(text_delta="我会按三个阶段生成计划。")
+        async with self.session_factory() as session:
+            user = await session.get(AppUser, self.user_id)
+            assert user is not None
+            await cancel_llm_run(session, user, self.run_id)
+        yield ProviderChunk(
+            final_text=json.dumps(self.final_payload, ensure_ascii=False)
+        )
 
 
 @pytest_asyncio.fixture
@@ -304,9 +335,46 @@ async def test_goal_plan_generate_wraps_provider_failure_without_terminal_run(
             )
 
         assert exc_info.value.code == "llm_provider_error"
+        assert exc_info.value.__cause__ is None
         assert "secret provider details" not in caplog.text
         await session.refresh(run)
         assert run.status == "pending"
         assert run.error_code == ""
         assert run.result_json == {}
         assert [event.name for event in events] == ["progress"]
+
+
+@pytest.mark.asyncio
+async def test_goal_plan_generate_stops_when_run_is_canceled_mid_stream(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        draft, run = await create_draft_run(session, user)
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        with pytest.raises(LearningFlowError) as exc_info:
+            await run_goal_plan_generate(
+                session,
+                user_id=user.id,
+                run=run,
+                provider=CancelingProvider(
+                    session_factory=session_factory,
+                    user_id=user.id,
+                    run_id=run.id,
+                ),
+                model_name="gpt-test",
+                publish=publish,
+            )
+
+        assert exc_info.value.code == "run_status_conflict"
+        await session.refresh(draft)
+        assert draft.status == "collecting_input"
+        assert draft.draft_plan_json == {}
+        await session.refresh(run)
+        assert run.status == "canceled"
+        assert run.result_json == {}
+        assert [event.name for event in events] == ["progress", "delta"]

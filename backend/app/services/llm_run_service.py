@@ -35,7 +35,7 @@ async def _update_mutable_run(
         )
         .values(**values),
     )
-    if result.rowcount != 1:
+    if getattr(result, "rowcount", 0) != 1:
         await session.rollback()
         raise LlmRunError("run_status_conflict")
     await session.commit()
@@ -129,6 +129,36 @@ async def update_llm_run_stage(
     return run
 
 
+async def ensure_llm_run_mutable(session: AsyncSession, run: LlmRun) -> LlmRun:
+    await session.refresh(run)
+    if run.status in TERMINAL_STATUSES or run.cancel_requested:
+        raise LlmRunError("run_status_conflict")
+    return run
+
+
+async def update_llm_run_display_text(
+    session: AsyncSession,
+    run: LlmRun,
+    *,
+    display_text_md: str,
+) -> LlmRun:
+    await _update_mutable_run(
+        session,
+        run,
+        {
+            "display_text_md": display_text_md,
+            "updated_at": datetime.now(UTC),
+        },
+    )
+    logger.info(
+        "llm run display updated user_id=%s run_id=%s text_length=%s",
+        run.user_id,
+        run.id,
+        len(display_text_md),
+    )
+    return run
+
+
 async def cancel_llm_run(session: AsyncSession, user: AppUser, run_id: int) -> LlmRun:
     run = await get_llm_run_for_user(session, user, run_id)
     now = datetime.now(UTC)
@@ -148,7 +178,7 @@ async def cancel_llm_run(session: AsyncSession, user: AppUser, run_id: int) -> L
             updated_at=now,
         ),
     )
-    if result.rowcount != 1:
+    if getattr(result, "rowcount", 0) != 1:
         await session.rollback()
         raise LlmRunError("run_status_conflict")
     await session.commit()
