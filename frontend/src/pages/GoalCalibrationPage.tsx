@@ -11,14 +11,13 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { LlmStreamingPanel } from '../components/LlmStreamingPanel'
+import { useLlmRun } from '../hooks/useLlmRun'
 import {
-  answerGoalFollowup,
   confirmPlan,
-  generatePlanDraft,
-  startGoalCalibration,
   type GoalCalibrationPayload,
   type GoalCalibrationStartResponse,
   type PlanDraftResponse,
@@ -48,39 +47,53 @@ export function GoalCalibrationPage() {
   const [followupAnswer, setFollowupAnswer] = useState('')
   const navigate = useNavigate()
 
-  const startMutation = useMutation({
-    mutationFn: startGoalCalibration,
-    onSuccess: setDraft,
-  })
-  const answerMutation = useMutation({
-    mutationFn: () =>
-      answerGoalFollowup(
-        draft?.draft_id ?? 0,
-        draft?.followup_question_id ?? '',
-        followupAnswer,
-      ),
-    onSuccess: (response) => {
-      setDraft(response)
-      setFollowupAnswer('')
-    },
-  })
-  const generateMutation = useMutation({
-    mutationFn: () => generatePlanDraft(draft?.draft_id ?? 0),
-    onSuccess: setPlanDraft,
-  })
+  const calibrationRun = useLlmRun()
+  const planRun = useLlmRun()
   const confirmMutation = useMutation({
     mutationFn: () => confirmPlan(planDraft?.draft_id ?? 0),
     onSuccess: () => navigate('/study-plan'),
   })
 
-  const hasError =
-    startMutation.isError ||
-    answerMutation.isError ||
-    generateMutation.isError ||
-    confirmMutation.isError
+  const hasError = confirmMutation.isError
+  const showCalibrationForm =
+    !draft && !calibrationRun.isRunning && calibrationRun.status !== 'succeeded'
+
+  useEffect(() => {
+    if (calibrationRun.status === 'succeeded' && calibrationRun.result) {
+      setDraft(calibrationRun.result as GoalCalibrationStartResponse)
+      setFollowupAnswer('')
+    }
+  }, [calibrationRun.status, calibrationRun.result])
+
+  useEffect(() => {
+    if (planRun.status === 'succeeded' && planRun.result) {
+      setPlanDraft(planRun.result as PlanDraftResponse)
+    }
+  }, [planRun.status, planRun.result])
 
   function submit(values: GoalCalibrationPayload) {
-    startMutation.mutate(normalisePayload(values))
+    setDraft(null)
+    setPlanDraft(null)
+    void calibrationRun.startRun('goal_followup', normalisePayload(values))
+  }
+
+  function submitFollowupAnswer() {
+    if (!draft?.draft_id || !draft.followup_question_id || !followupAnswer.trim()) {
+      return
+    }
+    void calibrationRun.startRun('goal_followup', {
+      draft_id: draft.draft_id,
+      question_id: draft.followup_question_id,
+      answer: followupAnswer,
+    })
+  }
+
+  function generatePlan() {
+    if (!draft?.draft_id) {
+      return
+    }
+    setPlanDraft(null)
+    void planRun.startRun('goal_plan_generate', { draft_id: draft.draft_id })
   }
 
   return (
@@ -98,7 +111,7 @@ export function GoalCalibrationPage() {
         />
       ) : null}
 
-      {!draft ? (
+      {showCalibrationForm ? (
         <Form
           layout="vertical"
           initialValues={initialValues}
@@ -191,11 +204,22 @@ export function GoalCalibrationPage() {
           <Button
             type="primary"
             htmlType="submit"
-            loading={startMutation.isPending}
+            loading={calibrationRun.isRunning}
           >
             开始校准
           </Button>
         </Form>
+      ) : null}
+
+      {calibrationRun.status !== 'idle' ? (
+        <LlmStreamingPanel
+          title="目标校准"
+          status={calibrationRun.status}
+          stage={calibrationRun.stage}
+          displayText={calibrationRun.displayText}
+          error={calibrationRun.error}
+          onCancel={calibrationRun.cancelRun}
+        />
       ) : null}
 
       {draft?.followup_question ? (
@@ -210,15 +234,16 @@ export function GoalCalibrationPage() {
           <Space wrap>
             <Button
               type="primary"
-              onClick={() => answerMutation.mutate()}
-              loading={answerMutation.isPending}
-              disabled={!followupAnswer.trim()}
+              onClick={submitFollowupAnswer}
+              loading={calibrationRun.isRunning}
+              disabled={!followupAnswer.trim() || calibrationRun.isRunning}
             >
               提交回答
             </Button>
             <Button
-              onClick={() => generateMutation.mutate()}
-              loading={generateMutation.isPending}
+              onClick={generatePlan}
+              loading={planRun.isRunning}
+              disabled={planRun.isRunning}
             >
               跳过并生成计划
             </Button>
@@ -229,11 +254,23 @@ export function GoalCalibrationPage() {
       {draft && !draft.followup_question && !planDraft ? (
         <Button
           type="primary"
-          onClick={() => generateMutation.mutate()}
-          loading={generateMutation.isPending}
+          onClick={generatePlan}
+          loading={planRun.isRunning}
+          disabled={planRun.isRunning}
         >
           生成计划草稿
         </Button>
+      ) : null}
+
+      {planRun.status !== 'idle' ? (
+        <LlmStreamingPanel
+          title="计划生成"
+          status={planRun.status}
+          stage={planRun.stage}
+          displayText={planRun.displayText}
+          error={planRun.error}
+          onCancel={planRun.cancelRun}
+        />
       ) : null}
 
       {planDraft ? (
