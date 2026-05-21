@@ -196,6 +196,7 @@ llm_run
 - status                  # pending / running / succeeded / failed / canceled
 - stage                   # queued / selecting_credential / streaming_model / validating / repairing / completed 等
 - display_text_md          # 可恢复展示的过程摘要，不保存完整 token 日志
+- input_json              # 创建 run 时的结构化业务输入，只保存必要字段
 - result_json              # 最终结构化结果
 - error_code
 - error_message            # 脱敏后的用户可读错误摘要
