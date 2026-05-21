@@ -19,6 +19,7 @@ from backend.app.services.learning_flows.goal_plan import (
     PROMPT_VERSION,
     run_goal_plan_generate,
 )
+from backend.app.services.learning_flows.goal_calibration import run_goal_followup
 from backend.app.services.llm_providers.base import ProviderChunk
 from backend.app.services.llm_run_events import LlmRunEvent
 from backend.app.services.llm_run_service import cancel_llm_run
@@ -64,6 +65,25 @@ class FakePlanProvider:
         yield ProviderChunk(
             final_text=json.dumps(self.final_payload, ensure_ascii=False)
         )
+
+
+class FakeFollowupProvider:
+    def __init__(self, final_text: str) -> None:
+        self.calls: list[dict[str, str]] = []
+        self.final_text = final_text
+
+    async def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncGenerator[ProviderChunk, None]:
+        self.calls.append(
+            {"model": model, "instructions": instructions, "input_text": input_text}
+        )
+        yield ProviderChunk(text_delta="我需要再确认一个问题。")
+        yield ProviderChunk(final_text=self.final_text)
 
 
 class FailingProvider:
@@ -188,6 +208,125 @@ async def create_draft_run(
     return draft, run
 
 
+async def create_followup_run(session: AsyncSession, user: AppUser) -> LlmRun:
+    run = LlmRun(
+        user_id=user.id,
+        kind="goal_followup",
+        input_json={
+            "goal_type": "interview_sprint",
+            "target_timeline": "within_1_month",
+            "weekly_days": 5,
+            "session_minutes": 60,
+            "current_level": "easy_started",
+            "preferred_language": "python3",
+            "self_reported_weaknesses": ["interview_expression"],
+            "extra_notes": "想准备后端面试",
+            "training_preference": "guided",
+        },
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+@pytest.mark.asyncio
+async def test_goal_followup_flow_creates_draft_from_payload(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        run = await create_followup_run(session, user)
+        provider = FakeFollowupProvider(
+            json.dumps(
+                {"question_id": "q1", "question": "你的面试时间是？"},
+                ensure_ascii=False,
+            )
+        )
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        result = await run_goal_followup(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        draft = await session.get(GoalCalibrationDraft, result["draft_id"])
+        assert draft is not None
+        assert draft.user_id == user.id
+        assert draft.input_json == run.input_json
+        assert draft.status == "asking_followup"
+        assert draft.followup_messages_json == [
+            {
+                "role": "assistant",
+                "question_id": "q1",
+                "question": "你的面试时间是？",
+            }
+        ]
+        assert result == {
+            "draft_id": draft.id,
+            "status": "asking_followup",
+            "followup_question": "你的面试时间是？",
+            "followup_question_id": "q1",
+            "remaining_followups": 2,
+        }
+        assert provider.calls[0]["model"] == "gpt-test"
+        assert "目标校准教练" in provider.calls[0]["instructions"]
+        assert json.loads(provider.calls[0]["input_text"]) == {
+            "payload": run.input_json,
+            "history": [],
+        }
+        await session.refresh(run)
+        assert run.status == "pending"
+        assert run.related_type == "goal_calibration_draft"
+        assert run.related_id == draft.id
+        assert run.result_json == {}
+        assert run.display_text_md == "我需要再确认一个问题。"
+        assert [event.name for event in events] == ["progress", "delta"]
+        assert all(event.name != "result" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_goal_followup_flow_collects_input_when_model_returns_null(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        run = await create_followup_run(session, user)
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        result = await run_goal_followup(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakeFollowupProvider("null"),
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        draft = await session.get(GoalCalibrationDraft, result["draft_id"])
+        assert draft is not None
+        assert draft.status == "collecting_input"
+        assert draft.followup_messages_json == []
+        assert result == {
+            "draft_id": draft.id,
+            "status": "collecting_input",
+            "followup_question": None,
+            "followup_question_id": None,
+            "remaining_followups": 0,
+        }
+        assert [event.name for event in events] == ["progress", "delta"]
+
+
 @pytest.mark.asyncio
 async def test_goal_plan_generate_flow_updates_draft_without_final_result_event(
     session_factory: async_sessionmaker[AsyncSession],
@@ -213,12 +352,20 @@ async def test_goal_plan_generate_flow_updates_draft_without_final_result_event(
         await session.refresh(draft)
         assert provider.calls[0]["model"] == "gpt-test"
         assert "默认语言语境：简体中文" in provider.calls[0]["instructions"]
-        assert result == {
-            "draft_id": draft.id,
-            "status": "ready_for_review",
-            "stage_count": 1,
+        assert result["draft_id"] == draft.id
+        assert result["status"] == "ready_for_review"
+        assert result["target_snapshot"] == {"goal_type": "interview_sprint"}
+        assert result["generation_summary_md"] == "按三个阶段训练。"
+        assert result["stages"][0]["items"][0]["problem_slug"] == "two-sum"
+        assert result["validation_report"] == {
+            "valid": True,
+            "issues": [],
             "item_count": 1,
         }
+        assert result["repair_log"] == []
+        assert result["uncertainty_notes"] == []
+        assert result["stage_count"] == 1
+        assert result["item_count"] == 1
         assert draft.status == "ready_for_review"
         assert draft.prompt_version == PROMPT_VERSION
         assert draft.model_name == "gpt-test"

@@ -417,6 +417,150 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_goal_followup_success_publishes_result_after_success(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+
+    calls: list[str] = []
+    events: list[LlmRunEvent] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 12,
+            "user_id": 42,
+            "kind": "goal_followup",
+            "status": "pending",
+            "display_text_md": "",
+        },
+    )()
+    user = fake_user()
+    credential = type(
+        "Credential",
+        (),
+        {
+            "id": 6,
+            "api_key_ciphertext": "ciphertext",
+            "base_url": "https://example.test/v1",
+            "model_name": "gpt-test",
+        },
+    )()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            calls.append("rollback")
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            assert run_id == 12
+            calls.append(f"publish:{event.name}")
+            events.append(event)
+
+    class FakeProvider:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            assert api_key == "plain-key"
+            assert base_url == credential.base_url
+            calls.append("provider")
+
+    async def fake_mark_running(
+        session: Any,
+        selected_run: Any,
+        *,
+        stage: str,
+        llm_credential_id: int | None = None,
+        model_name: str = "",
+    ):
+        assert selected_run is run
+        assert stage == "selecting_credential"
+        assert llm_credential_id == credential.id
+        assert model_name == credential.model_name
+        calls.append("mark_running")
+        run.status = "running"
+        return run
+
+    async def fake_flow(
+        session: Any,
+        *,
+        user_id: int,
+        run: Any,
+        provider: Any,
+        model_name: str,
+        publish: Any,
+    ) -> dict[str, Any]:
+        assert user_id == 42
+        assert isinstance(provider, FakeProvider)
+        assert model_name == credential.model_name
+        calls.append("followup_flow")
+        run.display_text_md = "followup text"
+        return {
+            "draft_id": 7,
+            "status": "asking_followup",
+            "followup_question": "你的面试时间是？",
+            "followup_question_id": "q1",
+            "remaining_followups": 2,
+        }
+
+    async def fail_plan_flow(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("goal_plan_generate should not handle goal_followup")
+
+    async def fake_succeed(
+        session: Any,
+        selected_run: Any,
+        *,
+        result: dict[str, Any],
+        display_text_md: str,
+    ):
+        assert selected_run is run
+        assert result["draft_id"] == 7
+        assert result["followup_question_id"] == "q1"
+        assert display_text_md == "followup text"
+        calls.append("succeed")
+        run.status = "succeeded"
+        return run
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", lambda session, run_id, user_id: _async_value((run, user)))
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, selected_user: _async_value(credential))
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
+    monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fail_plan_flow)
+    monkeypatch.setattr(llm_orchestrator, "run_goal_followup", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 12, 42)
+
+    assert [event.name for event in events] == ["started", "progress", "result", "done"]
+    assert events[2].data == {
+        "run_id": 12,
+        "status": "succeeded",
+        "result": {
+            "draft_id": 7,
+            "status": "asking_followup",
+            "followup_question": "你的面试时间是？",
+            "followup_question_id": "q1",
+            "remaining_followups": 2,
+        },
+    }
+    assert calls == [
+        "publish:started",
+        "publish:progress",
+        "mark_running",
+        "provider",
+        "followup_flow",
+        "succeed",
+        "publish:result",
+        "publish:done",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_unsupported_kind_fails_and_publishes_error(monkeypatch) -> None:
     from backend.app.services import llm_orchestrator
 

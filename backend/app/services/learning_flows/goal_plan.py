@@ -223,6 +223,12 @@ async def run_goal_plan_generate(
     result = {
         "draft_id": draft.id,
         "status": "ready_for_review",
+        "target_snapshot": repaired.get("target_snapshot", draft.input_json),
+        "generation_summary_md": str(repaired.get("generation_summary_md", "")),
+        "stages": _list_of_dicts(repaired.get("stages", [])),
+        "validation_report": report,
+        "repair_log": repair_log,
+        "uncertainty_notes": [],
         "stage_count": stage_count,
         "item_count": item_count,
     }
