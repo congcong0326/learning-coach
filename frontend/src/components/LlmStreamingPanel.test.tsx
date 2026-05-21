@@ -24,6 +24,10 @@ describe('LlmStreamingPanel', () => {
     expect(screen.getByText('正在生成训练阶段')).toBeInTheDocument()
     expect(screen.getByText('先补齐数组和哈希表，再进入动态规划。')).toBeInTheDocument()
     expect(screen.getByText('预计需要几十秒')).toBeInTheDocument()
+    expect(screen.getByRole('log', { name: '学习计划生成实时输出' })).toHaveStyle({
+      maxHeight: '220px',
+      overflowY: 'auto',
+    })
 
     fireEvent.click(screen.getByRole('button', { name: '取消生成' }))
 

@@ -116,7 +116,7 @@ describe('useLlmRun', () => {
     })
 
     await waitFor(() => expect(result.current.status).toBe('succeeded'))
-    expect(result.current.stage).toBe('validating')
+    expect(result.current.stage).toBe('正在校验题库')
     expect(result.current.displayText).toBe('先拆成题型识别和边界条件两个阶段。')
     expect(result.current.result).toEqual({ draft_id: 123, stage_count: 2 })
     expect(FakeEventSource.instances[0].closed).toBe(true)

@@ -29,6 +29,11 @@ FOLLOWUP_INSTRUCTIONS = (
 )
 MAX_FOLLOWUPS = 3
 FOLLOWUP_EDITABLE_STATUSES = {"asking_followup", "collecting_input"}
+FOLLOWUP_STREAM_DISPLAY_MESSAGES = (
+    "正在判断是否需要追问...\n",
+    "正在整理目标校准结果...\n",
+)
+FOLLOWUP_STREAM_DISPLAY_THRESHOLDS = (1, 160)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +248,10 @@ async def _stream_followup_decision(
         message="正在校准训练目标",
     )
 
+    raw_parts: list[str] = []
     display_parts: list[str] = []
+    display_message_index = 0
+    streamed_char_count = 0
     final_text = ""
     try:
         async for chunk in provider.stream_text(
@@ -255,11 +263,18 @@ async def _stream_followup_decision(
             ),
         ):
             if chunk.text_delta:
-                display_parts.append(chunk.text_delta)
-                await publish(
-                    LlmRunEvent("delta", {"run_id": run.id, "text": chunk.text_delta})
-                )
-                await _update_display_text(session, run, "".join(display_parts))
+                raw_parts.append(chunk.text_delta)
+                streamed_char_count += len(chunk.text_delta)
+                while (
+                    display_message_index < len(FOLLOWUP_STREAM_DISPLAY_MESSAGES)
+                    and streamed_char_count
+                    >= FOLLOWUP_STREAM_DISPLAY_THRESHOLDS[display_message_index]
+                ):
+                    text = FOLLOWUP_STREAM_DISPLAY_MESSAGES[display_message_index]
+                    display_parts.append(text)
+                    await publish(LlmRunEvent("delta", {"run_id": run.id, "text": text}))
+                    await _update_display_text(session, run, "".join(display_parts))
+                    display_message_index += 1
             if chunk.final_text:
                 final_text = chunk.final_text
     except LearningFlowError:
@@ -273,6 +288,8 @@ async def _stream_followup_decision(
         )
         raise LearningFlowError("llm_provider_error") from None
 
+    if not final_text:
+        final_text = "".join(raw_parts)
     await _ensure_run_mutable(session, run)
     return _parse_followup_json(final_text)
 

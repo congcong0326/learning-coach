@@ -1,5 +1,6 @@
 import { Alert, Button, Space, Spin, Tag, Typography } from 'antd'
 import type { ReactNode } from 'react'
+import { useEffect, useRef } from 'react'
 
 import type { LlmRunStatus } from '../api/llmRuns'
 
@@ -65,6 +66,14 @@ export function LlmStreamingPanel({
 }: LlmStreamingPanelProps) {
   const isActive = activeStatuses.includes(status)
   const errorMessage = getErrorMessage(error)
+  const outputRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const output = outputRef.current
+    if (output) {
+      output.scrollTop = output.scrollHeight
+    }
+  }, [displayText])
 
   return (
     <section className="workflow-panel" aria-label={title}>
@@ -81,17 +90,33 @@ export function LlmStreamingPanel({
         <Typography.Text>{stage || statusLabels[status]}</Typography.Text>
       </Space>
 
-      {displayText ? (
-        <Typography.Paragraph
+      {displayText || isActive ? (
+        <div
+          ref={outputRef}
+          role="log"
+          aria-live="polite"
+          aria-label={`${title}实时输出`}
           style={{
-            margin: 0,
-            overflowWrap: 'anywhere',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            background: '#fafafa',
+            border: '1px solid #f0f0f0',
+            borderRadius: 6,
+            maxHeight: 220,
+            minHeight: 72,
+            overflowY: 'auto',
+            padding: '10px 12px',
           }}
         >
-          {displayText}
-        </Typography.Paragraph>
+          <Typography.Paragraph
+            style={{
+              margin: 0,
+              overflowWrap: 'anywhere',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {displayText || '正在等待模型输出...'}
+          </Typography.Paragraph>
+        </div>
       ) : null}
 
       {errorMessage ? (

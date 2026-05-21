@@ -34,6 +34,13 @@ REPAIR_PLAN_INSTRUCTIONS = (
     "若报告包含空阶段、空题目、缺失题目、付费题或重复题，必须补充或替换为可训练题目。"
     "只输出符合学习计划结构的 JSON。"
 )
+PLAN_STREAM_DISPLAY_MESSAGES = (
+    "模型正在生成计划草稿...\n",
+    "正在组织阶段目标和训练重点...\n",
+    "正在整理推荐题单与训练理由...\n",
+    "正在准备交给后端校验题库...\n",
+)
+PLAN_STREAM_DISPLAY_THRESHOLDS = (1, 180, 420, 900)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +112,19 @@ async def _publish_progress(
     )
 
 
+async def _publish_display_delta(
+    session: AsyncSession,
+    *,
+    run: LlmRun,
+    publish: Callable[[LlmRunEvent], Awaitable[None]],
+    display_parts: list[str],
+    text: str,
+) -> None:
+    display_parts.append(text)
+    await publish(LlmRunEvent("delta", {"run_id": run.id, "text": text}))
+    await _update_display_text(session, run, "".join(display_parts))
+
+
 def _parse_plan_json(final_text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(final_text)
@@ -140,7 +160,10 @@ async def run_goal_plan_generate(
         message="正在生成阶段化学习计划",
     )
 
+    raw_parts: list[str] = []
     display_parts: list[str] = []
+    display_message_index = 0
+    streamed_char_count = 0
     final_text = ""
     # 模型输出只能作为草稿来源，正式计划必须经过本地题库校验后才能持久化。
     try:
@@ -156,11 +179,21 @@ async def run_goal_plan_generate(
             ),
         ):
             if chunk.text_delta:
-                display_parts.append(chunk.text_delta)
-                await publish(
-                    LlmRunEvent("delta", {"run_id": run.id, "text": chunk.text_delta})
-                )
-                await _update_display_text(session, run, "".join(display_parts))
+                raw_parts.append(chunk.text_delta)
+                streamed_char_count += len(chunk.text_delta)
+                while (
+                    display_message_index < len(PLAN_STREAM_DISPLAY_MESSAGES)
+                    and streamed_char_count
+                    >= PLAN_STREAM_DISPLAY_THRESHOLDS[display_message_index]
+                ):
+                    await _publish_display_delta(
+                        session,
+                        run=run,
+                        publish=publish,
+                        display_parts=display_parts,
+                        text=PLAN_STREAM_DISPLAY_MESSAGES[display_message_index],
+                    )
+                    display_message_index += 1
             if chunk.final_text:
                 final_text = chunk.final_text
     except LearningFlowError:
@@ -176,6 +209,8 @@ async def run_goal_plan_generate(
         )
         raise LearningFlowError("llm_provider_error") from None
 
+    if not final_text:
+        final_text = "".join(raw_parts)
     await _ensure_run_mutable(session, run)
     raw_plan = _parse_plan_json(final_text)
     raw_stage_count, raw_item_count = _count_plan_items(raw_plan)

@@ -67,6 +67,24 @@ class FakePlanProvider:
         )
 
 
+class JsonChunkPlanProvider(FakePlanProvider):
+    async def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncGenerator[ProviderChunk, None]:
+        self.calls.append(
+            {"model": model, "instructions": instructions, "input_text": input_text}
+        )
+        final_text = json.dumps(self.final_payload, ensure_ascii=False)
+        midpoint = max(1, len(final_text) // 2)
+        yield ProviderChunk(text_delta=final_text[:midpoint])
+        yield ProviderChunk(text_delta=final_text[midpoint:])
+        yield ProviderChunk(final_text=final_text)
+
+
 class FakeFollowupProvider:
     def __init__(self, final_text: str) -> None:
         self.calls: list[dict[str, str]] = []
@@ -340,8 +358,9 @@ async def test_goal_followup_flow_creates_draft_from_payload(
         assert run.related_type == "goal_calibration_draft"
         assert run.related_id == draft.id
         assert run.result_json == {}
-        assert run.display_text_md == "我需要再确认一个问题。"
+        assert run.display_text_md == "正在判断是否需要追问...\n"
         assert [event.name for event in events] == ["progress", "delta"]
+        assert events[1].data["text"] == "正在判断是否需要追问...\n"
         assert all(event.name != "result" for event in events)
 
 
@@ -395,8 +414,9 @@ async def test_goal_followup_flow_answers_existing_draft_through_run(
         await session.refresh(run)
         assert run.status == "pending"
         assert run.result_json == {}
-        assert run.display_text_md == "我需要再确认一个问题。"
+        assert run.display_text_md == "正在判断是否需要追问...\n"
         assert [event.name for event in events] == ["progress", "delta"]
+        assert events[1].data["text"] == "正在判断是否需要追问...\n"
         assert all(event.name != "result" for event in events)
 
 
@@ -433,6 +453,7 @@ async def test_goal_followup_flow_collects_input_when_model_returns_null(
             "remaining_followups": 0,
         }
         assert [event.name for event in events] == ["progress", "delta"]
+        assert events[1].data["text"] == "正在判断是否需要追问...\n"
 
 
 @pytest.mark.asyncio
@@ -442,7 +463,7 @@ async def test_goal_plan_generate_flow_updates_draft_without_final_result_event(
     async with session_factory() as session:
         user = await create_user(session)
         draft, run = await create_draft_run(session, user)
-        provider = FakePlanProvider()
+        provider = JsonChunkPlanProvider()
         events: list[LlmRunEvent] = []
 
         async def publish(event: LlmRunEvent) -> None:
@@ -483,12 +504,18 @@ async def test_goal_plan_generate_flow_updates_draft_without_final_result_event(
         await session.refresh(run)
         assert run.status == "pending"
         assert run.result_json == {}
-        assert run.display_text_md == "我会按三个阶段生成计划。"
+        assert run.display_text_md.startswith("模型正在生成计划草稿...\n")
+        assert "problem_slug" not in run.display_text_md
+        assert "{" not in run.display_text_md
         assert [event.name for event in events] == [
             "progress",
             "delta",
+            "delta",
             "progress",
         ]
+        assert events[1].data["text"] == "模型正在生成计划草稿...\n"
+        assert "problem_slug" not in str(events[1].data["text"])
+        assert "{" not in str(events[1].data["text"])
         assert all(event.name != "result" for event in events)
 
 
@@ -561,7 +588,7 @@ async def test_goal_plan_generate_stores_failure_report_without_formal_plan(
         assert run.status == "pending"
         assert run.error_code == ""
         assert run.result_json == {}
-        assert run.display_text_md == "我会按三个阶段生成计划。"
+        assert run.display_text_md == "模型正在生成计划草稿...\n"
         assert [event.name for event in events] == ["progress", "delta", "progress"]
 
 
@@ -632,6 +659,7 @@ async def test_goal_plan_generate_stops_when_run_is_canceled_mid_stream(
         assert run.status == "canceled"
         assert run.result_json == {}
         assert [event.name for event in events] == ["progress", "delta"]
+        assert events[1].data["text"] == "模型正在生成计划草稿...\n"
 
 
 @pytest.mark.asyncio
@@ -664,5 +692,5 @@ async def test_goal_plan_generate_does_not_commit_formal_draft_before_run_succes
         await session.refresh(run)
         assert run.status == "pending"
         assert run.result_json == {}
-        assert run.display_text_md == "我会按三个阶段生成计划。"
+        assert run.display_text_md == "模型正在生成计划草稿...\n"
         assert all(event.name != "result" for event in events)

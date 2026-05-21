@@ -118,7 +118,7 @@ export function useLlmRun(options: UseLlmRunOptions = {}) {
         }
         setState((current) => ({
           ...current,
-          stage: payload.stage ?? current.stage,
+          stage: payload.message ?? payload.stage ?? current.stage,
         }))
       })
 
