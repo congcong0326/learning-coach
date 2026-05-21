@@ -6,11 +6,12 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.auth import current_user_dependency
+from backend.app.core.config import settings
 from backend.app.db.session import async_session_factory, get_session
 from backend.app.models.auth import AppUser
 from backend.app.models.llm_run import LlmRun
@@ -28,6 +29,7 @@ from backend.app.services.llm_run_service import (
     create_llm_run,
     get_llm_run_for_user,
 )
+from backend.app.services.auth_service import get_current_user_from_token
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,56 @@ def _status_payload(run: LlmRun) -> dict[str, Any]:
         "started_at": _datetime_text(run.started_at),
         "finished_at": _datetime_text(run.finished_at),
     }
+
+
+def _stream_headers() -> dict[str, str]:
+    return {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+def _observe_llm_task(run_id: int, task: asyncio.Task[None]) -> None:
+    event_hub.clear_task(run_id)
+    try:
+        exception = task.exception()
+    except asyncio.CancelledError:
+        logger.info("llm run task canceled run_id=%s", run_id)
+        return
+    if exception is not None:
+        logger.error(
+            "llm run task failed run_id=%s error_type=%s",
+            run_id,
+            type(exception).__name__,
+            exc_info=(type(exception), exception, exception.__traceback__),
+        )
+
+
+def _terminal_stream_events(
+    *,
+    run_id: int,
+    status: str,
+    result: dict[str, Any],
+    error_code: str,
+    error_message: str,
+) -> list[LlmRunEvent]:
+    if status == "succeeded":
+        events = [LlmRunEvent("result", {"run_id": run_id, "result": result})]
+    elif status == "failed":
+        events = [
+            LlmRunEvent(
+                "error",
+                {"run_id": run_id, "error_code": error_code, "message": error_message},
+            ),
+        ]
+    elif status == "canceled":
+        events = [LlmRunEvent("canceled", {"run_id": run_id})]
+    else:
+        events = []
+    events.append(LlmRunEvent("done", {"run_id": run_id}))
+    return events
+
+
+async def _finite_event_stream(events: list[LlmRunEvent]) -> AsyncIterator[str]:
+    for event in events:
+        yield encode_sse(event)
 
 
 @router.post("", response_model=LlmRunCreateResponse)
@@ -130,23 +182,50 @@ async def cancel_llm_run_route(
 @router.get("/{run_id}/stream")
 async def stream_llm_run_route(
     run_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
+    request: Request,
 ) -> StreamingResponse:
-    try:
-        run = await get_llm_run_for_user(session, user, run_id)
-    except LlmRunError as exc:
-        raise _http_error(exc) from exc
+    async with async_session_factory() as session:
+        user = await get_current_user_from_token(
+            session,
+            request.cookies.get(settings.session_cookie_name),
+        )
+        if user is None:
+            raise HTTPException(status_code=401, detail="not_authenticated")
+        try:
+            run = await get_llm_run_for_user(session, user, run_id)
+        except LlmRunError as exc:
+            raise _http_error(exc) from exc
+
+        status = run.status
+        user_id = user.id
+        result = run.result_json
+        error_code = run.error_code
+        error_message = run.error_message
+
+    if status in {"succeeded", "failed", "canceled"}:
+        events = _terminal_stream_events(
+            run_id=run_id,
+            status=status,
+            result=result,
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return StreamingResponse(
+            _finite_event_stream(events),
+            media_type="text/event-stream",
+            headers=_stream_headers(),
+        )
 
     async def stream_events() -> AsyncIterator[str]:
         subscription = event_hub.subscribe(run_id)
         first_event_task = asyncio.create_task(anext(subscription))
         try:
             await asyncio.sleep(0)
-            if run.status == "pending" and not event_hub.has_task(run_id):
-                task = asyncio.create_task(execute_llm_run(async_session_factory, run_id, user.id))
+            if status == "pending" and not event_hub.has_task(run_id):
+                task = asyncio.create_task(execute_llm_run(async_session_factory, run_id, user_id))
+                task.add_done_callback(lambda done_task: _observe_llm_task(run_id, done_task))
                 event_hub.set_task(run_id, task)
-                logger.info("llm run stream started task user_id=%s run_id=%s", user.id, run_id)
+                logger.info("llm run stream started task user_id=%s run_id=%s", user_id, run_id)
 
             try:
                 event = await first_event_task
@@ -163,5 +242,5 @@ async def stream_llm_run_route(
     return StreamingResponse(
         stream_events(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=_stream_headers(),
     )

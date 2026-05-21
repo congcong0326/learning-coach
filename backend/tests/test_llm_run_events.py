@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from backend.app.schemas.llm_run import LlmRunCreateRequest
-from backend.app.services.llm_run_events import LlmRunEvent, encode_sse
+from backend.app.services.llm_run_events import LlmRunEvent, LlmRunEventHub, encode_sse
 
 
 def test_llm_run_create_request_accepts_known_kind() -> None:
@@ -24,3 +28,15 @@ def test_encode_sse_formats_named_event() -> None:
         'event: progress\n'
         'data: {"run_id":7,"stage":"validating","message":"正在校验题库"}\n\n'
     )
+
+
+@pytest.mark.asyncio
+async def test_event_hub_clear_task_removes_stored_task() -> None:
+    hub = LlmRunEventHub()
+    task = asyncio.create_task(asyncio.sleep(0))
+
+    hub.set_task(7, task)
+    hub.clear_task(7)
+
+    assert hub.has_task(7) is False
+    await task

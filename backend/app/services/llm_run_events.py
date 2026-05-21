@@ -31,6 +31,9 @@ class LlmRunEventHub:
     def set_task(self, run_id: int, task: asyncio.Task[None]) -> None:
         self._tasks[run_id] = task
 
+    def clear_task(self, run_id: int) -> None:
+        self._tasks.pop(run_id, None)
+
     async def publish(self, run_id: int, event: LlmRunEvent) -> None:
         for queue in list(self._subscribers.get(run_id, set())):
             await queue.put(event)
@@ -45,7 +48,11 @@ class LlmRunEventHub:
                 if event.name == "done":
                     break
         finally:
-            self._subscribers[run_id].discard(queue)
+            subscribers = self._subscribers.get(run_id)
+            if subscribers is not None:
+                subscribers.discard(queue)
+                if not subscribers:
+                    self._subscribers.pop(run_id, None)
 
 
 event_hub = LlmRunEventHub()

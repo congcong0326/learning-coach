@@ -24,6 +24,10 @@ def fake_user() -> AppUser:
     )
 
 
+async def fake_current_user_from_token(session: Any, token: str | None) -> AppUser:
+    return fake_user()
+
+
 def test_create_llm_run_requires_authentication() -> None:
     client = TestClient(app)
 
@@ -118,11 +122,50 @@ def test_status_route_allows_retry_for_canceled_run(monkeypatch) -> None:
     assert response.json()["can_retry"] is True
 
 
-def test_stream_route_starts_pending_run(monkeypatch) -> None:
+def test_stream_terminal_canceled_run_emits_canceled_and_done(monkeypatch) -> None:
+    async def fake_get(session: Any, user: AppUser, run_id: int):
+        return type(
+            "Run",
+            (),
+            {
+                "id": run_id,
+                "user_id": user.id,
+                "status": "canceled",
+                "kind": "goal_plan_generate",
+                "result_json": {},
+                "error_code": "",
+                "error_message": "",
+            },
+        )()
+
+    monkeypatch.setattr("backend.app.api.llm_runs.get_llm_run_for_user", fake_get)
+    monkeypatch.setattr("backend.app.api.llm_runs.get_current_user_from_token", fake_current_user_from_token)
+    client = TestClient(app)
+    with client.stream("GET", "/api/llm-runs/99/stream") as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert "event: canceled" in body
+    assert "event: done" in body
+
+
+def test_stream_pending_run_emits_done_body(monkeypatch) -> None:
     started: list[int] = []
 
     async def fake_get(session: Any, user: AppUser, run_id: int):
-        return type("Run", (), {"id": run_id, "user_id": user.id, "status": "pending", "kind": "goal_plan_generate"})()
+        return type(
+            "Run",
+            (),
+            {
+                "id": run_id,
+                "user_id": user.id,
+                "status": "pending",
+                "kind": "goal_plan_generate",
+                "result_json": {},
+                "error_code": "",
+                "error_message": "",
+            },
+        )()
 
     from backend.app.services.llm_run_events import LlmRunEvent, event_hub
 
@@ -132,13 +175,12 @@ def test_stream_route_starts_pending_run(monkeypatch) -> None:
 
     monkeypatch.setattr("backend.app.api.llm_runs.get_llm_run_for_user", fake_get)
     monkeypatch.setattr("backend.app.api.llm_runs.execute_llm_run", fake_execute)
-    app.dependency_overrides[current_user_dependency] = fake_user
-    try:
-        client = TestClient(app)
-        with client.stream("GET", "/api/llm-runs/99/stream") as response:
-            assert response.status_code == 200
-            assert response.headers["content-type"].startswith("text/event-stream")
-    finally:
-        app.dependency_overrides.clear()
+    monkeypatch.setattr("backend.app.api.llm_runs.get_current_user_from_token", fake_current_user_from_token)
+    client = TestClient(app)
+    with client.stream("GET", "/api/llm-runs/99/stream") as response:
+        body = response.read().decode()
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
 
+    assert "event: done" in body
     assert started == [99]
