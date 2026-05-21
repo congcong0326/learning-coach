@@ -14,7 +14,7 @@ type LlmStreamingPanelError =
 
 type LlmStreamingPanelProps = {
   title: string
-  status: LlmRunStatus
+  status: LlmRunStatus | 'idle'
   stage: string
   displayText: string
   error: LlmStreamingPanelError
@@ -22,14 +22,26 @@ type LlmStreamingPanelProps = {
   children?: ReactNode
 }
 
-const activeStatuses: LlmRunStatus[] = ['pending', 'running']
+type PanelStatus = LlmStreamingPanelProps['status']
 
-const statusLabels: Record<LlmRunStatus, string> = {
+const activeStatuses: PanelStatus[] = ['pending', 'running']
+
+const statusLabels: Record<PanelStatus, string> = {
+  idle: '未开始',
   pending: '排队中',
   running: '生成中',
   succeeded: '已完成',
   failed: '失败',
   canceled: '已取消',
+}
+
+const statusColors: Partial<Record<PanelStatus, string>> = {
+  pending: 'processing',
+  running: 'processing',
+  succeeded: 'success',
+  failed: 'error',
+  canceled: 'default',
+  idle: 'default',
 }
 
 function getErrorMessage(error: LlmStreamingPanelError) {
@@ -59,7 +71,7 @@ export function LlmStreamingPanel({
       <Space align="center" size={10} wrap>
         {isActive ? <Spin size="small" /> : null}
         <Typography.Title level={3}>{title}</Typography.Title>
-        <Tag color={status === 'failed' ? 'error' : status === 'succeeded' ? 'success' : 'processing'}>
+        <Tag color={statusColors[status]}>
           {statusLabels[status]}
         </Tag>
       </Space>
@@ -70,13 +82,20 @@ export function LlmStreamingPanel({
       </Space>
 
       {displayText ? (
-        <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+        <Typography.Paragraph
+          style={{
+            margin: 0,
+            overflowWrap: 'anywhere',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
           {displayText}
         </Typography.Paragraph>
       ) : null}
 
       {errorMessage ? (
-        <Alert showIcon type="error" message="生成失败" description={errorMessage} />
+        <Alert showIcon type="error" title="生成失败" description={errorMessage} />
       ) : null}
 
       {children}
