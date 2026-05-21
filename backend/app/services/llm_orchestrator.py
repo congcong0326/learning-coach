@@ -180,6 +180,7 @@ async def _run_for_transition(
         fresh_run = await session.get(LlmRun, run_id)
         if fresh_run is not None and fresh_run.user_id == user_id:
             return fresh_run
+        return None
     return run
 
 
