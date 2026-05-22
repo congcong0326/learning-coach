@@ -147,6 +147,22 @@ def test_validate_profile_patch_rejects_too_deep_profile_sections() -> None:
         )
 
 
+def test_validate_profile_patch_rejects_oversized_lists_with_field_path() -> None:
+    patch = {
+        "skill_profile_json": {
+            "weak_skill_tags": [f"tag-{index}" for index in range(17)]
+        }
+    }
+
+    with pytest.raises(ProfileServiceError) as exc_info:
+        validate_profile_patch(
+            patch,
+            [{"source": "summary", "summary": "复盘证据"}],
+        )
+
+    assert "skill_profile_json.weak_skill_tags" in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 async def test_apply_profile_delta_returns_existing_snapshot_for_accepted_delta() -> None:
     previous = _profile_snapshot(snapshot_id=10, user_id=1, version_number=1)
@@ -375,7 +391,7 @@ async def test_low_confidence_patch_preserves_stable_fields_and_deep_merges() ->
 
 
 @pytest.mark.asyncio
-async def test_deep_merge_caps_and_dedupes_oversized_lists() -> None:
+async def test_apply_profile_delta_rejects_oversized_patch_list() -> None:
     previous = _profile_snapshot(
         snapshot_id=60,
         user_id=1,
@@ -402,11 +418,49 @@ async def test_deep_merge_caps_and_dedupes_oversized_lists() -> None:
         execute_results=[delta, object(), previous],
     )
 
+    with pytest.raises(ProfileServiceError) as exc_info:
+        await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
+
+    assert "skill_profile_json.weak_skill_tags" in str(exc_info.value)
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_deep_merge_caps_and_dedupes_lists_without_large_input_materialization() -> None:
+    previous = _profile_snapshot(
+        snapshot_id=61,
+        user_id=1,
+        version_number=1,
+    )
+    previous.skill_profile_json = {"weak_skill_tags": ["tag-0", "tag-1", "base-only"]}
+    delta = _profile_delta(
+        delta_id=15,
+        user_id=1,
+        status="proposed",
+        previous_snapshot_id=previous.id,
+        next_snapshot_id=None,
+    )
+    delta.patch_json = {
+        "skill_profile_json": {
+            "weak_skill_tags": [f"tag-{index}" for index in range(16)]
+        }
+    }
+    session = _ProfileServiceFakeSession(
+        {
+            (ProfileDelta, delta.id): delta,
+            (UserProfileSnapshot, previous.id): previous,
+        },
+        execute_results=[delta, object(), previous],
+    )
+
     result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
 
     assert result.snapshot is not None
     assert result.snapshot.skill_profile_json["weak_skill_tags"] == [
-        f"tag-{index}" for index in range(16)
+        "tag-0",
+        "tag-1",
+        "base-only",
+        *[f"tag-{index}" for index in range(2, 15)],
     ]
 
 

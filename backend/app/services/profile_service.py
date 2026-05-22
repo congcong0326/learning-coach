@@ -565,14 +565,15 @@ def _deep_merge_dict_bounded(
 def _merge_lists(base: list[Any], patch: list[Any]) -> list[Any]:
     merged: list[Any] = []
     seen: set[str] = set()
-    for item in [*base, *patch]:
-        normalized = str(item)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        merged.append(item)
-        if len(merged) >= _MAX_PROFILE_LIST_LENGTH:
-            break
+    for values in (base, patch):
+        for item in values:
+            normalized = str(item)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(item)
+            if len(merged) >= _MAX_PROFILE_LIST_LENGTH:
+                return merged
     return merged
 
 
@@ -599,5 +600,7 @@ def _validate_section_value(value: Any, *, path: str, depth: int = 0) -> None:
             _validate_section_value(item, path=f"{path}.{key}", depth=depth + 1)
         return
     if isinstance(value, list):
-        for index, item in enumerate(value[: _MAX_PROFILE_LIST_LENGTH + 1]):
+        if len(value) > _MAX_PROFILE_LIST_LENGTH:
+            raise ProfileServiceError(f"{path} exceeds list length limit")
+        for index, item in enumerate(value):
             _validate_section_value(item, path=f"{path}[{index}]", depth=depth + 1)
