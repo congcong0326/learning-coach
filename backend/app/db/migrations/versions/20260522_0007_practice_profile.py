@@ -146,6 +146,13 @@ def upgrade() -> None:
             "problem_id",
             name="uq_practice_session_user_plan_problem",
         ),
+        sa.UniqueConstraint("id", "user_id", name="uq_practice_session_id_user"),
+        sa.UniqueConstraint(
+            "id",
+            "user_id",
+            "problem_id",
+            name="uq_practice_session_id_user_problem",
+        ),
     )
     op.create_index(
         "ix_practice_session_user_status_activity",
@@ -208,6 +215,18 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
+        sa.UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_practice_event_id_session_user",
+        ),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_practice_event_session_user",
+            ondelete="CASCADE",
+        ),
     )
     op.create_index(
         "ix_practice_event_session_created",
@@ -252,6 +271,27 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("now()"),
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_code_snapshot_id_session_user",
+        ),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_code_snapshot_session_user",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["event_id", "session_id", "user_id"],
+            [
+                "practice_event.id",
+                "practice_event.session_id",
+                "practice_event.user_id",
+            ],
+            name="fk_code_snapshot_event_context",
         ),
     )
     op.create_index(
@@ -331,6 +371,26 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_submission_feedback_session_user",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["event_id", "session_id", "user_id"],
+            [
+                "practice_event.id",
+                "practice_event.session_id",
+                "practice_event.user_id",
+            ],
+            name="fk_submission_feedback_event_context",
+        ),
+        sa.ForeignKeyConstraint(
+            ["code_snapshot_id", "session_id", "user_id"],
+            ["code_snapshot.id", "code_snapshot.session_id", "code_snapshot.user_id"],
+            name="fk_submission_feedback_code_snapshot_context",
         ),
     )
     op.create_index(
@@ -445,6 +505,30 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_coach_turn_session_user",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_event_id", "session_id", "user_id"],
+            [
+                "practice_event.id",
+                "practice_event.session_id",
+                "practice_event.user_id",
+            ],
+            name="fk_coach_turn_user_event_context",
+        ),
+        sa.ForeignKeyConstraint(
+            ["assistant_event_id", "session_id", "user_id"],
+            [
+                "practice_event.id",
+                "practice_event.session_id",
+                "practice_event.user_id",
+            ],
+            name="fk_coach_turn_assistant_event_context",
         ),
     )
     op.create_index(
@@ -570,6 +654,23 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
         sa.UniqueConstraint("session_id", name="uq_session_summary_session"),
+        sa.UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_session_summary_id_session_user",
+        ),
+        sa.UniqueConstraint("id", "user_id", name="uq_session_summary_id_user"),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id", "problem_id"],
+            [
+                "practice_session.id",
+                "practice_session.user_id",
+                "practice_session.problem_id",
+            ],
+            name="fk_session_summary_session_user_problem",
+            ondelete="CASCADE",
+        ),
     )
     op.create_index(
         "ix_session_summary_user_created",
@@ -655,6 +756,12 @@ def upgrade() -> None:
             "version_number",
             name="uq_user_profile_snapshot_user_version",
         ),
+        sa.UniqueConstraint("id", "user_id", name="uq_user_profile_snapshot_id_user"),
+        sa.ForeignKeyConstraint(
+            ["created_from_summary_id", "user_id"],
+            ["session_summary.id", "session_summary.user_id"],
+            name="fk_user_profile_snapshot_summary_user",
+        ),
     )
     op.create_index(
         "ix_user_profile_snapshot_user_created",
@@ -737,6 +844,31 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
         sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_profile_delta_session_user",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["summary_id", "session_id", "user_id"],
+            [
+                "session_summary.id",
+                "session_summary.session_id",
+                "session_summary.user_id",
+            ],
+            name="fk_profile_delta_summary_context",
+        ),
+        sa.ForeignKeyConstraint(
+            ["previous_snapshot_id", "user_id"],
+            ["user_profile_snapshot.id", "user_profile_snapshot.user_id"],
+            name="fk_profile_delta_previous_snapshot_user",
+        ),
+        sa.ForeignKeyConstraint(
+            ["next_snapshot_id", "user_id"],
+            ["user_profile_snapshot.id", "user_profile_snapshot.user_id"],
+            name="fk_profile_delta_next_snapshot_user",
+        ),
     )
     op.create_index(
         "ix_profile_delta_user_created",
@@ -747,8 +879,34 @@ def upgrade() -> None:
     op.create_index("ix_profile_delta_summary", "profile_delta", ["summary_id"])
     op.create_index("ix_profile_delta_status", "profile_delta", ["status"])
 
+    op.create_foreign_key(
+        "fk_practice_session_latest_code_snapshot",
+        "practice_session",
+        "code_snapshot",
+        ["latest_code_snapshot_id", "id", "user_id"],
+        ["id", "session_id", "user_id"],
+    )
+    op.create_foreign_key(
+        "fk_practice_session_profile_snapshot",
+        "practice_session",
+        "user_profile_snapshot",
+        ["profile_snapshot_id", "user_id"],
+        ["id", "user_id"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_constraint(
+        "fk_practice_session_profile_snapshot",
+        "practice_session",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "fk_practice_session_latest_code_snapshot",
+        "practice_session",
+        type_="foreignkey",
+    )
+
     op.drop_index("ix_profile_delta_status", table_name="profile_delta")
     op.drop_index("ix_profile_delta_summary", table_name="profile_delta")
     op.drop_index("ix_profile_delta_session", table_name="profile_delta")

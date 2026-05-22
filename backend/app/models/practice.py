@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -31,6 +32,25 @@ class PracticeSession(Base):
             "study_plan_id",
             "problem_id",
             name="uq_practice_session_user_plan_problem",
+        ),
+        UniqueConstraint("id", "user_id", name="uq_practice_session_id_user"),
+        UniqueConstraint(
+            "id",
+            "user_id",
+            "problem_id",
+            name="uq_practice_session_id_user_problem",
+        ),
+        ForeignKeyConstraint(
+            ["latest_code_snapshot_id", "id", "user_id"],
+            ["code_snapshot.id", "code_snapshot.session_id", "code_snapshot.user_id"],
+            name="fk_practice_session_latest_code_snapshot",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["profile_snapshot_id", "user_id"],
+            ["user_profile_snapshot.id", "user_profile_snapshot.user_id"],
+            name="fk_practice_session_profile_snapshot",
+            use_alter=True,
         ),
         Index(
             "ix_practice_session_user_status_activity",
@@ -150,6 +170,18 @@ class PracticeSession(Base):
 class PracticeEvent(Base):
     __tablename__ = "practice_event"
     __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_practice_event_id_session_user",
+        ),
+        ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_practice_event_session_user",
+            ondelete="CASCADE",
+        ),
         Index("ix_practice_event_session_created", "session_id", "created_at"),
         Index("ix_practice_event_user_created", "user_id", "created_at"),
         Index("ix_practice_event_llm_run", "llm_run_id"),
@@ -196,6 +228,23 @@ class PracticeEvent(Base):
 class CodeSnapshot(Base):
     __tablename__ = "code_snapshot"
     __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_code_snapshot_id_session_user",
+        ),
+        ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_code_snapshot_session_user",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["event_id", "session_id", "user_id"],
+            ["practice_event.id", "practice_event.session_id", "practice_event.user_id"],
+            name="fk_code_snapshot_event_context",
+        ),
         Index("ix_code_snapshot_session_created", "session_id", "created_at"),
         Index("ix_code_snapshot_user_created", "user_id", "created_at"),
         Index("ix_code_snapshot_hash", "code_hash"),
@@ -229,8 +278,29 @@ class CodeSnapshot(Base):
 class SubmissionFeedback(Base):
     __tablename__ = "submission_feedback"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_submission_feedback_session_user",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["event_id", "session_id", "user_id"],
+            ["practice_event.id", "practice_event.session_id", "practice_event.user_id"],
+            name="fk_submission_feedback_event_context",
+        ),
+        ForeignKeyConstraint(
+            ["code_snapshot_id", "session_id", "user_id"],
+            ["code_snapshot.id", "code_snapshot.session_id", "code_snapshot.user_id"],
+            name="fk_submission_feedback_code_snapshot_context",
+        ),
         Index("ix_submission_feedback_session_created", "session_id", "created_at"),
-        Index("ix_submission_feedback_user_result_created", "user_id", "result", "created_at"),
+        Index(
+            "ix_submission_feedback_user_result_created",
+            "user_id",
+            "result",
+            "created_at",
+        ),
         Index("ix_submission_feedback_code_snapshot", "code_snapshot_id"),
     )
 
@@ -293,6 +363,22 @@ class SubmissionFeedback(Base):
 class CoachTurn(Base):
     __tablename__ = "coach_turn"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_coach_turn_session_user",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["user_event_id", "session_id", "user_id"],
+            ["practice_event.id", "practice_event.session_id", "practice_event.user_id"],
+            name="fk_coach_turn_user_event_context",
+        ),
+        ForeignKeyConstraint(
+            ["assistant_event_id", "session_id", "user_id"],
+            ["practice_event.id", "practice_event.session_id", "practice_event.user_id"],
+            name="fk_coach_turn_assistant_event_context",
+        ),
         Index("ix_coach_turn_session_created", "session_id", "created_at"),
         Index("ix_coach_turn_session_phase_after", "session_id", "phase_after"),
         Index("ix_coach_turn_session_hint_after", "session_id", "hint_level_after"),
@@ -389,6 +475,23 @@ class SessionSummary(Base):
     __tablename__ = "session_summary"
     __table_args__ = (
         UniqueConstraint("session_id", name="uq_session_summary_session"),
+        UniqueConstraint(
+            "id",
+            "session_id",
+            "user_id",
+            name="uq_session_summary_id_session_user",
+        ),
+        UniqueConstraint("id", "user_id", name="uq_session_summary_id_user"),
+        ForeignKeyConstraint(
+            ["session_id", "user_id", "problem_id"],
+            [
+                "practice_session.id",
+                "practice_session.user_id",
+                "practice_session.problem_id",
+            ],
+            name="fk_session_summary_session_user_problem",
+            ondelete="CASCADE",
+        ),
         Index("ix_session_summary_user_created", "user_id", "created_at"),
         Index("ix_session_summary_problem", "problem_id"),
     )
@@ -493,10 +596,16 @@ class SessionSummary(Base):
 class UserProfileSnapshot(Base):
     __tablename__ = "user_profile_snapshot"
     __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_user_profile_snapshot_id_user"),
         UniqueConstraint(
             "user_id",
             "version_number",
             name="uq_user_profile_snapshot_user_version",
+        ),
+        ForeignKeyConstraint(
+            ["created_from_summary_id", "user_id"],
+            ["session_summary.id", "session_summary.user_id"],
+            name="fk_user_profile_snapshot_summary_user",
         ),
         Index("ix_user_profile_snapshot_user_created", "user_id", "created_at"),
         Index("ix_user_profile_snapshot_user_source", "user_id", "source"),
@@ -573,6 +682,27 @@ class UserProfileSnapshot(Base):
 class ProfileDelta(Base):
     __tablename__ = "profile_delta"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id", "user_id"],
+            ["practice_session.id", "practice_session.user_id"],
+            name="fk_profile_delta_session_user",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["summary_id", "session_id", "user_id"],
+            ["session_summary.id", "session_summary.session_id", "session_summary.user_id"],
+            name="fk_profile_delta_summary_context",
+        ),
+        ForeignKeyConstraint(
+            ["previous_snapshot_id", "user_id"],
+            ["user_profile_snapshot.id", "user_profile_snapshot.user_id"],
+            name="fk_profile_delta_previous_snapshot_user",
+        ),
+        ForeignKeyConstraint(
+            ["next_snapshot_id", "user_id"],
+            ["user_profile_snapshot.id", "user_profile_snapshot.user_id"],
+            name="fk_profile_delta_next_snapshot_user",
+        ),
         Index("ix_profile_delta_user_created", "user_id", "created_at"),
         Index("ix_profile_delta_session", "session_id"),
         Index("ix_profile_delta_summary", "summary_id"),
