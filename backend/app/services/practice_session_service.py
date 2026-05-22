@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -226,7 +225,7 @@ async def save_code_snapshot(
     session_id: int,
     payload: CodeSnapshotCreate,
 ) -> CodeSnapshotResponse:
-    practice_session = await _load_session(db, user, session_id)
+    practice_session = await _load_session_for_update(db, user, session_id)
     now = datetime.now(UTC)
     code_hash = hashlib.sha256(payload.code_text.encode("utf-8")).hexdigest()
     event = PracticeEvent(
@@ -291,12 +290,22 @@ async def record_submission_feedback(
     session_id: int,
     payload: SubmissionFeedbackCreate,
 ) -> SubmissionFeedbackResponse:
-    practice_session = await _load_session(db, user, session_id)
-    if payload.code_snapshot_id is not None:
-        await _load_code_snapshot(db, user, practice_session.id, payload.code_snapshot_id)
+    practice_session = await _load_session_for_update(db, user, session_id)
+    code_snapshot_id = payload.code_snapshot_id or practice_session.latest_code_snapshot_id
+    if code_snapshot_id is None:
+        logger.warning(
+            "practice_submission_feedback_rejected user_id=%s session_id=%s "
+            "reason=code_snapshot_required_for_submission_feedback",
+            user.id,
+            session_id,
+        )
+        raise PracticeSessionError("code_snapshot_required_for_submission_feedback")
+    await _load_code_snapshot(db, user, practice_session.id, code_snapshot_id)
     now = datetime.now(UTC)
-    next_phase = _phase_after_submission(payload.result, practice_session.phase)
-    if next_phase != practice_session.phase:
+    phase_before = practice_session.phase
+    next_phase = _phase_after_submission(payload.result, phase_before)
+    phase_changed = next_phase != phase_before
+    if phase_changed:
         practice_session.phase = next_phase
     practice_session.attempt_count += 1
     if payload.result in _CONCRETE_SUBMISSION_RESULTS:
@@ -313,7 +322,7 @@ async def record_submission_feedback(
         content_md="",
         payload_json={
             "result": payload.result,
-            "code_snapshot_id": payload.code_snapshot_id,
+            "code_snapshot_id": code_snapshot_id,
             "runtime_ms": payload.runtime_ms,
             "memory_kb": payload.memory_kb,
             "has_failed_case": bool(payload.failed_case_text),
@@ -329,7 +338,7 @@ async def record_submission_feedback(
         session_id=practice_session.id,
         user_id=user.id,
         event_id=event.id,
-        code_snapshot_id=payload.code_snapshot_id,
+        code_snapshot_id=code_snapshot_id,
         result=payload.result,
         runtime_ms=payload.runtime_ms,
         memory_kb=payload.memory_kb,
@@ -340,8 +349,30 @@ async def record_submission_feedback(
         created_at=now,
     )
     db.add(feedback)
-    _touch_session(practice_session, now=now)
     await db.flush()
+    if phase_changed:
+        db.add(
+            PracticeEvent(
+                session_id=practice_session.id,
+                user_id=user.id,
+                event_type="phase_changed",
+                role="system",
+                phase=practice_session.phase,
+                intent=None,
+                content_md="",
+                payload_json={
+                    "phase_before": phase_before,
+                    "phase_after": practice_session.phase,
+                    "reason": "submission_feedback",
+                    "feedback_id": feedback.id,
+                    "result": payload.result,
+                },
+                hint_level=practice_session.current_hint_level,
+                visible_hint_gear=practice_session.visible_hint_gear,
+                created_at=now,
+            )
+        )
+    _touch_session(practice_session, now=now)
     await db.commit()
     logger.info(
         "practice_submission_feedback_recorded user_id=%s session_id=%s "
@@ -355,7 +386,7 @@ async def record_submission_feedback(
     )
     return SubmissionFeedbackResponse(
         id=feedback.id,
-        result=feedback.result,
+        result=cast(Any, feedback.result),
         event_id=event.id,
         code_snapshot_id=feedback.code_snapshot_id,
         created_at=feedback.created_at,
@@ -383,7 +414,8 @@ async def _load_plan_item_context(
             plan_item_id,
         )
         raise PracticeSessionError("plan_item_not_found")
-    return row
+    item, version, plan, problem = row
+    return item, version, plan, problem
 
 
 async def _load_session(
@@ -396,6 +428,30 @@ async def _load_session(
             PracticeSession.id == session_id,
             PracticeSession.user_id == user.id,
         )
+    )
+    practice_session = result.scalar_one_or_none()
+    if practice_session is None:
+        logger.warning(
+            "practice_session_rejected user_id=%s session_id=%s reason=session_not_found",
+            user.id,
+            session_id,
+        )
+        raise PracticeSessionError("session_not_found")
+    return practice_session
+
+
+async def _load_session_for_update(
+    db: AsyncSession,
+    user: AppUser,
+    session_id: int,
+) -> PracticeSession:
+    result = await db.execute(
+        select(PracticeSession)
+        .where(
+            PracticeSession.id == session_id,
+            PracticeSession.user_id == user.id,
+        )
+        .with_for_update()
     )
     practice_session = result.scalar_one_or_none()
     if practice_session is None:
@@ -441,8 +497,10 @@ async def _current_profile_payload(
     plan_id: int,
 ) -> tuple[dict[str, Any], int | None]:
     snapshot = await ensure_initial_profile_snapshot(db, user_id, plan_id)
-    payload = snapshot_payload(snapshot)
-    return asdict(payload), snapshot.id
+    profile = snapshot_payload(snapshot)
+    payload = profile.to_prompt_payload()
+    payload["id"] = profile.id
+    return payload, snapshot.id
 
 
 def _touch_plan_entry(
@@ -475,17 +533,19 @@ def _phase_after_submission(result: str, current_phase: str) -> str:
 
 
 def _event_response(event: PracticeEvent) -> PracticeEventResponse:
-    return PracticeEventResponse(
-        id=event.id,
-        event_type=event.event_type,
-        role=event.role,
-        phase=event.phase,
-        intent=event.intent,
-        content_md=event.content_md,
-        payload=event.payload_json,
-        hint_level=event.hint_level,
-        visible_hint_gear=_hint_gear_label(event.visible_hint_gear),
-        created_at=event.created_at,
+    return PracticeEventResponse.model_validate(
+        {
+            "id": event.id,
+            "event_type": event.event_type,
+            "role": event.role,
+            "phase": event.phase,
+            "intent": event.intent,
+            "content_md": event.content_md,
+            "payload": event.payload_json,
+            "hint_level": event.hint_level,
+            "visible_hint_gear": _hint_gear_label(event.visible_hint_gear),
+            "created_at": event.created_at,
+        }
     )
 
 
@@ -494,25 +554,27 @@ def _session_response(
     *,
     events: list[PracticeEventResponse] | None = None,
 ) -> PracticeSessionResponse:
-    return PracticeSessionResponse(
-        id=practice_session.id,
-        study_plan_id=practice_session.study_plan_id,
-        problem_id=practice_session.problem_id,
-        problem_slug=practice_session.problem_slug,
-        latest_plan_version_id=practice_session.latest_plan_version_id or 0,
-        latest_plan_item_id=practice_session.latest_plan_item_id or 0,
-        training_mode=practice_session.training_mode,
-        phase=practice_session.phase,
-        status=practice_session.status,
-        current_hint_level=practice_session.current_hint_level,
-        visible_hint_gear=_hint_gear_label(practice_session.visible_hint_gear),
-        max_hint_level_used=practice_session.max_hint_level_used or None,
-        attempt_count=practice_session.attempt_count,
-        final_result=practice_session.final_result or None,
-        profile_snapshot=practice_session.profile_snapshot_json,
-        events=events or [],
-        created_at=practice_session.created_at,
-        updated_at=practice_session.updated_at,
+    return PracticeSessionResponse.model_validate(
+        {
+            "id": practice_session.id,
+            "study_plan_id": practice_session.study_plan_id,
+            "problem_id": practice_session.problem_id,
+            "problem_slug": practice_session.problem_slug,
+            "latest_plan_version_id": practice_session.latest_plan_version_id or 0,
+            "latest_plan_item_id": practice_session.latest_plan_item_id or 0,
+            "training_mode": practice_session.training_mode,
+            "phase": practice_session.phase,
+            "status": practice_session.status,
+            "current_hint_level": practice_session.current_hint_level,
+            "visible_hint_gear": _hint_gear_label(practice_session.visible_hint_gear),
+            "max_hint_level_used": practice_session.max_hint_level_used or None,
+            "attempt_count": practice_session.attempt_count,
+            "final_result": practice_session.final_result or None,
+            "profile_snapshot": practice_session.profile_snapshot_json,
+            "events": events or [],
+            "created_at": practice_session.created_at,
+            "updated_at": practice_session.updated_at,
+        }
     )
 
 
