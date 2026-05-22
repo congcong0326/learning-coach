@@ -1,3 +1,5 @@
+from typing import Any
+
 from sqlalchemy import ForeignKeyConstraint, Index, UniqueConstraint
 
 from backend.app.models.practice import (
@@ -50,30 +52,33 @@ def _foreign_key_pairs(constraint: ForeignKeyConstraint) -> tuple[tuple[str, str
     )
 
 
-def _table_unique_constraints(model: type) -> dict[str, tuple[str, ...]]:
-    return {
-        constraint.name: _constraint_columns(constraint)
-        for constraint in model.__table__.constraints
-        if isinstance(constraint, UniqueConstraint)
-    }
+def _table_unique_constraints(model: Any) -> dict[str, tuple[str, ...]]:
+    constraints: dict[str, tuple[str, ...]] = {}
+    for constraint in model.__table__.constraints:
+        if isinstance(constraint, UniqueConstraint):
+            if isinstance(constraint.name, str):
+                constraints[constraint.name] = _constraint_columns(constraint)
+    return constraints
 
 
 def _table_foreign_key_constraints(
-    model: type,
+    model: Any,
 ) -> dict[str, tuple[tuple[str, str], ...]]:
-    return {
-        constraint.name: _foreign_key_pairs(constraint)
-        for constraint in model.__table__.constraints
-        if isinstance(constraint, ForeignKeyConstraint)
-    }
+    constraints: dict[str, tuple[tuple[str, str], ...]] = {}
+    for constraint in model.__table__.constraints:
+        if isinstance(constraint, ForeignKeyConstraint):
+            if isinstance(constraint.name, str):
+                constraints[constraint.name] = _foreign_key_pairs(constraint)
+    return constraints
 
 
-def _table_index_names(model: type) -> set[str]:
-    return {
-        index.name
-        for index in model.__table__.indexes
-        if isinstance(index, Index) and index.name is not None
-    }
+def _table_index_names(model: Any) -> set[str]:
+    names: set[str] = set()
+    for index in model.__table__.indexes:
+        if isinstance(index, Index):
+            assert isinstance(index.name, str)
+            names.add(index.name)
+    return names
 
 
 def test_practice_session_has_identity_and_pointer_constraints() -> None:
