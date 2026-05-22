@@ -19,10 +19,16 @@ const languageOptions: Array<{ label: string; value: CodeSnapshotPayload['langua
 
 export function CodePane({ sessionId, initialCode = '', onSnapshotSaved }: CodePaneProps) {
   const [language, setLanguage] = useState<CodeSnapshotPayload['language']>('python3')
-  const [codeText, setCodeText] = useState(initialCode)
+  const [draft, setDraft] = useState({
+    initialCode,
+    text: initialCode,
+    edited: false,
+  })
   const [clientRevision, setClientRevision] = useState(1)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
+  const codeText =
+    draft.edited || draft.initialCode === initialCode ? draft.text : initialCode
   const canSave = Boolean(sessionId) && codeText.trim().length > 0
 
   const selectedLanguage = useMemo(
@@ -79,7 +85,11 @@ export function CodePane({ sessionId, initialCode = '', onSnapshotSaved }: CodeP
         className="code-draft-input"
         value={codeText}
         onChange={(event) => {
-          setCodeText(event.target.value)
+          setDraft({
+            initialCode,
+            text: event.target.value,
+            edited: true,
+          })
         }}
         placeholder="在这里记录当前解法代码。保存失败不会清空草稿。"
         rows={18}

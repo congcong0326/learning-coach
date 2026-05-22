@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Alert, Button, Col, Row, Space, Tag, Typography } from 'antd'
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { createPracticeSessionForItem } from '../api/practice'
@@ -10,12 +11,21 @@ import { ProblemPane } from './workspace/ProblemPane'
 
 export function WorkspacePage() {
   const { itemId, slug } = useParams()
-  const itemIdNumber = itemId ? Number(itemId) : null
-  const isItemRoute = itemIdNumber !== null && Number.isFinite(itemIdNumber)
+  const isItemRoute = itemId !== undefined
+  const isValidItemRoute = itemId ? /^[1-9]\d*$/.test(itemId) : false
+  const itemIdNumber = isValidItemRoute ? Number(itemId) : null
+  const [latestCodeSnapshot, setLatestCodeSnapshot] = useState<{
+    sessionId: number | null
+    snapshotId: number | null
+  }>({ sessionId: null, snapshotId: null })
   const sessionQuery = useQuery({
-    queryKey: ['practice-session', itemIdNumber],
+    queryKey: ['practice-session', 'plan-item', itemIdNumber],
     queryFn: () => createPracticeSessionForItem(itemIdNumber ?? 0),
-    enabled: isItemRoute,
+    enabled: isItemRoute && isValidItemRoute,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
   })
   const problemSlug = sessionQuery.data?.problem_slug ?? slug
   const { data: problem, isError, isLoading } = useQuery({
@@ -23,6 +33,10 @@ export function WorkspacePage() {
     queryFn: () => getProblem(problemSlug ?? ''),
     enabled: Boolean(problemSlug) && (!isItemRoute || Boolean(sessionQuery.data)),
   })
+  const latestCodeSnapshotId =
+    latestCodeSnapshot.sessionId === (sessionQuery.data?.id ?? null)
+      ? latestCodeSnapshot.snapshotId
+      : null
 
   if (!slug && !isItemRoute) {
     return (
@@ -33,7 +47,7 @@ export function WorkspacePage() {
     )
   }
 
-  if (itemId && !isItemRoute) {
+  if (isItemRoute && !isValidItemRoute) {
     return (
       <section className="page-section workspace-grid">
         <Typography.Title level={2}>做题工作台</Typography.Title>
@@ -94,15 +108,23 @@ export function WorkspacePage() {
         </Col>
         <Col xs={24} lg={8}>
           <CodePane
-            key={`${problemSlug ?? 'workspace'}:${problem?.id ?? 'loading'}`}
+            key={`${sessionQuery.data?.id ?? problemSlug ?? 'workspace'}`}
             sessionId={sessionQuery.data?.id}
             initialCode={problem?.python3_snippet}
+            onSnapshotSaved={(snapshotId) => {
+              setLatestCodeSnapshot({
+                sessionId: sessionQuery.data?.id ?? null,
+                snapshotId,
+              })
+              void sessionQuery.refetch()
+            }}
           />
         </Col>
         <Col xs={24} lg={8}>
           {sessionQuery.data ? (
             <CoachPanel
               session={sessionQuery.data}
+              codeSnapshotId={latestCodeSnapshotId}
               onSessionRefresh={() => {
                 void sessionQuery.refetch()
               }}

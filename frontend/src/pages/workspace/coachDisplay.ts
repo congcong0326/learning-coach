@@ -2,14 +2,16 @@ import type { HintLevel } from '../../api/practice'
 
 const phaseLabels: Record<string, string> = {
   understand_problem: '理解题意',
-  brute_force: '暴力解法',
+  propose_bruteforce: '暴力解法',
   optimize_solution: '推导优化',
-  invariant_or_state: '关键不变量',
-  coding: '编写代码',
-  code_review: '代码 Review',
+  define_invariant: '关键不变量',
+  write_code: '编写代码',
+  review_code: '代码 Review',
   submit_to_leetcode: 'LeetCode 提交',
-  submission_feedback: '提交反馈分析',
-  reflection: '单题复盘',
+  analyze_feedback: '提交反馈分析',
+  summarize: '单题复盘',
+  brute_force: '暴力解法',
+  code_review: '代码 Review',
 }
 
 const hintLevelLabels: Record<HintLevel, string> = {

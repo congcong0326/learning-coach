@@ -1,4 +1,4 @@
-import { Form, Input, InputNumber, Modal, Select, message } from 'antd'
+import { Form, Input, InputNumber, Modal, Select, Typography, message } from 'antd'
 import { useState } from 'react'
 
 import {
@@ -67,6 +67,11 @@ export function SubmissionFeedbackModal({
       onCancel={onClose}
       destroyOnHidden
     >
+      <Typography.Paragraph type="secondary">
+        {codeSnapshotId
+          ? `将关联代码快照 #${codeSnapshotId}`
+          : '未选择代码快照，将尝试关联服务端最近保存的代码快照。'}
+      </Typography.Paragraph>
       <Form form={form} layout="vertical" initialValues={{ result: 'unknown' }}>
         <Form.Item
           name="result"

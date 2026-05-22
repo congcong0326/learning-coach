@@ -1,13 +1,23 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CoachPanel } from './CoachPanel'
 import type { WorkspacePracticeSession } from './types'
 
+const llmRunMock = vi.hoisted(() => ({
+  startRun: vi.fn(),
+  cancelRun: vi.fn(),
+}))
+
+const practiceApiMock = vi.hoisted(() => ({
+  sendPracticeMessage: vi.fn(),
+  submitLeetCodeFeedback: vi.fn(),
+}))
+
 vi.mock('../../hooks/useLlmRun', () => ({
   useLlmRun: () => ({
-    startRun: vi.fn(),
-    cancelRun: vi.fn(),
+    startRun: llmRunMock.startRun,
+    cancelRun: llmRunMock.cancelRun,
     isRunning: false,
     displayText: '',
     stage: '',
@@ -16,7 +26,19 @@ vi.mock('../../hooks/useLlmRun', () => ({
   }),
 }))
 
+vi.mock('../../api/practice', () => ({
+  sendPracticeMessage: practiceApiMock.sendPracticeMessage,
+  submitLeetCodeFeedback: practiceApiMock.submitLeetCodeFeedback,
+}))
+
 describe('CoachPanel', () => {
+  beforeEach(() => {
+    llmRunMock.startRun.mockReset()
+    llmRunMock.cancelRun.mockReset()
+    practiceApiMock.sendPracticeMessage.mockReset()
+    practiceApiMock.submitLeetCodeFeedback.mockReset()
+  })
+
   it('shows profile source and confidence from session snapshot', () => {
     render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
 
@@ -30,6 +52,50 @@ describe('CoachPanel', () => {
     render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
 
     expect(screen.getByRole('button', { name: '提交回填' })).toBeInTheDocument()
+  })
+
+  it('passes saved code snapshot id to submission feedback modal', async () => {
+    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
+      id: 1,
+      result: 'unknown',
+      event_id: 2,
+      code_snapshot_id: 777,
+      created_at: '2026-05-22T00:00:00Z',
+    })
+
+    render(
+      <CoachPanel
+        session={stubSession()}
+        codeSnapshotId={777}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '提交回填' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /保\s*存/ }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledWith(
+        100,
+        expect.objectContaining({ code_snapshot_id: 777, result: 'unknown' }),
+      ),
+    )
+  })
+
+  it('shows summary action after accepted submission', () => {
+    render(
+      <CoachPanel
+        session={{ ...stubSession(), final_result: 'ac', phase: 'summarize' }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '进入复盘' }))
+
+    expect(llmRunMock.startRun).toHaveBeenCalledWith('coach_summary', {
+      session_id: 100,
+      trigger: 'request_summary',
+    })
   })
 })
 

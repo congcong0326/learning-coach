@@ -13,6 +13,7 @@ import type { WorkspacePracticeSession } from './types'
 
 type CoachPanelProps = {
   session: WorkspacePracticeSession
+  codeSnapshotId?: number | null
   onSessionRefresh: () => void
 }
 
@@ -32,16 +33,29 @@ const hintOptions: Array<{ label: string; value: HintLevel }> = [
   { label: hintLevelLabel('reflection'), value: 'reflection' },
 ]
 
-export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
+export function CoachPanel({
+  session,
+  codeSnapshotId = null,
+  onSessionRefresh,
+}: CoachPanelProps) {
   const [intent, setIntent] = useState<UserIntent>('describe_idea')
-  const [requestedHintLevel, setRequestedHintLevel] = useState<HintLevel>(
-    session.visible_hint_gear,
-  )
+  const [hintDraft, setHintDraft] = useState<{
+    sessionHintLevel: HintLevel
+    value: HintLevel
+  }>({ sessionHintLevel: session.visible_hint_gear, value: session.visible_hint_gear })
   const [content, setContent] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const llmRun = useLlmRun({ onResult: onSessionRefresh })
   const profile = session.profile_snapshot
+  const canRequestSummary =
+    session.final_result === 'ac' ||
+    session.status === 'summarizing' ||
+    session.phase === 'summarize'
+  const requestedHintLevel =
+    hintDraft.sessionHintLevel === session.visible_hint_gear
+      ? hintDraft.value
+      : session.visible_hint_gear
 
   async function handleSend() {
     const trimmedContent = content.trim()
@@ -68,11 +82,29 @@ export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
     }
   }
 
+  async function handleSummary() {
+    try {
+      await llmRun.startRun('coach_summary', {
+        session_id: session.id,
+        trigger: 'request_summary',
+      })
+    } catch {
+      toast.error('复盘生成失败，请稍后重试')
+    }
+  }
+
   return (
     <div className="workspace-pane coach-panel">
       <div className="workspace-pane-heading">
         <h3>教练</h3>
-        <Button onClick={() => setFeedbackOpen(true)}>提交回填</Button>
+        <Space wrap>
+          {canRequestSummary ? (
+            <Button type="primary" onClick={handleSummary} loading={llmRun.isRunning}>
+              进入复盘
+            </Button>
+          ) : null}
+          <Button onClick={() => setFeedbackOpen(true)}>提交回填</Button>
+        </Space>
       </div>
 
       <div className="coach-state-bar">
@@ -138,7 +170,9 @@ export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
               aria-label="提示档位"
               value={requestedHintLevel}
               options={hintOptions}
-              onChange={setRequestedHintLevel}
+              onChange={(value) =>
+                setHintDraft({ sessionHintLevel: session.visible_hint_gear, value })
+              }
               style={{ width: 132 }}
             />
           </Space>
@@ -175,6 +209,7 @@ export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
       <SubmissionFeedbackModal
         open={feedbackOpen}
         sessionId={session.id}
+        codeSnapshotId={codeSnapshotId}
         onClose={() => setFeedbackOpen(false)}
         onSubmitted={onSessionRefresh}
       />
