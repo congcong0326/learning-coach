@@ -1,5 +1,7 @@
 # AI 教练工作台研发设计
 
+> 编码以 `docs/superpowers/specs/2026-05-22-ai-coach-workbench-profile-coding-spec.md` 为准。本文保留为早期工作台研发设计背景，新规格已合并 `docs/prd/ai-coach-user-profile-prd.md` 中的画像指标、增量更新、证据追溯和后端合并规则。
+
 ## 1. 文档目的
 
 本文档基于 `docs/prd/ai-coach-workbench-prd.md`，给出右侧 AI 教练工作台的研发设计。
