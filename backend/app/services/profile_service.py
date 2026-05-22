@@ -8,6 +8,7 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.models.auth import AppUser
 from backend.app.models.practice import ProfileDelta, UserProfileSnapshot
 from backend.app.services.profile_provider import (
     ProfileConfidence,
@@ -18,6 +19,44 @@ from backend.app.services.profile_provider import (
 logger = logging.getLogger(__name__)
 
 
+_ALLOWED_PROFILE_SOURCES = {
+    "initial_goal_plan",
+    "mock_from_goal_and_plan",
+    "summary_patch",
+    "manual_repair",
+}
+_ALLOWED_PROFILE_CONFIDENCES = {"low", "medium", "high"}
+_ALLOWED_PATCH_KEYS = {
+    "ability_profile",
+    "ability_profile_json",
+    "confidence",
+    "overall_level",
+    "preferred_training_mode",
+    "recent_summary",
+    "recent_summary_md",
+    "skill_profile",
+    "skill_profile_json",
+    "source",
+    "strategy",
+    "strategy_json",
+    "stuck_point_profile",
+    "stuck_point_profile_json",
+}
+_PROFILE_SECTION_KEYS = {
+    "ability_profile",
+    "ability_profile_json",
+    "skill_profile",
+    "skill_profile_json",
+    "strategy",
+    "strategy_json",
+    "stuck_point_profile",
+    "stuck_point_profile_json",
+}
+_SHORT_TEXT_LIMIT = 120
+_LONG_TEXT_LIMIT = 1200
+_MERGED_LIST_LIMIT = 16
+
+
 class ProfileServiceError(ValueError):
     """画像服务输入或状态不满足后端合并约束。"""
 
@@ -25,6 +64,14 @@ class ProfileServiceError(ValueError):
 @dataclass(frozen=True)
 class ProfilePatchValidation:
     accepted: bool
+    rejection_reason: str = ""
+
+
+@dataclass(frozen=True)
+class ApplyProfileDeltaResult:
+    accepted: bool
+    snapshot: UserProfileSnapshot | None
+    delta: ProfileDelta
     rejection_reason: str = ""
 
 
@@ -74,6 +121,7 @@ async def ensure_initial_profile_snapshot(
     user_id: int,
     plan_id: int,
 ) -> UserProfileSnapshot:
+    await _lock_user(session, user_id)
     existing = await latest_profile_snapshot(session, user_id)
     if existing is not None:
         logger.info(
@@ -126,13 +174,43 @@ def validate_profile_patch(
         raise ProfileServiceError("patch_json must be an object")
     if not isinstance(evidence_json, list):
         raise ProfileServiceError("evidence_json must be a list")
-    if any(not isinstance(item, dict) for item in evidence_json):
-        raise ProfileServiceError("evidence_json items must be objects")
     if not evidence_json:
         return ProfilePatchValidation(
             accepted=False,
             rejection_reason="profile_delta_missing_evidence",
         )
+    unknown_keys = set(patch_json) - _ALLOWED_PATCH_KEYS
+    if unknown_keys:
+        raise ProfileServiceError(
+            "profile patch contains unknown keys: " + ", ".join(sorted(unknown_keys))
+        )
+    confidence = patch_json.get("confidence")
+    if confidence is not None and confidence not in _ALLOWED_PROFILE_CONFIDENCES:
+        raise ProfileServiceError("profile patch confidence is invalid")
+    source = patch_json.get("source")
+    if source is not None and source not in _ALLOWED_PROFILE_SOURCES:
+        raise ProfileServiceError("profile patch source is invalid")
+    for key in ("overall_level", "preferred_training_mode"):
+        _validate_text_field(key, patch_json.get(key), _SHORT_TEXT_LIMIT)
+    for key in ("recent_summary", "recent_summary_md"):
+        _validate_text_field(key, patch_json.get(key), _LONG_TEXT_LIMIT)
+    for key in _PROFILE_SECTION_KEYS:
+        value = patch_json.get(key)
+        if value is not None:
+            if not isinstance(value, dict):
+                raise ProfileServiceError(f"profile patch section must be an object: {key}")
+            _validate_section_text(value, path=key)
+    for index, item in enumerate(evidence_json):
+        if not isinstance(item, dict):
+            raise ProfileServiceError("evidence_json items must be objects")
+        source_value = item.get("source")
+        summary_value = item.get("summary")
+        if not isinstance(source_value, str) or not source_value.strip():
+            raise ProfileServiceError(f"evidence_json[{index}].source is required")
+        if not isinstance(summary_value, str) or not summary_value.strip():
+            raise ProfileServiceError(f"evidence_json[{index}].summary is required")
+        _validate_text_field(f"evidence_json[{index}].source", source_value, _SHORT_TEXT_LIMIT)
+        _validate_text_field(f"evidence_json[{index}].summary", summary_value, 800)
     return ProfilePatchValidation(accepted=True)
 
 
@@ -140,9 +218,27 @@ async def apply_profile_delta(
     session: AsyncSession,
     delta_id: int,
 ) -> UserProfileSnapshot:
-    delta = await session.get(ProfileDelta, delta_id)
+    result = await apply_profile_delta_result(session, delta_id)
+    if not result.accepted or result.snapshot is None:
+        raise ProfileServiceError(result.rejection_reason or "profile_delta_rejected")
+    return result.snapshot
+
+
+async def apply_profile_delta_result(
+    session: AsyncSession,
+    delta_id: int,
+) -> ApplyProfileDeltaResult:
+    """返回画像增量应用结果，不用异常表达可持久化拒绝状态。
+
+    调用方如果需要提交“拒绝 delta”的状态，必须调用本函数并在返回
+    `accepted=False` 后自行决定 commit；`apply_profile_delta()` 是便捷包装，
+    会在拒绝时抛错，普通异常处理可能导致本事务回滚。
+    """
+
+    delta = await _load_delta_for_update(session, delta_id)
     if delta is None:
         raise ProfileServiceError(f"profile_delta not found: {delta_id}")
+    await _lock_user(session, delta.user_id)
     if delta.status == "accepted":
         if delta.next_snapshot_id is None:
             raise ProfileServiceError("accepted profile_delta missing next_snapshot_id")
@@ -155,9 +251,14 @@ async def apply_profile_delta(
             delta.id,
             next_snapshot.id,
         )
-        return next_snapshot
+        return ApplyProfileDeltaResult(accepted=True, snapshot=next_snapshot, delta=delta)
     if delta.status == "rejected":
-        raise ProfileServiceError(delta.rejection_reason or "profile_delta_already_rejected")
+        return ApplyProfileDeltaResult(
+            accepted=False,
+            snapshot=None,
+            delta=delta,
+            rejection_reason=delta.rejection_reason or "profile_delta_already_rejected",
+        )
     if delta.status != "proposed":
         raise ProfileServiceError(f"profile_delta status is not processable: {delta.status}")
 
@@ -173,7 +274,12 @@ async def apply_profile_delta(
             delta.id,
             validation.rejection_reason,
         )
-        raise ProfileServiceError(validation.rejection_reason)
+        return ApplyProfileDeltaResult(
+            accepted=False,
+            snapshot=None,
+            delta=delta,
+            rejection_reason=validation.rejection_reason,
+        )
 
     previous = await _previous_snapshot_for_delta(session, delta)
     merged = _merge_snapshot_payload(previous, delta.patch_json, delta.evidence_json)
@@ -217,7 +323,33 @@ async def apply_profile_delta(
         snapshot.id,
         snapshot.version_number,
     )
-    return snapshot
+    return ApplyProfileDeltaResult(accepted=True, snapshot=snapshot, delta=delta)
+
+
+async def _load_delta_for_update(
+    session: AsyncSession,
+    delta_id: int,
+) -> ProfileDelta | None:
+    result = await session.execute(
+        select(ProfileDelta)
+        .where(ProfileDelta.id == delta_id)
+        .with_for_update()
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _lock_user(session: AsyncSession, user_id: int) -> AppUser:
+    result = await session.execute(
+        select(AppUser)
+        .where(AppUser.id == user_id)
+        .with_for_update()
+        .limit(1)
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise ProfileServiceError(f"profile user not found: {user_id}")
+    return user
 
 
 async def _previous_snapshot_for_delta(
@@ -316,9 +448,7 @@ def _merged_dict(base: dict[str, Any], patch: Any) -> dict[str, Any]:
         return dict(base)
     if not isinstance(patch, dict):
         raise ProfileServiceError("profile patch sections must be objects")
-    merged = dict(base)
-    merged.update(patch)
-    return merged
+    return _deep_merge_dict(base, patch)
 
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
@@ -338,17 +468,68 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _profile_source(value: str) -> ProfileSource:
-    if value in {
-        "initial_goal_plan",
-        "mock_from_goal_and_plan",
-        "summary_patch",
-        "manual_repair",
-    }:
+    if value in _ALLOWED_PROFILE_SOURCES:
         return cast(ProfileSource, value)
     return "manual_repair"
 
 
 def _profile_confidence(value: str) -> ProfileConfidence:
-    if value in {"low", "medium", "high"}:
+    if value in _ALLOWED_PROFILE_CONFIDENCES:
         return cast(ProfileConfidence, value)
     return "low"
+
+
+def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in patch.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dict(current, value)
+        elif isinstance(current, list) and isinstance(value, list):
+            merged[key] = _merge_lists(current, value)
+        elif isinstance(value, list):
+            merged[key] = _merge_lists([], value)
+        elif isinstance(value, dict):
+            merged[key] = _deep_merge_dict({}, value)
+        elif isinstance(value, str):
+            merged[key] = value[:_LONG_TEXT_LIMIT]
+        else:
+            merged[key] = value
+    return merged
+
+
+def _merge_lists(base: list[Any], patch: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for item in [*base, *patch]:
+        normalized = str(item)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(item)
+        if len(merged) >= _MERGED_LIST_LIMIT:
+            break
+    return merged
+
+
+def _validate_text_field(name: str, value: Any, limit: int) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ProfileServiceError(f"{name} must be a string")
+    if len(value) > limit:
+        raise ProfileServiceError(f"{name} exceeds length limit")
+
+
+def _validate_section_text(value: Any, *, path: str) -> None:
+    if isinstance(value, str):
+        if len(value) > _LONG_TEXT_LIMIT:
+            raise ProfileServiceError(f"{path} exceeds length limit")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_section_text(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value[:_MERGED_LIST_LIMIT + 1]):
+            _validate_section_text(item, path=f"{path}[{index}]")
