@@ -475,6 +475,46 @@ async def test_coach_turn_persists_serializable_assistant_event_without_result_e
 
 
 @pytest.mark.asyncio
+async def test_coach_turn_does_not_commit_before_terminal_run_update(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="write_code",
+            user_intent="code_review",
+            with_code=True,
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="code_review",
+        )
+
+        async def fail_commit() -> None:
+            raise AssertionError("coach turn handler must not commit before orchestrator terminal update")
+
+        monkeypatch.setattr(session, "commit", fail_commit)
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakePlanProvider(),
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+
+@pytest.mark.asyncio
 async def test_coach_turn_requires_explicit_user_event_id(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -534,6 +574,43 @@ async def test_coach_turn_rejects_invalid_user_event_id(
             )
 
         assert exc_info.value.code == "practice_session_not_found"
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_rejects_trigger_mismatch_with_user_event_intent(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="write_code",
+            user_intent="request_summary",
+            with_code=True,
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="code_review",
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        with pytest.raises(LearningFlowError) as exc_info:
+            await run_coach_turn(
+                session,
+                user_id=user.id,
+                run=run,
+                provider=FakePlanProvider(),
+                model_name="gpt-test",
+                publish=publish,
+            )
+
+        assert exc_info.value.code == "coach_output_invalid"
 
 
 @pytest.mark.asyncio

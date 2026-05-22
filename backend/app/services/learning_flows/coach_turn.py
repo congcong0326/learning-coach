@@ -22,12 +22,20 @@ from backend.app.services.llm_run_events import LlmRunEvent
 from backend.app.services.llm_run_service import (
     LlmRunError,
     ensure_llm_run_mutable,
-    update_llm_run_display_text,
 )
 
 
 PROMPT_VERSION = "coach-turn-v1-deterministic"
 SAFE_REPLY = "我已经记录你的输入。先说明你的暴力解法、你准备维护的关键状态，以及你认为必须覆盖的边界用例。"
+COACH_EVENT_TRIGGERS = {
+    "describe_idea",
+    "stuck",
+    "request_hint",
+    "code_review",
+    "submit_feedback",
+    "request_summary",
+    "unknown",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +85,7 @@ async def run_coach_turn(
     trigger_context = _trigger_context(
         payload,
         practice_session,
+        user_event=user_event,
         has_submission_feedback=has_feedback,
         force_summary=run.kind == "coach_summary",
     )
@@ -107,7 +116,6 @@ async def run_coach_turn(
         message="正在生成教练回复",
     )
     await publish(LlmRunEvent("delta", {"run_id": run.id, "text": SAFE_REPLY}))
-    await _update_display_text(session, run, SAFE_REPLY)
 
     now = datetime.now(UTC)
     phase_before = practice_session.phase
@@ -165,6 +173,9 @@ async def run_coach_turn(
     practice_session.updated_at = now
     await session.flush()
     await _ensure_run_mutable(session, run)
+    # 教练回复与会话状态必须和 run 终态在同一事务提交；这里只更新内存对象，
+    # 避免中途 commit 释放 practice_session 行锁后产生并发教练回合。
+    run.display_text_md = SAFE_REPLY
 
     result = _result_payload(
         practice_session,
@@ -240,6 +251,7 @@ async def _load_user_event(
             PracticeEvent.session_id == session_id,
             PracticeEvent.user_id == user_id,
             PracticeEvent.role == "user",
+            PracticeEvent.event_type == "user_message",
         )
     )
     user_event = result.scalar_one_or_none()
@@ -269,18 +281,30 @@ def _trigger_context(
     payload: dict[str, Any],
     practice_session: PracticeSession,
     *,
+    user_event: PracticeEvent | None,
     has_submission_feedback: bool,
     force_summary: bool,
 ) -> dict[str, str]:
-    trigger = payload.get("trigger") or ("request_summary" if force_summary else None)
-    if not isinstance(trigger, str):
+    payload_trigger = payload.get("trigger")
+    if payload_trigger is not None and not isinstance(payload_trigger, str):
         raise LearningFlowError("coach_output_invalid")
-    if (
-        force_summary
-        or trigger == "request_summary"
-        or practice_session.final_result == "ac"
-        or practice_session.status == "summarizing"
-    ):
+
+    if force_summary:
+        if payload_trigger is not None and payload_trigger != "request_summary":
+            raise LearningFlowError("coach_output_invalid")
+        trigger = "request_summary"
+    else:
+        if user_event is None:
+            raise LearningFlowError("coach_output_invalid")
+        event_trigger = user_event.intent or "unknown"
+        if payload_trigger is not None and payload_trigger != event_trigger:
+            raise LearningFlowError("coach_output_invalid")
+        trigger = event_trigger
+
+    if trigger not in COACH_EVENT_TRIGGERS:
+        raise LearningFlowError("coach_output_invalid")
+
+    if trigger == "request_summary" or practice_session.final_result == "ac" or practice_session.status == "summarizing":
         return {
             "trigger": trigger,
             "proposed_phase": "summarize",
@@ -308,6 +332,13 @@ def _trigger_context(
             "next_action": "offer_questioning_hint",
             "diagnosed_stuck_point": "needs_hint",
         }
+    if trigger == "stuck":
+        return {
+            "trigger": trigger,
+            "proposed_phase": practice_session.phase,
+            "next_action": "diagnose_stuck_point",
+            "diagnosed_stuck_point": "user_reported_stuck",
+        }
     if trigger == "describe_idea":
         proposed_phase = "analyze_feedback" if has_submission_feedback else practice_session.phase
         return {
@@ -316,7 +347,12 @@ def _trigger_context(
             "next_action": "ask_bruteforce_state_and_edges",
             "diagnosed_stuck_point": "bruteforce_state_unclear",
         }
-    raise LearningFlowError("coach_output_invalid")
+    return {
+        "trigger": trigger,
+        "proposed_phase": practice_session.phase,
+        "next_action": "ask_clarifying_question",
+        "diagnosed_stuck_point": "intent_unclear",
+    }
 
 
 def _user_intent(user_event: PracticeEvent | None) -> str:
@@ -388,20 +424,5 @@ async def _publish_progress(
 async def _ensure_run_mutable(session: AsyncSession, run: LlmRun) -> None:
     try:
         await ensure_llm_run_mutable(session, run)
-    except LlmRunError as exc:
-        raise LearningFlowError(exc.detail) from None
-
-
-async def _update_display_text(
-    session: AsyncSession,
-    run: LlmRun,
-    display_text_md: str,
-) -> None:
-    try:
-        await update_llm_run_display_text(
-            session,
-            run,
-            display_text_md=display_text_md,
-        )
     except LlmRunError as exc:
         raise LearningFlowError(exc.detail) from None
