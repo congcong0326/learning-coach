@@ -11,20 +11,20 @@
 ## 目录职责
 
 - `backend/app/main.py`：FastAPI 应用工厂和路由注册。
-- `backend/app/api/`：HTTP API 路由，当前包含健康检查、数据库健康检查、题库 API、本地认证 API、用户级 LLM API 资产 API、统一 LLM Run 流式 API、目标校准与学习计划 API。
+- `backend/app/api/`：HTTP API 路由，当前包含健康检查、数据库健康检查、题库 API、本地认证 API、用户级 LLM API 资产 API、统一 LLM Run 流式 API、目标校准与学习计划 API、计划题训练工作台 API。
 - `backend/app/core/`：配置和基础设施入口，当前使用 Pydantic Settings 读取 `.env`，包含数据库、session cookie 和 API key 加密配置。
 - `backend/app/db/`：SQLAlchemy async engine、session、数据库健康检查和 Alembic migration。
-- `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类、题目分类关系、本地用户、登录 session、LLM API 资产、LLM Run、目标校准草稿、学习计划、计划版本、阶段、计划项和变更日志。
-- `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库、认证、LLM API 资产、LLM Run、目标校准和学习计划相关请求响应。
-- `backend/app/services/`：业务服务层，当前包含题库查询、题库 seed 导入、认证 session、API key 加密、LLM API 资产管理、粘性路由、OpenAI 连接测试、统一 LLM Run 状态与 SSE 事件、OpenAI Responses 流式 provider、目标校准/计划生成 flow、计划草稿校验和学习计划生命周期服务。
+- `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类、题目分类关系、本地用户、登录 session、LLM API 资产、LLM Run、目标校准草稿、学习计划、计划版本、阶段、计划项、变更日志、训练会话、训练事件、代码快照、LeetCode 回填、教练回合、单题复盘、画像快照和画像增量。
+- `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库、认证、LLM API 资产、LLM Run、目标校准、学习计划和训练工作台相关请求响应。
+- `backend/app/services/`：业务服务层，当前包含题库查询、题库 seed 导入、认证 session、API key 加密、LLM API 资产管理、粘性路由、OpenAI 连接测试、统一 LLM Run 状态与 SSE 事件、OpenAI Responses 流式 provider、目标校准/计划生成 flow、计划草稿校验、学习计划生命周期服务、训练会话服务、画像 Provider/合并服务、教练状态守卫和教练 run handler。
 - `backend/app/agents/`：后续 LangGraph / Agent 编排代码目录。
 - `backend/app/rag/`：后续知识导入、切块、embedding 和检索代码目录。
 - `backend/app/tools/`：后续代码执行、静态分析、错误归因等工具客户端目录。
 - `backend/tests/`：后端基座测试。
 - `frontend/`：Vite React 前端，使用 Ant Design、React Router、TanStack Query 和 Monaco Editor。
-- `frontend/src/pages/`：当前 SPA 页面，包括登录、注册、API 设置、题库、目标校准、学习计划、学习计划历史、工作台、复盘和 Trace。
+- `frontend/src/pages/`：当前 SPA 页面，包括登录、注册、API 设置、题库、目标校准、学习计划、学习计划历史、计划题训练工作台、复盘和 Trace。
 - `frontend/src/routes/`：前端路由、首访重定向和登录态保护。
-- `frontend/src/api/`：前端 API client 与后端请求封装，所有业务请求通过后端 API 并携带 HttpOnly session cookie；大模型生成通过 `llmRuns` 创建 run 和订阅 SSE。
+- `frontend/src/api/`：前端 API client 与后端请求封装，所有业务请求通过后端 API 并携带 HttpOnly session cookie；大模型生成通过 `llmRuns` 创建 run 和订阅 SSE，训练工作台通过 `practice` client 创建/恢复 session、保存消息、代码快照和提交回填。
 - `frontend/src/hooks/`：前端通用状态 hook，当前包含 `useLlmRun` 用于管理 LLM Run 创建、SSE 事件、取消和结果状态。
 - `frontend/src/components/`：前端通用组件，当前包含 `LlmStreamingPanel` 用于展示大模型流式输出、阶段进度、错误和取消操作。
 - `infra/docker/`：后端、前端、code-runner 镜像和 Nginx 配置。

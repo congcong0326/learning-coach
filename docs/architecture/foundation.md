@@ -11,6 +11,7 @@
 - PostgreSQL + pgvector 数据库。
 - Alembic migration。
 - 本地用户注册登录和用户级 OpenAI API 资产配置。
+- 目标校准、学习计划、计划题训练工作台和基础 AI 教练闭环。
 - Docker Compose 开发环境。
 - Makefile 一键命令。
 - 基础 smoke test。
@@ -56,6 +57,8 @@ PRD v0.3 第一版不再把本地代码运行纳入核心产品流程。用户�
 Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态优先交给 TanStack Query。只有当客户端全局状态明显变复杂时再考虑 Redux。
 
 当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
+
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，左侧展示题目与代码草稿，右侧展示画像摘要、训练阶段、教练时间线、LeetCode 回填和复盘入口。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型。
 
 ## 后端选型
 
@@ -104,16 +107,26 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/study-plans/{plan_id}/versions/{version_id}/activate`
 - `PATCH /api/study-plan/items/{item_id}`
 - `POST /api/study-plan/stages/{stage_id}/reorder`
+- `POST /api/study-plan/items/{item_id}/practice-session`
+- `GET /api/practice-sessions/{session_id}`
+- `GET /api/practice-sessions/{session_id}/events`
+- `POST /api/practice-sessions/{session_id}/messages`
+- `POST /api/practice-sessions/{session_id}/code-snapshots`
+- `POST /api/practice-sessions/{session_id}/submission-feedback`
+- `POST /api/practice-sessions/{session_id}/summary`
 
 当前和后续产品功能会放在以下模块边界中：
 
 - `backend.app.api`：HTTP API。
 - `backend.app.api.learning`：目标校准、计划草稿、计划确认、当前计划、计划历史、计划项状态、计划重排和版本激活 API。
+- `backend.app.api.practice`：计划题训练会话、事件时间线、用户消息、代码快照、LeetCode 回填和复盘 run 创建 API。
 - `backend.app.core`：配置和基础设施。
 - `backend.app.db`：数据库连接、migration 支撑。
 - `backend.app.models`：SQLAlchemy 模型。
 - `backend.app.models.learning`：目标校准草稿、学习计划、计划版本、阶段、计划项和变更日志。
+- `backend.app.models.practice`：训练会话、训练事件、代码快照、提交回填、教练回合、单题复盘、长期画像快照和画像增量。
 - `backend.app.schemas`：Pydantic 输入输出模型。
+- `backend.app.schemas.practice`：训练工作台请求响应、阶段、提示档位、训练事件、画像摘要和提交回填 schema。
 - `backend.app.services.auth_service`：本地用户、Argon2id 密码 hash、session token hash、注册登录退出和当前用户查询。
 - `backend.app.services.credential_crypto`：Fernet API key 加密、解密和 mask。
 - `backend.app.services.llm_credential_service`：用户级 OpenAI API 资产 CRUD、首选/当前通讯资产处理、粘性路由、连续失败计数和所有权校验。
@@ -121,10 +134,14 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.llm_run_events`：单进程开发环境中的 SSE 事件编码和内存事件 hub。
 - `backend.app.services.llm_orchestrator`：统一执行 LLM Run，负责选择模型资产、解密 API key、创建 provider、调度具体学习 flow，并只在 run 成功提交后发布最终 result。
 - `backend.app.services.llm_providers`：大模型 provider 适配层，当前封装 OpenAI Responses 流式输出。
-- `backend.app.services.learning_flows`：可流式执行的学习业务 flow，当前包含目标校准追问、追问回答和学习计划草稿生成。
+- `backend.app.services.learning_flows`：可流式执行的学习业务 flow，当前包含目标校准追问、追问回答、学习计划草稿生成、教练单轮回复和单题复盘。
 - `backend.app.services.learning_plan_llm`：目标校准追问、学习计划草稿生成、OpenAI Responses client 和 LLM repair loop 编排。
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
+- `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、阶段状态和前端 payload 组装。
+- `backend.app.services.profile_provider`：面向 AI 教练的安全画像摘要 Provider，隔离长期画像表和 prompt 输入。
+- `backend.app.services.profile_service`：初始画像、画像增量校验、画像快照版本化、单题复盘到画像更新的合并逻辑。
+- `backend.app.services.coach_guard`：教练阶段跳转和提示档位守卫，防止低提示档位输出完整解法或无证据快进。
 - `backend.app.agents`：LangGraph 编排。
 - `backend.app.rag`：知识库导入、切块、检索。
 - `backend.app.tools`：后续工具能力目录。PRD v0.3 第一版优先做 LeetCode 提交结果归因；如后续重新引入本地代码运行，再在此边界内接入。
@@ -182,11 +199,20 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `study_plan_item`，保存正式题库题目引用、推荐理由、建议训练模式、状态、顺序和锁定标记。
 - 创建 `plan_change_log`，记录版本调整中的 preserved、added、removed 和 reordered 变化。
 
-T1 当前只把学习计划项和题库题目关联起来；真实训练会话、训练事件和提交历史将在 T2 通过稳定的 plan/version/item 标识继续关联。
-
 当前 LLM Run 相关 migration 会：
 
 - 创建 `llm_run`，保存用户、run kind、关联业务对象、输入摘要、阶段、可展示流式文本、最终 result、错误摘要、取消标记、使用的模型资产和时间戳。
+
+当前训练工作台和用户画像相关 migration 会：
+
+- 创建 `practice_session`，以 `user_id + study_plan_id + problem_id` 保证同一计划题复用同一个训练会话，并记录 origin/latest 计划版本追溯字段。
+- 创建 `practice_event`，保存用户消息、AI 回复、代码保存、提交回填、阶段变化、复盘和画像更新等训练时间线事件。
+- 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
+- 创建 `submission_feedback`，保存用户手动回填的 LeetCode 结果、失败样例摘要、错误信息和运行指标。
+- 创建 `coach_turn`，保存一次 AI 教练回复的阶段判断、提示档位、守卫结果、上下文快照和 assistant event 关联。
+- 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、错因、画像信号和画像更新建议，且一个 session 只保留一个 summary。
+- 创建 `user_profile_snapshot`，保存面向 AI 教练读取的长期画像版本，不原地覆盖旧版本。
+- 创建 `profile_delta`，保存一次复盘对长期画像的增量影响；无证据 delta 会被拒绝，接受后生成新的 `user_profile_snapshot`。
 
 ### 统一 LLM Run 流式层
 
@@ -195,6 +221,8 @@ T1 当前只把学习计划项和题库题目关联起来；真实训练会话�
 第一版持久化 run 状态、阶段、最终结果、错误摘要和取消状态，不保存完整 token 日志。页面刷新后可以恢复 run 状态和最终结果；未完成的运行在单进程开发环境中通过内存事件 hub 继续推送，后续多 worker 部署再引入外部队列或持久事件表。
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
+
+训练工作台也接入该层：`coach_turn` run 持久化 assistant event 和 `coach_turn` 记录，`coach_summary` run 在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`。第一版教练回复仍使用确定性安全回复和后端有限状态编排，LangGraph、RAG 和更完整的模型结构化输出后续可以在相同 run kind 边界内替换。
 
 ## Docker Compose 角色
 
@@ -245,10 +273,9 @@ make down
 
 基座完成后，后续功能应按 PRD 里程碑推进：
 
-1. 做题工作台的训练会话与 AI 教练对话。
-2. 基础 AI 教练闭环。
-3. LangGraph 状态机。
-4. RAG 教练知识库。
-5. LeetCode 提交回填与错因归因。
-6. 复盘、画像和推荐。
-7. Trace 和评估。
+1. 将当前确定性 AI 教练回复升级为可校验的结构化模型输出。
+2. LangGraph 状态机。
+3. RAG 教练知识库。
+4. 更完整的 LeetCode 提交错因归因。
+5. 画像驱动推荐和画像可视化。
+6. Trace 和评估。

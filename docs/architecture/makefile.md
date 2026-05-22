@@ -182,7 +182,7 @@ docker compose --env-file .env -f infra/compose/docker-compose.dev.yml exec back
 成功标准：
 
 - Alembic 升级到 head。
-- 当前 head 为 `20260519_0003`。
+- 当前 head 为 `20260522_0007`。
 
 ### `make prepare-problem-seed`
 
