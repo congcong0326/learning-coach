@@ -281,6 +281,12 @@ body {
   margin-bottom: 16px;
 }
 
+.workspace-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .workspace-pane {
   min-height: 360px;
   padding: 16px;
@@ -289,11 +295,95 @@ body {
   background: #ffffff;
 }
 
+.workspace-pane-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
 .workspace-pane h3 {
   margin: 0 0 12px;
   color: #344034;
   font-size: 15px;
   font-weight: 650;
+}
+
+.workspace-pane-heading h3 {
+  margin-bottom: 0;
+}
+
+.code-pane-actions {
+  margin-bottom: 12px;
+}
+
+.code-draft-input {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+.coach-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.coach-state-bar,
+.coach-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.coach-state-bar {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.coach-section {
+  padding-top: 12px;
+  border-top: 1px solid #ecece7;
+}
+
+.coach-profile-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.coach-profile-grid span {
+  color: #687068;
+}
+
+.coach-summary,
+.coach-event-content {
+  margin: 8px 0 0;
+}
+
+.coach-timeline-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0ec;
+}
+
+.coach-timeline-item:last-child {
+  border-bottom: 0;
+}
+
+.coach-message-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.coach-run-output {
+  padding: 10px;
+  border: 1px solid #e2e3de;
+  border-radius: 6px;
+  background: #fafaf7;
+  white-space: pre-wrap;
 }
 
 .settings-table-wrap {

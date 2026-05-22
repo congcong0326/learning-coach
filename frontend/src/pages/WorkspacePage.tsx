@@ -1,68 +1,30 @@
 import { useQuery } from '@tanstack/react-query'
 import { Alert, Button, Col, Row, Space, Tag, Typography } from 'antd'
-import ReactMarkdown from 'react-markdown'
 import { useParams } from 'react-router-dom'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
-import remarkGfm from 'remark-gfm'
 
+import { createPracticeSessionForItem } from '../api/practice'
 import { getProblem } from '../api/problems'
-
-function selectChineseStatementMarkdown(markdown: string): string {
-  const lines = markdown.split(/\r?\n/)
-  const translationHeadingIndex = lines.findIndex((line) =>
-    /^##\s*翻译\s*$/.test(line.trim()),
-  )
-
-  if (translationHeadingIndex === -1) {
-    return markdown.trim()
-  }
-
-  // 题库源保留中英完整题面；工作台视图只展示中文翻译段，缺失内容时回退原文。
-  const translatedMarkdown = lines.slice(translationHeadingIndex + 1).join('\n').trim()
-  return translatedMarkdown || markdown.trim()
-}
-
-function StatementMarkdown({ markdown }: { markdown: string }) {
-  return (
-    <div className="markdown-statement">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw, rehypeSanitize]}
-        components={{
-          a: ({ href, title, children }) => (
-            <a href={href} title={title} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-          img: ({ src, alt, title }) =>
-            src ? (
-              <img
-                src={src}
-                alt={alt ?? ''}
-                title={title}
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-              />
-            ) : null,
-        }}
-      >
-        {selectChineseStatementMarkdown(markdown)}
-      </ReactMarkdown>
-    </div>
-  )
-}
+import { CoachPanel } from './workspace/CoachPanel'
+import { CodePane } from './workspace/CodePane'
+import { ProblemPane } from './workspace/ProblemPane'
 
 export function WorkspacePage() {
-  const { slug } = useParams()
+  const { itemId, slug } = useParams()
+  const itemIdNumber = itemId ? Number(itemId) : null
+  const isItemRoute = itemIdNumber !== null && Number.isFinite(itemIdNumber)
+  const sessionQuery = useQuery({
+    queryKey: ['practice-session', itemIdNumber],
+    queryFn: () => createPracticeSessionForItem(itemIdNumber ?? 0),
+    enabled: isItemRoute,
+  })
+  const problemSlug = sessionQuery.data?.problem_slug ?? slug
   const { data: problem, isError, isLoading } = useQuery({
-    queryKey: ['problem', slug],
-    queryFn: () => getProblem(slug ?? ''),
-    enabled: Boolean(slug),
+    queryKey: ['problem', problemSlug],
+    queryFn: () => getProblem(problemSlug ?? ''),
+    enabled: Boolean(problemSlug) && (!isItemRoute || Boolean(sessionQuery.data)),
   })
 
-  if (!slug) {
+  if (!slug && !isItemRoute) {
     return (
       <section className="page-section workspace-grid">
         <Typography.Title level={2}>做题工作台</Typography.Title>
@@ -71,10 +33,28 @@ export function WorkspacePage() {
     )
   }
 
+  if (itemId && !isItemRoute) {
+    return (
+      <section className="page-section workspace-grid">
+        <Typography.Title level={2}>做题工作台</Typography.Title>
+        <Alert showIcon type="error" message="计划题入口无效" />
+      </section>
+    )
+  }
+
+  if (isItemRoute && sessionQuery.isLoading) {
+    return (
+      <section className="page-section workspace-grid">
+        <Typography.Title level={2}>做题工作台</Typography.Title>
+        <Typography.Text type="secondary">训练会话加载中</Typography.Text>
+      </section>
+    )
+  }
+
   return (
     <section className="page-section workspace-grid">
       <div className="page-heading">
-        <Space direction="vertical" size={2}>
+        <div className="workspace-title-stack">
           <Typography.Title level={2}>做题工作台</Typography.Title>
           {problem ? (
             <Space wrap>
@@ -87,8 +67,17 @@ export function WorkspacePage() {
               </Button>
             </Space>
           ) : null}
-        </Space>
+        </div>
       </div>
+
+      {sessionQuery.isError ? (
+        <Alert
+          showIcon
+          type="error"
+          message="训练会话加载失败"
+          className="page-alert"
+        />
+      ) : null}
 
       {isError ? (
         <Alert
@@ -101,23 +90,29 @@ export function WorkspacePage() {
 
       <Row gutter={16}>
         <Col xs={24} lg={8}>
-          <div className="workspace-pane">
-            <h3>题面</h3>
-            {isLoading ? (
-              <Typography.Text type="secondary">题面加载中</Typography.Text>
-            ) : null}
-            {problem ? <StatementMarkdown markdown={problem.statement_md} /> : null}
-          </div>
+          <ProblemPane markdown={problem?.statement_md} isLoading={isLoading} />
         </Col>
         <Col xs={24} lg={8}>
-          <div className="workspace-pane">
-            <h3>代码</h3>
-          </div>
+          <CodePane
+            key={`${problemSlug ?? 'workspace'}:${problem?.id ?? 'loading'}`}
+            sessionId={sessionQuery.data?.id}
+            initialCode={problem?.python3_snippet}
+          />
         </Col>
         <Col xs={24} lg={8}>
-          <div className="workspace-pane">
-            <h3>教练</h3>
-          </div>
+          {sessionQuery.data ? (
+            <CoachPanel
+              session={sessionQuery.data}
+              onSessionRefresh={() => {
+                void sessionQuery.refetch()
+              }}
+            />
+          ) : (
+            <div className="workspace-pane">
+              <h3>教练</h3>
+              <Typography.Text type="secondary">从学习计划进入后启用 AI 教练。</Typography.Text>
+            </div>
+          )}
         </Col>
       </Row>
     </section>
