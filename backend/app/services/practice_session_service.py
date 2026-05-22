@@ -65,14 +65,12 @@ async def get_or_create_session_for_plan_item(
         plan_id=plan.id,
     )
 
-    result = await db.execute(
-        select(PracticeSession).where(
-            PracticeSession.user_id == user.id,
-            PracticeSession.study_plan_id == plan.id,
-            PracticeSession.problem_id == problem.id,
-        )
+    practice_session = await _find_existing_session_for_update(
+        db,
+        user,
+        plan.id,
+        problem.id,
     )
-    practice_session = result.scalar_one_or_none()
     created = False
     if practice_session is None:
         practice_session = PracticeSession(
@@ -181,7 +179,7 @@ async def append_user_message(
     session_id: int,
     payload: PracticeMessageCreate,
 ) -> PracticeMessageResponse:
-    practice_session = await _load_session(db, user, session_id)
+    practice_session = await _load_session_for_update(db, user, session_id)
     now = datetime.now(UTC)
     event = PracticeEvent(
         session_id=practice_session.id,
@@ -462,6 +460,24 @@ async def _load_session_for_update(
         )
         raise PracticeSessionError("session_not_found")
     return practice_session
+
+
+async def _find_existing_session_for_update(
+    db: AsyncSession,
+    user: AppUser,
+    study_plan_id: int,
+    problem_id: int,
+) -> PracticeSession | None:
+    result = await db.execute(
+        select(PracticeSession)
+        .where(
+            PracticeSession.user_id == user.id,
+            PracticeSession.study_plan_id == study_plan_id,
+            PracticeSession.problem_id == problem_id,
+        )
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
 
 
 async def _load_code_snapshot(

@@ -205,6 +205,89 @@ async def test_user_message_creates_practice_event(
 
 
 @pytest.mark.asyncio
+async def test_user_message_locks_session_before_touching_activity(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.schemas.practice import PracticeMessageCreate
+    from backend.app.services import practice_session_service
+
+    calls: list[int] = []
+    original = practice_session_service._load_session_for_update
+
+    async def tracking_load_session_for_update(
+        session: AsyncSession,
+        selected_user: AppUser,
+        session_id: int,
+    ) -> PracticeSession:
+        calls.append(session_id)
+        return await original(session, selected_user, session_id)
+
+    monkeypatch.setattr(
+        practice_session_service,
+        "_load_session_for_update",
+        tracking_load_session_for_update,
+    )
+
+    await practice_session_service.append_user_message(
+        db_session,
+        user,
+        practice_session.id,
+        PracticeMessageCreate(intent="describe_idea", content_md="我先讲暴力解法。"),
+    )
+
+    assert calls == [practice_session.id]
+
+
+@pytest.mark.asyncio
+async def test_existing_plan_problem_reentry_locks_session_before_touching_plan_entry(
+    db_session: AsyncSession,
+    user: AppUser,
+    study_plan_item: StudyPlanItem,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.services import practice_session_service
+
+    first = await practice_session_service.get_or_create_session_for_plan_item(
+        db_session,
+        user,
+        study_plan_item.id,
+    )
+    calls: list[tuple[int, int, int]] = []
+
+    async def tracking_find_existing_session_for_update(
+        session: AsyncSession,
+        selected_user: AppUser,
+        study_plan_id: int,
+        problem_id: int,
+    ) -> PracticeSession | None:
+        calls.append((selected_user.id, study_plan_id, problem_id))
+        return await practice_session_service._load_session_for_update(
+            session,
+            selected_user,
+            first.id,
+        )
+
+    monkeypatch.setattr(
+        practice_session_service,
+        "_find_existing_session_for_update",
+        tracking_find_existing_session_for_update,
+        raising=False,
+    )
+
+    second = await practice_session_service.get_or_create_session_for_plan_item(
+        db_session,
+        user,
+        study_plan_item.id,
+    )
+
+    assert second.id == first.id
+    assert calls == [(user.id, first.study_plan_id, first.problem_id)]
+
+
+@pytest.mark.asyncio
 async def test_code_snapshot_hash_is_sha256(
     db_session: AsyncSession,
     user: AppUser,
