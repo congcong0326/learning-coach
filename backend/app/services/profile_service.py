@@ -143,6 +143,23 @@ async def apply_profile_delta(
     delta = await session.get(ProfileDelta, delta_id)
     if delta is None:
         raise ProfileServiceError(f"profile_delta not found: {delta_id}")
+    if delta.status == "accepted":
+        if delta.next_snapshot_id is None:
+            raise ProfileServiceError("accepted profile_delta missing next_snapshot_id")
+        next_snapshot = await session.get(UserProfileSnapshot, delta.next_snapshot_id)
+        if next_snapshot is None or next_snapshot.user_id != delta.user_id:
+            raise ProfileServiceError("accepted profile_delta next snapshot is inconsistent")
+        logger.info(
+            "profile_delta_already_accepted user_id=%s delta_id=%s snapshot_id=%s",
+            delta.user_id,
+            delta.id,
+            next_snapshot.id,
+        )
+        return next_snapshot
+    if delta.status == "rejected":
+        raise ProfileServiceError(delta.rejection_reason or "profile_delta_already_rejected")
+    if delta.status != "proposed":
+        raise ProfileServiceError(f"profile_delta status is not processable: {delta.status}")
 
     validation = validate_profile_patch(delta.patch_json, delta.evidence_json)
     if not validation.accepted:
