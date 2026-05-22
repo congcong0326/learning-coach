@@ -92,7 +92,7 @@ export function StudyPlanPage() {
             {stage.items.map((item) => (
               <div key={item.id} className="plan-item-row">
                 <div>
-                  <Link to={`/workspace/${item.problem_slug}`}>
+                  <Link to={`/workspace/items/${item.id}`}>
                     <span>{item.frontend_id}.</span> <span>{item.title}</span>
                   </Link>
                   <Typography.Text type="secondary">

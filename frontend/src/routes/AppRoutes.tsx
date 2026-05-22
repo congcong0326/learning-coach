@@ -24,6 +24,7 @@ export function AppRoutes() {
         element={<StudyPlanPage />}
       />
       <Route path="/workspace" element={<WorkspacePage />} />
+      <Route path="/workspace/items/:itemId" element={<WorkspacePage />} />
       <Route path="/workspace/:slug" element={<WorkspacePage />} />
       <Route path="/review" element={<ReviewPage />} />
       <Route path="/trace" element={<TracePage />} />

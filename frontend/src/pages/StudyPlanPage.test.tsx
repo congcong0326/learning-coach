@@ -81,6 +81,10 @@ describe('StudyPlanPage', () => {
     expect(await screen.findByText('3 个月 Java 面试冲刺计划')).toBeInTheDocument()
     expect(screen.getByText('数组基础')).toBeInTheDocument()
     expect(screen.getByText('Two Sum')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /1\. Two Sum/ })).toHaveAttribute(
+      'href',
+      '/workspace/items/40',
+    )
     expect(screen.getByText('练 complement 查找。')).toBeInTheDocument()
   })
 })
