@@ -137,6 +137,16 @@ def test_validate_profile_patch_requires_structured_evidence_and_sections() -> N
     assert result.accepted is True
 
 
+def test_validate_profile_patch_rejects_too_deep_profile_sections() -> None:
+    patch = {"strategy_json": {"a": {"b": {"c": {"d": {"e": "too deep"}}}}}}
+
+    with pytest.raises(ProfileServiceError):
+        validate_profile_patch(
+            patch,
+            [{"source": "summary", "summary": "复盘证据"}],
+        )
+
+
 @pytest.mark.asyncio
 async def test_apply_profile_delta_returns_existing_snapshot_for_accepted_delta() -> None:
     previous = _profile_snapshot(snapshot_id=10, user_id=1, version_number=1)
@@ -154,7 +164,7 @@ async def test_apply_profile_delta_returns_existing_snapshot_for_accepted_delta(
             (UserProfileSnapshot, previous.id): previous,
             (UserProfileSnapshot, next_snapshot.id): next_snapshot,
         },
-        execute_results=[delta, object()],
+        execute_results=[delta, object(), previous],
     )
 
     result = await apply_profile_delta(cast(AsyncSession, session), delta.id)
@@ -181,7 +191,7 @@ async def test_apply_profile_delta_rejected_delta_is_not_mutated() -> None:
             (ProfileDelta, delta.id): delta,
             (UserProfileSnapshot, previous.id): previous,
         },
-        execute_results=[delta, object()],
+        execute_results=[delta, object(), previous],
     )
 
     with pytest.raises(ProfileServiceError):
@@ -213,7 +223,7 @@ async def test_apply_profile_delta_result_marks_missing_evidence_rejected() -> N
             (ProfileDelta, delta.id): delta,
             (UserProfileSnapshot, previous.id): previous,
         },
-        execute_results=[delta, object()],
+        execute_results=[delta, object(), previous],
     )
 
     result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
@@ -246,7 +256,7 @@ async def test_apply_profile_delta_result_accepts_proposed_once_and_increments_v
             (ProfileDelta, delta.id): delta,
             (UserProfileSnapshot, previous.id): previous,
         },
-        execute_results=[delta, object()],
+        execute_results=[delta, object(), previous],
     )
 
     result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
@@ -260,6 +270,52 @@ async def test_apply_profile_delta_result_accepts_proposed_once_and_increments_v
     assert delta.next_snapshot_id == result.snapshot.id
     assert delta.next_snapshot_id == 1000
     assert len(session.added) == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_profile_delta_sanitizes_persisted_evidence() -> None:
+    previous = _profile_snapshot(
+        snapshot_id=45,
+        user_id=1,
+        version_number=1,
+    )
+    delta = _profile_delta(
+        delta_id=12,
+        user_id=1,
+        status="proposed",
+        previous_snapshot_id=previous.id,
+        next_snapshot_id=None,
+    )
+    delta.evidence_json = [
+        {
+            "source": "summary",
+            "summary": "复盘证据" * 200,
+            "session_id": 9,
+            "code_text": "完整代码",
+            "full_solution": "完整题解",
+            "raw": "原始聊天",
+        }
+    ]
+    session = _ProfileServiceFakeSession(
+        {
+            (ProfileDelta, delta.id): delta,
+            (UserProfileSnapshot, previous.id): previous,
+        },
+        execute_results=[delta, object(), previous],
+    )
+
+    result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
+
+    assert result.snapshot is not None
+    evidence = result.snapshot.evidence_summary_json
+    assert evidence == [
+        {"source": "summary", "summary": ("复盘证据" * 200)[:400], "session_id": 9}
+    ]
+    assert "code_text" not in str(evidence)
+    assert "full_solution" not in str(evidence)
+    assert "raw" not in str(evidence)
+    assert "完整代码" not in str(evidence)
+    assert "完整题解" not in str(evidence)
 
 
 @pytest.mark.asyncio
@@ -297,7 +353,7 @@ async def test_low_confidence_patch_preserves_stable_fields_and_deep_merges() ->
             (ProfileDelta, delta.id): delta,
             (UserProfileSnapshot, previous.id): previous,
         },
-        execute_results=[delta, object()],
+        execute_results=[delta, object(), previous],
     )
 
     result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
@@ -316,6 +372,87 @@ async def test_low_confidence_patch_preserves_stable_fields_and_deep_merges() ->
         "notes": ["边界", "复杂度"],
         "recent": "wa",
     }
+
+
+@pytest.mark.asyncio
+async def test_deep_merge_caps_and_dedupes_oversized_lists() -> None:
+    previous = _profile_snapshot(
+        snapshot_id=60,
+        user_id=1,
+        version_number=1,
+    )
+    previous.skill_profile_json = {"weak_skill_tags": ["tag-0", "tag-1"]}
+    delta = _profile_delta(
+        delta_id=13,
+        user_id=1,
+        status="proposed",
+        previous_snapshot_id=previous.id,
+        next_snapshot_id=None,
+    )
+    delta.patch_json = {
+        "skill_profile_json": {
+            "weak_skill_tags": [f"tag-{index}" for index in range(40)]
+        }
+    }
+    session = _ProfileServiceFakeSession(
+        {
+            (ProfileDelta, delta.id): delta,
+            (UserProfileSnapshot, previous.id): previous,
+        },
+        execute_results=[delta, object(), previous],
+    )
+
+    result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
+
+    assert result.snapshot is not None
+    assert result.snapshot.skill_profile_json["weak_skill_tags"] == [
+        f"tag-{index}" for index in range(16)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_previous_snapshot_uses_latest_version_as_merge_base() -> None:
+    stale = _profile_snapshot(
+        snapshot_id=70,
+        user_id=1,
+        version_number=2,
+    )
+    latest = _profile_snapshot(
+        snapshot_id=71,
+        user_id=1,
+        version_number=5,
+        overall_level="intermediate",
+        preferred_training_mode="independent",
+    )
+    latest.skill_profile_json = {"weak_skill_tags": ["graph"]}
+    delta = _profile_delta(
+        delta_id=14,
+        user_id=1,
+        status="proposed",
+        previous_snapshot_id=stale.id,
+        next_snapshot_id=None,
+    )
+    delta.patch_json = {
+        "confidence": "low",
+        "overall_level": "advanced",
+        "skill_profile_json": {"weak_skill_tags": ["dp"]},
+    }
+    session = _ProfileServiceFakeSession(
+        {
+            (ProfileDelta, delta.id): delta,
+            (UserProfileSnapshot, stale.id): stale,
+            (UserProfileSnapshot, latest.id): latest,
+        },
+        execute_results=[delta, object(), latest],
+    )
+
+    result = await apply_profile_delta_result(cast(AsyncSession, session), delta.id)
+
+    assert result.snapshot is not None
+    assert result.snapshot.version_number == 6
+    assert result.snapshot.overall_level == "intermediate"
+    assert result.snapshot.skill_profile_json["weak_skill_tags"] == ["graph", "dp"]
+    assert delta.previous_snapshot_id == stale.id
 
 
 class _ScalarResult:

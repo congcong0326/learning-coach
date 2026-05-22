@@ -54,7 +54,20 @@ _PROFILE_SECTION_KEYS = {
 }
 _SHORT_TEXT_LIMIT = 120
 _LONG_TEXT_LIMIT = 1200
-_MERGED_LIST_LIMIT = 16
+_EVIDENCE_SUMMARY_LIMIT = 400
+_MAX_PROFILE_DEPTH = 4
+_MAX_PROFILE_DICT_KEYS = 32
+_MAX_PROFILE_LIST_LENGTH = 16
+_MAX_PROFILE_STRING_LENGTH = 1200
+_SAFE_EVIDENCE_KEYS = {
+    "confidence",
+    "problem_id",
+    "session_id",
+    "source",
+    "summary",
+    "summary_id",
+    "tag",
+}
 
 
 class ProfileServiceError(ValueError):
@@ -199,7 +212,7 @@ def validate_profile_patch(
         if value is not None:
             if not isinstance(value, dict):
                 raise ProfileServiceError(f"profile patch section must be an object: {key}")
-            _validate_section_text(value, path=key)
+            _validate_section_value(value, path=key)
     for index, item in enumerate(evidence_json):
         if not isinstance(item, dict):
             raise ProfileServiceError("evidence_json items must be objects")
@@ -210,7 +223,11 @@ def validate_profile_patch(
         if not isinstance(summary_value, str) or not summary_value.strip():
             raise ProfileServiceError(f"evidence_json[{index}].summary is required")
         _validate_text_field(f"evidence_json[{index}].source", source_value, _SHORT_TEXT_LIMIT)
-        _validate_text_field(f"evidence_json[{index}].summary", summary_value, 800)
+        _validate_text_field(
+            f"evidence_json[{index}].summary",
+            summary_value,
+            _LONG_TEXT_LIMIT,
+        )
     return ProfilePatchValidation(accepted=True)
 
 
@@ -305,7 +322,8 @@ async def apply_profile_delta_result(
     await session.flush()
 
     delta.status = "accepted"
-    delta.previous_snapshot_id = previous.id if previous is not None else None
+    if delta.previous_snapshot_id is None:
+        delta.previous_snapshot_id = previous.id if previous is not None else None
     delta.next_snapshot_id = snapshot.id
     delta.merge_result_json = {
         "snapshot_id": snapshot.id,
@@ -360,6 +378,16 @@ async def _previous_snapshot_for_delta(
         snapshot = await session.get(UserProfileSnapshot, delta.previous_snapshot_id)
         if snapshot is None or snapshot.user_id != delta.user_id:
             raise ProfileServiceError("previous snapshot does not belong to delta user")
+        latest = await latest_profile_snapshot(session, delta.user_id)
+        if latest is not None and latest.version_number > snapshot.version_number:
+            logger.warning(
+                "profile_delta_stale_previous user_id=%s delta_id=%s previous_id=%s latest_id=%s",
+                delta.user_id,
+                delta.id,
+                snapshot.id,
+                latest.id,
+            )
+            return latest
         return snapshot
     return await latest_profile_snapshot(session, delta.user_id)
 
@@ -415,7 +443,7 @@ def _merge_snapshot_payload(
             or patch.get("recent_summary")
             or previous_payload["recent_summary_md"]
         )[:1200],
-        "evidence_summary_json": _evidence_list(evidence)[:12],
+        "evidence_summary_json": _sanitize_evidence_list(evidence),
     }
 
 
@@ -461,6 +489,28 @@ def _evidence_list(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _sanitize_evidence_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    for item in value[:_MAX_PROFILE_LIST_LENGTH]:
+        if not isinstance(item, dict):
+            continue
+        safe_item: dict[str, Any] = {}
+        for key in _SAFE_EVIDENCE_KEYS:
+            if key not in item:
+                continue
+            item_value = item[key]
+            if isinstance(item_value, str):
+                limit = _EVIDENCE_SUMMARY_LIMIT if key == "summary" else _SHORT_TEXT_LIMIT
+                safe_item[key] = item_value[:limit]
+            elif isinstance(item_value, int | float | bool) or item_value is None:
+                safe_item[key] = item_value
+        if safe_item:
+            sanitized.append(safe_item)
+    return sanitized
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -480,21 +530,35 @@ def _profile_confidence(value: str) -> ProfileConfidence:
 
 
 def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    return _deep_merge_dict_bounded(base, patch, depth=0)
+
+
+def _deep_merge_dict_bounded(
+    base: dict[str, Any],
+    patch: dict[str, Any],
+    *,
+    depth: int,
+) -> dict[str, Any]:
+    if depth > _MAX_PROFILE_DEPTH:
+        raise ProfileServiceError("profile patch exceeds max depth")
     merged = dict(base)
-    for key, value in patch.items():
+    for key, value in list(patch.items())[:_MAX_PROFILE_DICT_KEYS]:
         current = merged.get(key)
         if isinstance(current, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge_dict(current, value)
+            merged[key] = _deep_merge_dict_bounded(current, value, depth=depth + 1)
         elif isinstance(current, list) and isinstance(value, list):
             merged[key] = _merge_lists(current, value)
         elif isinstance(value, list):
             merged[key] = _merge_lists([], value)
         elif isinstance(value, dict):
-            merged[key] = _deep_merge_dict({}, value)
+            merged[key] = _deep_merge_dict_bounded({}, value, depth=depth + 1)
         elif isinstance(value, str):
-            merged[key] = value[:_LONG_TEXT_LIMIT]
+            merged[key] = value[:_MAX_PROFILE_STRING_LENGTH]
         else:
             merged[key] = value
+        if len(merged) > _MAX_PROFILE_DICT_KEYS:
+            allowed_keys = list(merged)[:_MAX_PROFILE_DICT_KEYS]
+            merged = {key: merged[key] for key in allowed_keys}
     return merged
 
 
@@ -507,7 +571,7 @@ def _merge_lists(base: list[Any], patch: list[Any]) -> list[Any]:
             continue
         seen.add(normalized)
         merged.append(item)
-        if len(merged) >= _MERGED_LIST_LIMIT:
+        if len(merged) >= _MAX_PROFILE_LIST_LENGTH:
             break
     return merged
 
@@ -521,15 +585,19 @@ def _validate_text_field(name: str, value: Any, limit: int) -> None:
         raise ProfileServiceError(f"{name} exceeds length limit")
 
 
-def _validate_section_text(value: Any, *, path: str) -> None:
+def _validate_section_value(value: Any, *, path: str, depth: int = 0) -> None:
+    if depth > _MAX_PROFILE_DEPTH:
+        raise ProfileServiceError(f"{path} exceeds max depth")
     if isinstance(value, str):
-        if len(value) > _LONG_TEXT_LIMIT:
+        if len(value) > _MAX_PROFILE_STRING_LENGTH:
             raise ProfileServiceError(f"{path} exceeds length limit")
         return
     if isinstance(value, dict):
+        if len(value) > _MAX_PROFILE_DICT_KEYS:
+            raise ProfileServiceError(f"{path} exceeds key limit")
         for key, item in value.items():
-            _validate_section_text(item, path=f"{path}.{key}")
+            _validate_section_value(item, path=f"{path}.{key}", depth=depth + 1)
         return
     if isinstance(value, list):
-        for index, item in enumerate(value[:_MERGED_LIST_LIMIT + 1]):
-            _validate_section_text(item, path=f"{path}[{index}]")
+        for index, item in enumerate(value[: _MAX_PROFILE_LIST_LENGTH + 1]):
+            _validate_section_value(item, path=f"{path}[{index}]", depth=depth + 1)
