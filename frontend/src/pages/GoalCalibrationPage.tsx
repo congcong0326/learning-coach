@@ -65,6 +65,15 @@ export function GoalCalibrationPage() {
   const hasError = confirmMutation.isError
   const showCalibrationForm =
     !draft && !calibrationRun.isRunning && calibrationRun.status !== 'succeeded'
+  const showCalibrationRunPanel =
+    calibrationRun.isRunning ||
+    calibrationRun.status === 'failed' ||
+    calibrationRun.status === 'canceled'
+  const showPlanRunPanel =
+    planRun.isRunning ||
+    planRun.status === 'failed' ||
+    planRun.status === 'canceled' ||
+    (planRun.status === 'succeeded' && !planDraft)
 
   function submit(values: GoalCalibrationPayload) {
     setDraft(null)
@@ -207,7 +216,7 @@ export function GoalCalibrationPage() {
         </Form>
       ) : null}
 
-      {calibrationRun.status !== 'idle' ? (
+      {showCalibrationRunPanel ? (
         <LlmStreamingPanel
           title="目标校准"
           status={calibrationRun.status}
@@ -258,7 +267,7 @@ export function GoalCalibrationPage() {
         </Button>
       ) : null}
 
-      {planRun.status !== 'idle' ? (
+      {showPlanRunPanel ? (
         <LlmStreamingPanel
           title="计划生成"
           status={planRun.status}

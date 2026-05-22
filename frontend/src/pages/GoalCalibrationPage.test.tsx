@@ -251,4 +251,106 @@ describe('GoalCalibrationPage', () => {
     expect(await screen.findByText('按两个阶段训练。')).toBeInTheDocument()
     expect(screen.getByText('数组基础')).toBeInTheDocument()
   })
+
+  it('hides completed followup progress once the plan draft is shown', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 3,
+          kind: 'goal_followup',
+          status: 'pending',
+          stage: 'queued',
+          stream_url: '/api/llm-runs/3/stream',
+        }),
+      )
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 4,
+          kind: 'goal_followup',
+          status: 'pending',
+          stage: 'queued',
+          stream_url: '/api/llm-runs/4/stream',
+        }),
+      )
+      .mockResolvedValueOnce(
+        okJson({
+          run_id: 5,
+          kind: 'goal_plan_generate',
+          status: 'pending',
+          stage: 'queued',
+          stream_url: '/api/llm-runs/5/stream',
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderPage()
+
+    fireEvent.click(screen.getByLabelText('面试冲刺'))
+    fireEvent.click(screen.getByLabelText('1 到 3 个月'))
+    fireEvent.click(screen.getByLabelText('Python3'))
+    fireEvent.click(screen.getByRole('button', { name: '开始校准' }))
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => {
+      FakeEventSource.instances[0].emit('result', {
+        run_id: 3,
+        status: 'succeeded',
+        result: {
+          draft_id: 3,
+          status: 'asking_followup',
+          followup_question: '你的面试时间是？',
+          followup_question_id: 'q1',
+          remaining_followups: 2,
+        },
+      })
+    })
+
+    fireEvent.change(await screen.findByRole('textbox'), {
+      target: { value: '三周后面试。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提交回答' }))
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    act(() => {
+      FakeEventSource.instances[1].emit('progress', {
+        run_id: 4,
+        stage: 'calibrating_goal',
+        message: '正在校准训练目标',
+      })
+      FakeEventSource.instances[1].emit('delta', {
+        run_id: 4,
+        text: '正在判断是否需要追问...\n',
+      })
+      FakeEventSource.instances[1].emit('result', {
+        run_id: 4,
+        status: 'succeeded',
+        result: {
+          draft_id: 3,
+          status: 'collecting_input',
+          followup_question: null,
+          followup_question_id: null,
+          remaining_followups: 0,
+        },
+      })
+    })
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '生成计划草稿' }),
+    )
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(3))
+    act(() => {
+      FakeEventSource.instances[2].emit('result', {
+        run_id: 5,
+        status: 'succeeded',
+        result: planDraftPayload(),
+      })
+    })
+
+    expect(await screen.findByText('按两个阶段训练。')).toBeInTheDocument()
+    expect(screen.queryByText('正在校准训练目标')).not.toBeInTheDocument()
+    expect(screen.queryByText(/正在判断是否需要追问/)).not.toBeInTheDocument()
+  })
 })
