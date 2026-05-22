@@ -560,7 +560,7 @@ def _evidence_from_summary_payload(
     if explicit_evidence is not None:
         if not isinstance(explicit_evidence, list):
             raise ProfileServiceError("evidence_json must be a list")
-        return explicit_evidence
+        return _sanitize_evidence_list(explicit_evidence)
     return [
         {
             "source": "session_summary",

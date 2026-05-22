@@ -181,3 +181,19 @@ def test_plan_item_entry_returns_session(authenticated_client, study_plan_item):
     body = response.json()
     assert body["id"] > 0
     assert body["latest_plan_item_id"] == study_plan_item.id
+
+
+def test_summary_route_creates_coach_summary_run(authenticated_client, study_plan_item):
+    session_response = authenticated_client.post(
+        f"/api/study-plan/items/{study_plan_item.id}/practice-session"
+    )
+    session_id = session_response.json()["id"]
+
+    response = authenticated_client.post(f"/api/practice-sessions/{session_id}/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] > 0
+    assert body["kind"] == "coach_summary"
+    assert body["status"] == "pending"
+    assert body["stream_url"] == f"/api/llm-runs/{body['run_id']}/stream"

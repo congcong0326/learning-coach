@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from backend.app.models.auth import AppUser
 from backend.app.models.learning import GoalCalibrationDraft
 from backend.app.models.llm_run import LlmRun
-from backend.app.models.practice import CodeSnapshot, CoachTurn, PracticeEvent, PracticeSession
+from backend.app.models.practice import (
+    CodeSnapshot,
+    CoachTurn,
+    PracticeEvent,
+    PracticeSession,
+    ProfileDelta,
+    SessionSummary,
+    UserProfileSnapshot,
+)
 from backend.app.models.problem import Base, Problem
 from backend.app.schemas.practice import PracticeEventResponse
 from backend.app.services.learning_flows.goal_plan import (
@@ -692,7 +700,16 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert coach_turn.user_event_id is None
         assert coach_turn.phase_after == "summarize"
         assert coach_turn.next_action == "summarize_session"
-        assert result["summary_status"] == "deferred"
+        assert result["summary_status"] == "completed"
+        summary = await session.get(SessionSummary, result["summary_id"])
+        delta = await session.get(ProfileDelta, result["profile_delta_id"])
+        snapshot = await session.get(UserProfileSnapshot, result["profile_snapshot_id"])
+        assert summary is not None
+        assert delta is not None
+        assert snapshot is not None
+        assert delta.status == "accepted"
+        assert delta.summary_id == summary.id
+        assert snapshot.created_from_summary_id == summary.id
         assert [event.name for event in events] == ["progress", "delta"]
 
 

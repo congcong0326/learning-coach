@@ -587,3 +587,44 @@ async def test_session_summary_profile_update_rejects_delta_without_evidence(
     assert delta.status == "rejected"
     assert delta.next_snapshot_id is None
     assert delta.rejection_reason == "profile_delta_missing_evidence"
+
+
+@pytest.mark.asyncio
+async def test_session_summary_profile_update_sanitizes_explicit_delta_evidence(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    result = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+        summary_payload={
+            "evidence_json": [
+                {
+                    "source": "session_summary",
+                    "summary": "保留安全复盘证据",
+                    "session_id": practice_session.id,
+                    "code_text": "完整代码不应进入画像证据",
+                    "raw_chat": "完整聊天不应进入画像证据",
+                }
+            ]
+        },
+    )
+
+    delta = await db_session.get(ProfileDelta, result.delta_id)
+
+    assert delta is not None
+    assert delta.evidence_json == [
+        {
+            "session_id": practice_session.id,
+            "source": "session_summary",
+            "summary": "保留安全复盘证据",
+        }
+    ]
+    assert "完整代码" not in str(delta.evidence_json)
+    assert "完整聊天" not in str(delta.evidence_json)

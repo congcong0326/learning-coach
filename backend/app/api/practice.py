@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.auth import current_user_dependency
 from backend.app.db.session import get_session
 from backend.app.models.auth import AppUser
+from backend.app.schemas.llm_run import LlmRunCreateResponse
 from backend.app.schemas.practice import (
     CodeSnapshotCreate,
     CodeSnapshotResponse,
@@ -28,6 +29,7 @@ from backend.app.services.practice_session_service import (
     record_submission_feedback,
     save_code_snapshot,
 )
+from backend.app.services.llm_run_service import LlmRunError, create_llm_run
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,15 @@ def _http_error(exc: PracticeSessionError) -> HTTPException:
     if "not_found" in exc.detail:
         status = 404
     if exc.detail == "code_snapshot_required_for_submission_feedback":
+        status = 409
+    return HTTPException(status_code=status, detail=exc.detail)
+
+
+def _llm_http_error(exc: LlmRunError) -> HTTPException:
+    status = 400
+    if exc.detail == "run_not_found":
+        status = 404
+    if exc.detail == "run_status_conflict":
         status = 409
     return HTTPException(status_code=status, detail=exc.detail)
 
@@ -139,7 +150,10 @@ async def record_submission_feedback_route(
         raise _http_error(exc) from exc
 
 
-@router.post("/practice-sessions/{session_id}/summary")
+@router.post(
+    "/practice-sessions/{session_id}/summary",
+    response_model=LlmRunCreateResponse,
+)
 async def generate_practice_summary_route(
     session_id: int,
     user: AppUser = Depends(current_user_dependency),
@@ -149,10 +163,27 @@ async def generate_practice_summary_route(
         await get_session_payload(session, user, session_id)
     except PracticeSessionError as exc:
         raise _http_error(exc) from exc
+    try:
+        run = await create_llm_run(
+            session,
+            user,
+            kind="coach_summary",
+            payload={"session_id": session_id, "trigger": "request_summary"},
+            related_type="practice_session",
+            related_id=session_id,
+        )
+    except LlmRunError as exc:
+        raise _llm_http_error(exc) from exc
     logger.info(
-        "practice_summary_rejected user_id=%s session_id=%s reason=coach_summary_not_available",
+        "practice_summary_run_created user_id=%s session_id=%s run_id=%s",
         user.id,
         session_id,
+        run.id,
     )
-    # Task 6/9 才会接入真实教练总结 LLM flow；当前只暴露稳定路由和错误语义。
-    raise HTTPException(status_code=409, detail="coach_summary_not_available")
+    return {
+        "run_id": run.id,
+        "kind": run.kind,
+        "status": run.status,
+        "stage": run.stage,
+        "stream_url": f"/api/llm-runs/{run.id}/stream",
+    }
