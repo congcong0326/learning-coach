@@ -23,6 +23,7 @@ from backend.app.schemas.llm_run import (
 )
 from backend.app.services.llm_orchestrator import execute_llm_run
 from backend.app.services.llm_run_events import LlmRunEvent, encode_sse, event_hub
+from backend.app.services.llm_run_registry import related_from_payload
 from backend.app.services.llm_run_service import (
     LlmRunError,
     cancel_llm_run,
@@ -33,6 +34,8 @@ from backend.app.services.auth_service import get_current_user_from_token
 
 
 logger = logging.getLogger(__name__)
+# 这里只声明 LLM Run 子路由；main.py 会再统一加上 /api 前缀，
+# 因此前端实际访问路径是 /api/llm-runs。
 router = APIRouter(prefix="/llm-runs", tags=["llm-runs"])
 
 
@@ -43,14 +46,6 @@ def _http_error(exc: LlmRunError) -> HTTPException:
     if exc.detail == "run_status_conflict":
         status = 409
     return HTTPException(status_code=status, detail=exc.detail)
-
-
-def _related_from_payload(kind: str, payload: dict[str, Any]) -> tuple[str, int | None]:
-    if kind in {"goal_plan_generate", "goal_followup"} and isinstance(payload.get("draft_id"), int):
-        return "goal_calibration_draft", payload["draft_id"]
-    if kind == "study_plan_adjustment" and isinstance(payload.get("plan_id"), int):
-        return "study_plan", payload["plan_id"]
-    return "", None
 
 
 def _datetime_text(value: datetime | None) -> str | None:
@@ -128,7 +123,9 @@ async def create_llm_run_route(
     user: AppUser = Depends(current_user_dependency),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    related_type, related_id = _related_from_payload(payload.kind, payload.payload)
+    # 创建 run 阶段只落库排队任务，不直接调用模型。
+    # 真正的 LLM 执行会在前端随后连接 stream_url 时启动，便于支持 SSE、取消和刷新恢复。
+    related_type, related_id = related_from_payload(payload.kind, payload.payload)
     try:
         run = await create_llm_run(
             session,
@@ -140,6 +137,7 @@ async def create_llm_run_route(
         )
     except LlmRunError as exc:
         raise _http_error(exc) from exc
+    # stream_url 是前端下一步要打开的 SSE 地址；run_id 是后续查状态、取消和接收事件的稳定句柄。
     return {
         "run_id": run.id,
         "kind": run.kind,
@@ -182,6 +180,8 @@ async def stream_llm_run_route(
     run_id: int,
     request: Request,
 ) -> StreamingResponse:
+    # SSE 连接没有走普通 Depends 注入，这里手动用 HttpOnly cookie 还原当前用户，
+    # 再用 run_id + user_id 校验这个 run 是否属于当前登录用户。
     async with async_session_factory() as session:
         user = await get_current_user_from_token(
             session,
@@ -200,6 +200,8 @@ async def stream_llm_run_route(
         error_code = run.error_code
         error_message = run.error_message
 
+    # 如果 run 已经结束，stream 不再启动后台任务，而是把 DB 里的终态结果有限回放给前端。
+    # 这让页面刷新后仍能通过同一个 stream_url 拿到 result/error/canceled + done。
     if status in {"succeeded", "failed", "canceled"}:
         events = _terminal_stream_events(
             run_id=run_id,
@@ -215,6 +217,7 @@ async def stream_llm_run_route(
         )
 
     async def stream_events() -> AsyncIterator[str]:
+        # 先订阅内存事件 hub，再启动 pending run，避免后台任务太快发布 started/result 时丢事件。
         subscription = event_hub.subscribe(run_id)
 
         async def next_event() -> LlmRunEvent:
@@ -223,6 +226,9 @@ async def stream_llm_run_route(
         first_event_task: asyncio.Task[LlmRunEvent] = asyncio.create_task(next_event())
         try:
             await asyncio.sleep(0)
+            # stream 是 pending run 的实际启动点：POST /api/llm-runs 只负责落库排队，
+            # 第一次打开 stream 时才创建后台任务调用 orchestrator 执行 LLM flow。
+            # has_task 用来避免同一个单进程内重复打开 stream 时重复启动同一个 run。
             if status == "pending" and not event_hub.has_task(run_id):
                 task = asyncio.create_task(execute_llm_run(async_session_factory, run_id, user_id))
                 task.add_done_callback(lambda done_task: _observe_llm_task(run_id, done_task))
@@ -233,6 +239,8 @@ async def stream_llm_run_route(
                 event = await first_event_task
             except StopAsyncIteration:
                 return
+            # StreamingResponse 会把这里 yield 出来的文本按 text/event-stream 推给浏览器 EventSource。
+            # 事件序列通常是 started/progress/delta/result/done，失败或取消时走 error/canceled/done。
             yield encode_sse(event)
             async for event in subscription:
                 yield encode_sse(event)

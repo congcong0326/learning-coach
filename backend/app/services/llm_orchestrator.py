@@ -12,17 +12,14 @@ from backend.app.services.credential_crypto import (
     CredentialEncryptionError,
     decrypt_api_key,
 )
-from backend.app.services.learning_flows.goal_plan import (
-    LearningFlowError,
-    run_goal_plan_generate,
-)
-from backend.app.services.learning_flows.goal_calibration import run_goal_followup
+from backend.app.services.learning_flows.goal_plan import LearningFlowError
 from backend.app.services.llm_credential_service import (
     LlmCredentialError,
     select_llm_credential_for_user,
 )
 from backend.app.services.llm_providers.openai_responses import OpenAIResponsesProvider
 from backend.app.services.llm_run_events import LlmRunEvent, event_hub
+from backend.app.services.llm_run_registry import LlmRunContext, handler_for_kind
 from backend.app.services.llm_run_service import (
     LlmRunError,
     fail_llm_run,
@@ -48,7 +45,6 @@ ERROR_MESSAGES = {
     "run_kind_unsupported": "当前生成类型暂未接入",
     "run_status_conflict": "本次生成已结束或已取消",
 }
-SUPPORTED_RUN_KINDS = {"goal_followup", "goal_plan_generate"}
 
 
 async def _load_run_and_user(
@@ -213,7 +209,8 @@ async def execute_llm_run(
                 run_id,
                 LlmRunEvent("started", {"run_id": run_id, "kind": run.kind}),
             )
-            if run.kind not in SUPPORTED_RUN_KINDS:
+            handler = handler_for_kind(run.kind)
+            if handler is None:
                 await _fail_and_publish(
                     session,
                     run,
@@ -251,24 +248,16 @@ async def execute_llm_run(
                 base_url=credential.base_url,
             )
 
-            if run.kind == "goal_followup":
-                result = await run_goal_followup(
-                    session,
+            result = await handler.execute(
+                LlmRunContext(
+                    session=session,
                     user_id=user_id,
                     run=run,
                     provider=provider,
                     model_name=credential.model_name,
                     publish=lambda event: event_hub.publish(run_id, event),
                 )
-            else:
-                result = await run_goal_plan_generate(
-                    session,
-                    user_id=user_id,
-                    run=run,
-                    provider=provider,
-                    model_name=credential.model_name,
-                    publish=lambda event: event_hub.publish(run_id, event),
-                )
+            )
             await succeed_llm_run(
                 session,
                 run,

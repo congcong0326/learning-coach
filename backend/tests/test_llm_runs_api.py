@@ -161,6 +161,82 @@ def test_create_llm_run_returns_stream_url(monkeypatch) -> None:
     }
 
 
+def test_create_llm_run_uses_registry_related_mapping(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_create(
+        session: Any,
+        user: AppUser,
+        *,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        related_type: str = "",
+        related_id: int | None = None,
+    ):
+        captured["kind"] = kind
+        captured["payload"] = payload
+        captured["related_type"] = related_type
+        captured["related_id"] = related_id
+        return type("Run", (), {"id": 10, "kind": kind, "status": "pending", "stage": "queued"})()
+
+    monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/llm-runs",
+            json={"kind": "goal_plan_generate", "payload": {"draft_id": 3}},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {
+        "kind": "goal_plan_generate",
+        "payload": {"draft_id": 3},
+        "related_type": "goal_calibration_draft",
+        "related_id": 3,
+    }
+
+
+def test_create_llm_run_preserves_study_plan_adjustment_related_mapping(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_create(
+        session: Any,
+        user: AppUser,
+        *,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        related_type: str = "",
+        related_id: int | None = None,
+    ):
+        captured["kind"] = kind
+        captured["payload"] = payload
+        captured["related_type"] = related_type
+        captured["related_id"] = related_id
+        return type("Run", (), {"id": 11, "kind": kind, "status": "pending", "stage": "queued"})()
+
+    monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/llm-runs",
+            json={"kind": "study_plan_adjustment", "payload": {"plan_id": 9}},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {
+        "kind": "study_plan_adjustment",
+        "payload": {"plan_id": 9},
+        "related_type": "study_plan",
+        "related_id": 9,
+    }
+
+
 def test_cancel_llm_run_maps_status_conflict(monkeypatch) -> None:
     from backend.app.services.llm_run_service import LlmRunError
 
@@ -360,21 +436,20 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
         run.status = "running"
         return run
 
-    async def fake_flow(
-        session: Any,
-        *,
-        user_id: int,
-        run: Any,
-        provider: Any,
-        model_name: str,
-        publish: Any,
-    ) -> dict[str, Any]:
-        assert user_id == 42
-        assert isinstance(provider, FakeProvider)
-        assert model_name == credential.model_name
-        calls.append("flow")
-        run.display_text_md = "draft text"
-        return {"draft_id": 7, "stage_count": 2, "item_count": 8}
+    class FakeHandler:
+        async def execute(self, context: Any) -> dict[str, Any]:
+            assert context.user_id == 42
+            assert context.run is run
+            assert isinstance(context.provider, FakeProvider)
+            assert context.model_name == credential.model_name
+            calls.append("flow")
+            run.display_text_md = "draft text"
+            return {"draft_id": 7, "stage_count": 2, "item_count": 8}
+
+    def fake_handler_for_kind(kind: str) -> Any:
+        assert kind == "goal_plan_generate"
+        calls.append("handler")
+        return FakeHandler()
 
     async def fake_succeed(
         session: Any,
@@ -396,7 +471,7 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fake_decrypt)
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
     monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
-    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 9, 42)
@@ -404,6 +479,7 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
     assert [event.name for event in events] == ["started", "progress", "result", "done"]
     assert calls == [
         "publish:started",
+        "handler",
         "publish:progress",
         "select",
         "decrypt",
@@ -484,30 +560,25 @@ async def test_orchestrator_goal_followup_success_publishes_result_after_success
         run.status = "running"
         return run
 
-    async def fake_flow(
-        session: Any,
-        *,
-        user_id: int,
-        run: Any,
-        provider: Any,
-        model_name: str,
-        publish: Any,
-    ) -> dict[str, Any]:
-        assert user_id == 42
-        assert isinstance(provider, FakeProvider)
-        assert model_name == credential.model_name
-        calls.append("followup_flow")
-        run.display_text_md = "followup text"
-        return {
-            "draft_id": 7,
-            "status": "asking_followup",
-            "followup_question": "你的面试时间是？",
-            "followup_question_id": "q1",
-            "remaining_followups": 2,
-        }
+    class FakeHandler:
+        async def execute(self, context: Any) -> dict[str, Any]:
+            assert context.user_id == 42
+            assert context.run is run
+            assert isinstance(context.provider, FakeProvider)
+            assert context.model_name == credential.model_name
+            calls.append("followup_flow")
+            run.display_text_md = "followup text"
+            return {
+                "draft_id": 7,
+                "status": "asking_followup",
+                "followup_question": "你的面试时间是？",
+                "followup_question_id": "q1",
+                "remaining_followups": 2,
+            }
 
-    async def fail_plan_flow(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise AssertionError("goal_plan_generate should not handle goal_followup")
+    def fake_handler_for_kind(kind: str) -> Any:
+        assert kind == "goal_followup"
+        return FakeHandler()
 
     async def fake_succeed(
         session: Any,
@@ -530,8 +601,7 @@ async def test_orchestrator_goal_followup_success_publishes_result_after_success
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
     monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
-    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fail_plan_flow)
-    monkeypatch.setattr(llm_orchestrator, "run_goal_followup", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 12, 42)
@@ -729,9 +799,14 @@ async def test_orchestrator_status_conflict_rolls_back_without_result(monkeypatc
         run.status = "running"
         return run
 
-    async def fake_flow(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        run.display_text_md = "flushed draft text"
-        return {"draft_id": 8}
+    class FakeHandler:
+        async def execute(self, context: Any) -> dict[str, Any]:
+            run.display_text_md = "flushed draft text"
+            return {"draft_id": 8}
+
+    def fake_handler_for_kind(kind: str) -> Any:
+        assert kind == "goal_plan_generate"
+        return FakeHandler()
 
     async def fake_succeed(*args: Any, **kwargs: Any):
         run.status = "canceled"
@@ -744,7 +819,7 @@ async def test_orchestrator_status_conflict_rolls_back_without_result(monkeypatc
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
     monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
-    monkeypatch.setattr(llm_orchestrator, "run_goal_plan_generate", fake_flow)
+    monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 11, 42)

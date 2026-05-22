@@ -42,6 +42,7 @@
 - `docs/architecture/docker.md`：Docker 镜像、Compose 服务和 smoke test。
 - `docs/architecture/makefile.md`：根目录 `Makefile` 命令契约。
 - `docs/dev-setup.md`：WSL Ubuntu 本地开发环境和常用流程。
+- `docs/data-flow.md`：研发按需补充的数据流程备注，用于解释具体页面和后端服务之间的数据写入、返回和关联关系，不作为代码变更后的强维护契约。
 - `docs/prd/prd.md`：产品需求、AI Coach 行为、RAG、工具层和里程碑。
 - `docs/project-todolist.md`：从 PRD 拆分出的总体阶段、当前进度和后续任务追踪。
 
