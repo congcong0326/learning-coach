@@ -222,7 +222,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 持久化 assistant event 和 `coach_turn` 记录，`coach_summary` run 在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`。第一版教练回复仍使用确定性安全回复和后端有限状态编排，LangGraph、RAG 和更完整的模型结构化输出后续可以在相同 run kind 边界内替换。
+训练工作台也接入该层：`coach_turn` run 持久化 assistant event 和 `coach_turn` 记录，`coach_summary` run 在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`。第一版教练回复仍使用确定性安全回复和后端有限状态编排，因此当前 `coach_turn` 和 `coach_summary` 不要求先选择或解密模型资产；LangGraph、RAG 和更完整的模型结构化输出后续可以在相同 run kind 边界内替换，并在切换到真实模型调用时重新打开模型资产依赖。
 
 ## Docker Compose 角色
 

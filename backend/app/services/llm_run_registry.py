@@ -35,6 +35,7 @@ class RunKindSpec:
     handler: LlmRunHandler | None
     related_type: str = ""
     related_id_key: str = ""
+    requires_model: bool = True
 
 
 class GoalFollowupHandler:
@@ -81,18 +82,21 @@ RUN_KIND_SPECS: dict[str, RunKindSpec] = {
         handler=CoachTurnHandler(),
         related_type="practice_session",
         related_id_key="session_id",
+        requires_model=False,
     ),
     # practice_session：单题训练复盘入口，第一版复用安全确定性回复，完整 summary/profile delta 后续接入。
     "coach_summary": RunKindSpec(
         handler=CoachSummaryHandler(),
         related_type="practice_session",
         related_id_key="session_id",
+        requires_model=False,
     ),
     # study_plan：正式学习计划。当前只保留创建 run 时的关联元数据，执行 handler 尚未接入。
     "study_plan_adjustment": RunKindSpec(
         handler=None,
         related_type="study_plan",
         related_id_key="plan_id",
+        requires_model=False,
     ),
 }
 
@@ -104,6 +108,11 @@ def supported_run_kinds() -> set[str]:
 def handler_for_kind(kind: str) -> LlmRunHandler | None:
     spec = RUN_KIND_SPECS.get(kind)
     return spec.handler if spec is not None else None
+
+
+def requires_model_for_kind(kind: str) -> bool:
+    spec = RUN_KIND_SPECS.get(kind)
+    return bool(spec is not None and spec.handler is not None and spec.requires_model)
 
 
 def related_from_payload(kind: str, payload: dict[str, Any]) -> tuple[str, int | None]:

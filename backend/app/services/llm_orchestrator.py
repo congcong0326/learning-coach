@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,9 +18,14 @@ from backend.app.services.llm_credential_service import (
     LlmCredentialError,
     select_llm_credential_for_user,
 )
+from backend.app.services.llm_providers.base import LlmProvider, ProviderChunk
 from backend.app.services.llm_providers.openai_responses import OpenAIResponsesProvider
 from backend.app.services.llm_run_events import LlmRunEvent, event_hub
-from backend.app.services.llm_run_registry import LlmRunContext, handler_for_kind
+from backend.app.services.llm_run_registry import (
+    LlmRunContext,
+    handler_for_kind,
+    requires_model_for_kind,
+)
 from backend.app.services.llm_run_service import (
     LlmRunError,
     fail_llm_run,
@@ -48,6 +54,25 @@ ERROR_MESSAGES = {
     "run_kind_unsupported": "当前生成类型暂未接入",
     "run_status_conflict": "本次生成已结束或已取消",
 }
+
+
+class _UnavailableLlmProvider:
+    def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncIterator[ProviderChunk]:
+        del model, instructions, input_text
+
+        async def _raise() -> AsyncIterator[ProviderChunk]:
+            # 当前确定性 handler 不会调用 provider；如果未来误用，失败点要清晰，
+            # 避免在没有模型资产的路径里静默产生伪 LLM 输出。
+            raise RuntimeError("llm_provider_unavailable_for_run_kind")
+            yield ProviderChunk()
+
+        return _raise()
 
 
 async def _load_run_and_user(
@@ -223,33 +248,50 @@ async def execute_llm_run(
                 )
                 return
 
-            await event_hub.publish(
-                run_id,
-                LlmRunEvent(
-                    "progress",
-                    {
-                        "run_id": run_id,
-                        "stage": "selecting_credential",
-                        "message": "正在选择模型资产",
-                    },
-                ),
-            )
-            credential = await select_llm_credential_for_user(session, user)
-            api_key = decrypt_api_key(
-                credential.api_key_ciphertext,
-                settings.credential_encryption_key,
-            )
-            await mark_llm_run_running(
-                session,
-                run,
-                stage="selecting_credential",
-                llm_credential_id=credential.id,
-                model_name=credential.model_name,
-            )
-            provider = OpenAIResponsesProvider(
-                api_key=api_key,
-                base_url=credential.base_url,
-            )
+            if requires_model_for_kind(run.kind):
+                await event_hub.publish(
+                    run_id,
+                    LlmRunEvent(
+                        "progress",
+                        {
+                            "run_id": run_id,
+                            "stage": "selecting_credential",
+                            "message": "正在选择模型资产",
+                        },
+                    ),
+                )
+                credential = await select_llm_credential_for_user(session, user)
+                api_key = decrypt_api_key(
+                    credential.api_key_ciphertext,
+                    settings.credential_encryption_key,
+                )
+                await mark_llm_run_running(
+                    session,
+                    run,
+                    stage="selecting_credential",
+                    llm_credential_id=credential.id,
+                    model_name=credential.model_name,
+                )
+                provider: LlmProvider = OpenAIResponsesProvider(
+                    api_key=api_key,
+                    base_url=credential.base_url,
+                )
+                model_name = credential.model_name
+            else:
+                await event_hub.publish(
+                    run_id,
+                    LlmRunEvent(
+                        "progress",
+                        {
+                            "run_id": run_id,
+                            "stage": "running_handler",
+                            "message": "正在执行生成任务",
+                        },
+                    ),
+                )
+                await mark_llm_run_running(session, run, stage="running_handler")
+                provider = _UnavailableLlmProvider()
+                model_name = ""
 
             result = await handler.execute(
                 LlmRunContext(
@@ -257,7 +299,7 @@ async def execute_llm_run(
                     user_id=user_id,
                     run=run,
                     provider=provider,
-                    model_name=credential.model_name,
+                    model_name=model_name,
                     publish=lambda event: event_hub.publish(run_id, event),
                 )
             )

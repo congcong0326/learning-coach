@@ -532,6 +532,114 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+
+    calls: list[str] = []
+    events: list[LlmRunEvent] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 13,
+            "user_id": 42,
+            "kind": "coach_turn",
+            "status": "pending",
+            "display_text_md": "",
+        },
+    )()
+    user = fake_user()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            calls.append("rollback")
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            assert run_id == 13
+            calls.append(f"publish:{event.name}")
+            events.append(event)
+
+    async def fail_select(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("coach_turn should not select model credentials")
+
+    def fail_decrypt(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("coach_turn should not decrypt model credentials")
+
+    async def fake_mark_running(
+        session: Any,
+        selected_run: Any,
+        *,
+        stage: str,
+        llm_credential_id: int | None = None,
+        model_name: str = "",
+    ):
+        assert selected_run is run
+        assert stage == "running_handler"
+        assert llm_credential_id is None
+        assert model_name == ""
+        calls.append("mark_running")
+        run.status = "running"
+        return run
+
+    class FakeHandler:
+        async def execute(self, context: Any) -> dict[str, Any]:
+            assert context.user_id == 42
+            assert context.run is run
+            assert context.model_name == ""
+            calls.append("coach_flow")
+            run.display_text_md = "coach text"
+            return {"session_id": 9, "assistant_event_id": 20}
+
+    def fake_handler_for_kind(kind: str) -> Any:
+        assert kind == "coach_turn"
+        return FakeHandler()
+
+    async def fake_succeed(
+        session: Any,
+        selected_run: Any,
+        *,
+        result: dict[str, Any],
+        display_text_md: str,
+    ):
+        assert selected_run is run
+        assert result["assistant_event_id"] == 20
+        assert display_text_md == "coach text"
+        calls.append("succeed")
+        run.status = "succeeded"
+        return run
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", lambda session, run_id, user_id: _async_value((run, user)))
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fail_select)
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fail_decrypt)
+    monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
+    monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 13, 42)
+
+    assert [event.name for event in events] == ["started", "progress", "result", "done"]
+    assert events[1].data["stage"] == "running_handler"
+    assert calls == [
+        "publish:started",
+        "publish:progress",
+        "mark_running",
+        "coach_flow",
+        "succeed",
+        "publish:result",
+        "publish:done",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_goal_followup_success_publishes_result_after_success(monkeypatch) -> None:
     from backend.app.services import llm_orchestrator
 
