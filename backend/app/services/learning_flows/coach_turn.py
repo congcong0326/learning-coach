@@ -163,12 +163,6 @@ async def run_coach_turn(
         decision_accepted=decision.accepted,
         guard_reason=decision.reason,
     )
-    await publish(
-        LlmRunEvent(
-            "result",
-            {"run_id": run.id, "status": "succeeded", "result": result},
-        )
-    )
     logger.info(
         "coach turn flow completed run_id=%s user_id=%s session_id=%s "
         "coach_turn_id=%s phase_before=%s phase_after=%s",
