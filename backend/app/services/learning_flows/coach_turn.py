@@ -55,26 +55,34 @@ async def run_coach_turn(
 ) -> dict[str, Any]:
     del provider
     await _ensure_run_mutable(session, run)
-    practice_session = await _load_practice_session(session, user_id=user_id, run=run)
-    user_event = await _latest_user_message_event(
+    payload = _payload_for_run(run)
+    practice_session = await _load_practice_session(
+        session,
+        user_id=user_id,
+        run=run,
+        payload=payload,
+    )
+    user_event = await _load_user_event(
         session,
         user_id=user_id,
         session_id=practice_session.id,
-        payload=run.input_json if isinstance(run.input_json, dict) else {},
+        payload=payload,
+        required=run.kind == "coach_turn",
     )
     has_feedback = await _has_submission_feedback(
         session,
         user_id=user_id,
         session_id=practice_session.id,
     )
-    proposed_phase = _proposed_phase(
+    trigger_context = _trigger_context(
+        payload,
         practice_session,
         has_submission_feedback=has_feedback,
         force_summary=run.kind == "coach_summary",
     )
     decision = guard_transition(
         phase_before=practice_session.phase,
-        proposed_phase_after=proposed_phase,
+        proposed_phase_after=trigger_context["proposed_phase"],
         has_code=practice_session.latest_code_snapshot_id is not None,
         has_submission_feedback=has_feedback,
         hint_level=practice_session.current_hint_level,
@@ -88,7 +96,7 @@ async def run_coach_turn(
         user_id,
         practice_session.id,
         practice_session.phase,
-        proposed_phase,
+        trigger_context["proposed_phase"],
         decision.accepted,
         model_name,
     )
@@ -110,10 +118,12 @@ async def run_coach_turn(
         event_type="assistant_message",
         role="assistant",
         phase=decision.phase_after,
-        intent="coach_turn",
+        intent=None,
         content_md=SAFE_REPLY,
         payload_json={
             "prompt_version": PROMPT_VERSION,
+            "trigger": trigger_context["trigger"],
+            "next_action": trigger_context["next_action"],
             "guard_reason": decision.reason,
             "guard_accepted": decision.accepted,
         },
@@ -134,9 +144,9 @@ async def run_coach_turn(
         phase_before=phase_before,
         phase_after=decision.phase_after,
         training_mode=practice_session.training_mode,
-        diagnosed_stuck_point="",
+        diagnosed_stuck_point=trigger_context["diagnosed_stuck_point"],
         user_intent=_user_intent(user_event),
-        next_action="ask_bruteforce_state_and_edges",
+        next_action=trigger_context["next_action"],
         hint_level_before=practice_session.current_hint_level,
         hint_level_after=decision.hint_level_after,
         visible_hint_gear=practice_session.visible_hint_gear,
@@ -181,10 +191,11 @@ async def _load_practice_session(
     *,
     user_id: int,
     run: LlmRun,
+    payload: dict[str, Any],
 ) -> PracticeSession:
     session_id = run.related_id
-    if session_id is None and isinstance(run.input_json, dict):
-        session_id = run.input_json.get("session_id")
+    if session_id is None:
+        session_id = payload.get("session_id")
     if not isinstance(session_id, int) or isinstance(session_id, bool):
         raise LearningFlowError("practice_session_not_found")
     result = await session.execute(
@@ -204,27 +215,37 @@ async def _load_practice_session(
     return practice_session
 
 
-async def _latest_user_message_event(
+def _payload_for_run(run: LlmRun) -> dict[str, Any]:
+    if not isinstance(run.input_json, dict):
+        raise LearningFlowError("coach_output_invalid")
+    return run.input_json
+
+
+async def _load_user_event(
     session: AsyncSession,
     *,
     user_id: int,
     session_id: int,
     payload: dict[str, Any],
+    required: bool,
 ) -> PracticeEvent | None:
     event_id = payload.get("user_event_id")
-    where_clause = [
-        PracticeEvent.session_id == session_id,
-        PracticeEvent.user_id == user_id,
-        PracticeEvent.role == "user",
-    ]
-    if isinstance(event_id, int) and not isinstance(event_id, bool):
-        where_clause.append(PracticeEvent.id == event_id)
-    else:
-        where_clause.append(PracticeEvent.event_type == "user_message")
+    if event_id is None and not required:
+        return None
+    if not isinstance(event_id, int) or isinstance(event_id, bool):
+        raise LearningFlowError("coach_output_invalid")
     result = await session.execute(
-        select(PracticeEvent).where(*where_clause).order_by(PracticeEvent.created_at.desc())
+        select(PracticeEvent).where(
+            PracticeEvent.id == event_id,
+            PracticeEvent.session_id == session_id,
+            PracticeEvent.user_id == user_id,
+            PracticeEvent.role == "user",
+        )
     )
-    return result.scalars().first()
+    user_event = result.scalar_one_or_none()
+    if user_event is None:
+        raise LearningFlowError("practice_session_not_found")
+    return user_event
 
 
 async def _has_submission_feedback(
@@ -244,23 +265,58 @@ async def _has_submission_feedback(
     return bool(result.scalar())
 
 
-def _proposed_phase(
+def _trigger_context(
+    payload: dict[str, Any],
     practice_session: PracticeSession,
     *,
     has_submission_feedback: bool,
     force_summary: bool,
-) -> str:
+) -> dict[str, str]:
+    trigger = payload.get("trigger") or ("request_summary" if force_summary else None)
+    if not isinstance(trigger, str):
+        raise LearningFlowError("coach_output_invalid")
     if (
         force_summary
+        or trigger == "request_summary"
         or practice_session.final_result == "ac"
         or practice_session.status == "summarizing"
     ):
-        return "summarize"
-    if has_submission_feedback:
-        return "analyze_feedback"
-    if practice_session.latest_code_snapshot_id is not None:
-        return "review_code"
-    return practice_session.phase
+        return {
+            "trigger": trigger,
+            "proposed_phase": "summarize",
+            "next_action": "summarize_session",
+            "diagnosed_stuck_point": "reflection_requested",
+        }
+    if trigger == "submit_feedback":
+        return {
+            "trigger": trigger,
+            "proposed_phase": "analyze_feedback",
+            "next_action": "analyze_submission_feedback",
+            "diagnosed_stuck_point": "submission_feedback_analysis",
+        }
+    if trigger == "code_review":
+        return {
+            "trigger": trigger,
+            "proposed_phase": "review_code",
+            "next_action": "review_code",
+            "diagnosed_stuck_point": "code_review_requested",
+        }
+    if trigger == "request_hint":
+        return {
+            "trigger": trigger,
+            "proposed_phase": practice_session.phase,
+            "next_action": "offer_questioning_hint",
+            "diagnosed_stuck_point": "needs_hint",
+        }
+    if trigger == "describe_idea":
+        proposed_phase = "analyze_feedback" if has_submission_feedback else practice_session.phase
+        return {
+            "trigger": trigger,
+            "proposed_phase": proposed_phase,
+            "next_action": "ask_bruteforce_state_and_edges",
+            "diagnosed_stuck_point": "bruteforce_state_unclear",
+        }
+    raise LearningFlowError("coach_output_invalid")
 
 
 def _user_intent(user_event: PracticeEvent | None) -> str:
