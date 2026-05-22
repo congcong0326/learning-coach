@@ -22,10 +22,12 @@ Browser
   -> Vite dev server / Nginx static frontend
   -> FastAPI backend
   -> PostgreSQL + pgvector
-  -> code-runner container
+  -> code-runner container（现有备用基础设施）
 ```
 
 后端是系统的业务边界。前端只通过 HTTP API 与后端交互，不直接连接数据库、不直接调用 LLM、不直接执行用户代码。
+
+PRD v0.3 第一版不再把本地代码运行纳入核心产品流程。用户最终运行和提交以 LeetCode 官网为准，现有 `code-runner` 仅作为已经搭建好的备用基础设施和后续实验能力保留。
 
 用户身份和模型资产也在后端边界内处理。浏览器只保存后端设置的 HttpOnly session cookie；OpenAI API key 只在创建或覆盖更新时提交给后端，后端加密落库，API 和前端只返回脱敏后的 `api_key_mask`。
 
@@ -125,7 +127,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
 - `backend.app.agents`：LangGraph 编排。
 - `backend.app.rag`：知识库导入、切块、检索。
-- `backend.app.tools`：代码运行、静态分析、错误归因等工具。
+- `backend.app.tools`：后续工具能力目录。PRD v0.3 第一版优先做 LeetCode 提交结果归因；如后续重新引入本地代码运行，再在此边界内接入。
 
 ## 数据库选型
 
@@ -180,7 +182,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `study_plan_item`，保存正式题库题目引用、推荐理由、建议训练模式、状态、顺序和锁定标记。
 - 创建 `plan_change_log`，记录版本调整中的 preserved、added、removed 和 reordered 变化。
 
-T1 当前只把学习计划项和题库题目关联起来；真实训练会话、提交历史和代码快照将在 T2 通过稳定的 plan/version/item 标识继续关联。
+T1 当前只把学习计划项和题库题目关联起来；真实训练会话、训练事件和提交历史将在 T2 通过稳定的 plan/version/item 标识继续关联。
 
 当前 LLM Run 相关 migration 会：
 
@@ -203,11 +205,13 @@ Docker Compose 是本地开发、测试和打包验证的统一入口。
 - `postgres`：pgvector PostgreSQL。
 - `backend`：FastAPI。
 - `frontend`：Vite dev server 或 Nginx 静态服务。
-- `code-runner`：隔离的 Python 代码执行容器。
+- `code-runner`：现有备用的隔离 Python 代码执行容器，PRD v0.3 第一版产品主线暂不使用。
 
 ## 代码执行边界
 
-用户代码不在后端主进程里执行。当前基座已经定义独立 `code-runner` 镜像，并在 Compose 中限制：
+PRD v0.3 第一版产品主线不做本地代码运行，用户最终运行和提交以 LeetCode 官网为准。
+
+如后续重新引入本地代码运行，用户代码也不能在后端主进程里执行。当前基座已经定义独立 `code-runner` 镜像，并在 Compose 中限制：
 
 - 无网络。
 - 只读文件系统。
@@ -215,7 +219,7 @@ Docker Compose 是本地开发、测试和打包验证的统一入口。
 - drop Linux capabilities。
 - CPU 和内存限制。
 
-后续产品功能需要在这个边界上继续完善输入协议、超时控制、结果结构化和安全策略。
+后续如重新启用该能力，需要在这个边界上继续完善输入协议、超时控制、结果结构化和安全策略。
 
 ## 验证边界
 
@@ -241,10 +245,10 @@ make down
 
 基座完成后，后续功能应按 PRD 里程碑推进：
 
-1. 做题工作台的代码编辑与训练会话。
+1. 做题工作台的训练会话与 AI 教练对话。
 2. 基础 AI 教练闭环。
 3. LangGraph 状态机。
 4. RAG 教练知识库。
-5. 代码执行与错误归因。
+5. LeetCode 提交回填与错因归因。
 6. 复盘、画像和推荐。
 7. Trace 和评估。

@@ -116,7 +116,7 @@ make down
 
 - `learning-coach-dev_frontend_node_modules`
 
-前端容器使用独立 volume 保存 `node_modules`，避免与宿主机或其他 WSL 前端项目互相影响。
+前端容器使用独立 volume 保存 `node_modules`，避免与宿主机或其他 WSL 前端项目互相影响。开发环境启动 frontend 服务时会先执行 `CI=true pnpm install --frozen-lockfile`，再启动 Vite dev server；这样当 `package.json` 或 `pnpm-lock.yaml` 变化时，容器内的依赖 volume 会以非交互方式同步，避免 pnpm 在无 TTY 容器中等待清理确认。
 
 ### 测试环境
 
