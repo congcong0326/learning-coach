@@ -807,6 +807,46 @@ async def test_confirm_draft_creates_unique_active_plan(
 
 
 @pytest.mark.asyncio
+async def test_confirm_draft_adds_context_to_duplicate_llm_titles(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        first_draft = await create_ready_draft(session, user, title="面试冲刺计划")
+        first_draft.draft_goal_json = {
+            "goal_type": "interview_sprint",
+            "preferred_language": "python3",
+        }
+        first_draft.input_json = first_draft.draft_goal_json
+        second_draft = await create_ready_draft(session, user, title="面试冲刺计划")
+        second_draft.draft_goal_json = first_draft.draft_goal_json
+        second_draft.input_json = first_draft.draft_goal_json
+        await session.commit()
+
+        first_plan = await confirm_plan_draft(session, user, first_draft.id)
+        second_plan = await confirm_plan_draft(session, user, second_draft.id)
+
+        assert first_plan.title.startswith("面试冲刺计划 · 面试冲刺 · Python3 · ")
+        assert second_plan.title.startswith("面试冲刺计划 · 面试冲刺 · Python3 · ")
+        assert second_plan.title != first_plan.title
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_returns_existing_plan_when_already_confirmed(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, title="已确认计划")
+        first_plan = await confirm_plan_draft(session, user, draft.id)
+
+        second_plan = await confirm_plan_draft(session, user, draft.id)
+
+        assert second_plan.id == first_plan.id
+        assert second_plan.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_adjustment_clone_preserves_completed_items(
     learning_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -852,7 +892,7 @@ async def test_plan_payload_lists_stages_items_and_current_plan(
         current = await get_current_study_plan_payload(session, user)
         plans = await list_study_plans(session, user)
 
-        assert payload["title"] == "当前计划"
+        assert payload["title"].startswith("当前计划 · 面试冲刺 · ")
         StudyPlanResponse.model_validate(payload)
         stages = payload["active_version"]["stages"]
         items = stages[0]["items"]
@@ -861,13 +901,50 @@ async def test_plan_payload_lists_stages_items_and_current_plan(
         assert plans["items"] == [
             {
                 "id": plan.id,
-                "title": "当前计划",
+                "title": payload["title"],
                 "status": "active",
                 "active_version_number": 1,
                 "created_at": plan.created_at,
                 "updated_at": plan.updated_at,
             }
         ]
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_normalizes_suggested_mode_alias_before_payload(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        plan_json = draft_plan_json("别名计划")
+        plan_json["stages"][0]["items"][0]["suggested_mode"] = "independent_first"
+        draft = await create_ready_draft(session, user, plan_json=plan_json)
+
+        plan = await confirm_plan_draft(session, user, draft.id)
+        payload = await study_plan_payload(session, user, plan.id)
+
+        StudyPlanResponse.model_validate(payload)
+        first_item = payload["active_version"]["stages"][0]["items"][0]
+        assert first_item["suggested_mode"] == "independent"
+
+
+@pytest.mark.asyncio
+async def test_plan_payload_normalizes_legacy_persisted_suggested_mode_alias(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user, title="旧数据计划")
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        item_by_slug(version, "two-sum").suggested_mode = "interviewer_style"
+        await session.commit()
+
+        payload = await study_plan_payload(session, user, plan.id)
+
+        StudyPlanResponse.model_validate(payload)
+        first_item = payload["active_version"]["stages"][0]["items"][0]
+        assert first_item["suggested_mode"] == "mock_interview"
 
 
 @pytest.mark.asyncio

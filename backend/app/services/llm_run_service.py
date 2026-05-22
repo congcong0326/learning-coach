@@ -52,15 +52,19 @@ async def create_llm_run(
     related_type: str = "",
     related_id: int | None = None,
 ) -> LlmRun:
+    # run 创建阶段只保存“要做什么”和输入快照；status、stage、result、错误信息等
+    # 由 LlmRun 模型默认值兜底，后续执行器再推进状态机。
     run = LlmRun(
         user_id=user.id,
         kind=kind,
+        # 数据库列要求 JSON 非空；没有入参时统一落成空对象，避免后续 flow 处理 None 分支。
         input_json=payload or {},
         related_type=related_type,
         related_id=related_id,
     )
     session.add(run)
     await session.commit()
+    # commit 后刷新一次，拿到数据库生成的 id、created_at 和默认状态，供 API 返回 stream_url。
     await session.refresh(run)
     logger.info(
         "llm run created user_id=%s run_id=%s kind=%s related_type=%s related_id=%s",

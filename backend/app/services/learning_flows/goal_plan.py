@@ -27,6 +27,8 @@ PLAN_DRAFT_INSTRUCTIONS = (
     "只输出 JSON，且 stages 至少包含 1 个阶段，每个阶段 items 至少包含 1 道题。"
     "面向用户展示的 title、objective_md、assessment_criteria、recommendation_reason "
     "必须使用简体中文；problem_slug、difficulty、suggested_mode、skill_tags 等机器字段保持英文或枚举值。"
+    "suggested_mode 只能使用 guided、independent、mock_interview，不要使用目标偏好字段 "
+    "independent_first 或 interviewer_style。"
     "正式题单会由后端本地题库校验和修复，不要输出解释性前后缀。"
 )
 REPAIR_PLAN_INSTRUCTIONS = (

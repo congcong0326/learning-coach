@@ -33,6 +33,8 @@ def _http_error(exc: StudyPlanError) -> HTTPException:
     return HTTPException(status_code=status, detail=exc.detail)
 
 
+# 学习计划 API 层只负责鉴权、会话注入和错误码映射；目标校准、LLM 生成、
+# 本地题库校验和正式落库都收敛在 service 层，避免路由层复制业务状态机。
 @router.post("/goal-calibration", response_model=GoalCalibrationStartResponse)
 async def start_goal_calibration_route(
     payload: GoalCalibrationInput,
@@ -79,6 +81,8 @@ async def generate_plan_draft_route(
         raise _http_error(exc) from exc
 
 
+# 用户确认草稿后才创建正式 study_plan/version/stage/item；生成草稿阶段不会直接
+# 改动当前 active 计划，便于用户在前端预览、放弃或重新生成。
 @router.post("/study-plans/confirm", response_model=StudyPlanResponse)
 async def confirm_plan_route(
     payload: ConfirmPlanRequest,

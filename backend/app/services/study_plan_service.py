@@ -29,11 +29,11 @@ from backend.app.services.learning_plan_llm import (
     client_for_user,
     generate_plan_with_repair,
 )
+from backend.app.services.learning_plan_validator import normalise_suggested_mode
 from backend.app.services.llm_credential_service import LlmCredentialError
 
 
-# Progress-bearing items are carried into adjusted versions so user work is not
-# lost when the LLM proposes a new plan structure.
+# 调整计划时，已产生进度的题目会带入新版本，避免 LLM 新结构静默丢掉用户已投入的训练。
 PRESERVED_ITEM_STATUSES = {"completed", "in_progress", "skipped"}
 ACTIVE_VERSION_STATUSES = {"active", "draft"}
 GENERATABLE_DRAFT_STATUSES = {
@@ -41,6 +41,20 @@ GENERATABLE_DRAFT_STATUSES = {
     "asking_followup",
     "ready_for_review",
     "failed",
+}
+PLAN_TITLE_MAX_LENGTH = 180
+GOAL_TYPE_LABELS = {
+    "beginner": "刷题入门",
+    "interview_sprint": "面试冲刺",
+    "strengthen_weakness": "专项补弱",
+    "maintain": "保持手感",
+}
+PREFERRED_LANGUAGE_LABELS = {
+    "c": "C",
+    "go": "Go",
+    "python3": "Python3",
+    "javascript": "JavaScript",
+    "java": "Java",
 }
 MAX_FOLLOWUPS = 3
 logger = logging.getLogger(__name__)
@@ -121,6 +135,71 @@ def _draft_plan_counts(draft_plan_json: dict[str, Any]) -> tuple[int, int]:
     return len(stages), item_count
 
 
+def _title_text(value: Any, fallback: str = "学习计划") -> str:
+    if not isinstance(value, str):
+        return fallback
+    stripped = " ".join(value.split())
+    return stripped or fallback
+
+
+def _truncate_title(value: str, max_length: int = PLAN_TITLE_MAX_LENGTH) -> str:
+    if len(value) <= max_length:
+        return value
+    return value[: max(0, max_length - 3)].rstrip() + "..."
+
+
+def _plan_title_context(draft: GoalCalibrationDraft) -> dict[str, Any]:
+    if isinstance(draft.draft_goal_json, dict) and draft.draft_goal_json:
+        return draft.draft_goal_json
+    return draft.input_json if isinstance(draft.input_json, dict) else {}
+
+
+def _label_from_context(
+    context: dict[str, Any],
+    key: str,
+    labels: dict[str, str],
+) -> str:
+    raw_value = context.get(key)
+    if not isinstance(raw_value, str):
+        return ""
+    return labels.get(raw_value, "")
+
+
+async def _existing_plan_titles(db: AsyncSession, user: AppUser) -> set[str]:
+    result = await db.execute(select(StudyPlan.title).where(StudyPlan.user_id == user.id))
+    return {str(title) for title in result.scalars().all()}
+
+
+def _title_with_sequence(base_title: str, sequence: int) -> str:
+    if sequence <= 1:
+        return _truncate_title(base_title)
+    suffix = f" ({sequence})"
+    return f"{_truncate_title(base_title, PLAN_TITLE_MAX_LENGTH - len(suffix))}{suffix}"
+
+
+async def _build_confirmed_plan_title(
+    db: AsyncSession,
+    user: AppUser,
+    draft: GoalCalibrationDraft,
+    now: datetime,
+) -> str:
+    context = _plan_title_context(draft)
+    parts = [
+        _title_text(draft.draft_plan_json.get("title")),
+        _label_from_context(context, "goal_type", GOAL_TYPE_LABELS),
+        _label_from_context(context, "preferred_language", PREFERRED_LANGUAGE_LABELS),
+        now.strftime("%Y-%m-%d %H:%M"),
+    ]
+    title = _truncate_title(" · ".join(part for part in parts if part))
+    existing_titles = await _existing_plan_titles(db, user)
+    sequence = 1
+    candidate = _title_with_sequence(title, sequence)
+    while candidate in existing_titles:
+        sequence += 1
+        candidate = _title_with_sequence(title, sequence)
+    return candidate
+
+
 def _plan_draft_response_from_json(
     *,
     draft_id: int,
@@ -194,6 +273,7 @@ async def start_goal_calibration(
     user: AppUser,
     payload: GoalCalibrationInput,
 ) -> dict[str, Any]:
+    # 目标校准的第一步只保存结构化输入和追问历史；正式学习计划必须等用户预览草稿后确认。
     payload_json = payload.model_dump()
     logger.info(
         "goal calibration start requested user_id=%s goal_type=%s "
@@ -293,6 +373,7 @@ async def answer_goal_followup(
         }
     )
     if _followup_question_count(history) < MAX_FOLLOWUPS:
+        # 追问上限由后端兜住，即使模型持续想追问也不能阻塞用户生成计划。
         client, credential = await _client_for_user_or_error(db, user)
         question = _normalise_followup_question(
             await client.followup_question(draft.input_json, history)
@@ -344,6 +425,7 @@ async def generate_goal_plan_draft(
         and draft.draft_plan_json
         and draft.prompt_version == PROMPT_VERSION
     ):
+        # 同一 prompt 版本下的 ready 草稿可以直接复用，避免重复扣费和打乱用户正在预览的内容。
         logger.info(
             "goal plan draft generation reused existing draft "
             "draft_id=%s user_id=%s status=%s",
@@ -377,8 +459,7 @@ async def generate_goal_plan_draft(
     draft.status = "generating"
     draft.updated_at = datetime.now(UTC)
     try:
-        # The service does not persist the LLM draft until it passes local
-        # validation, keeping official study-plan items tied to known problems.
+        # LLM 草稿通过本地校验前不写入正式计划表，确保最终 study_plan_item 都绑定真实题库。
         plan_json, report, repair_log = await generate_plan_with_repair(
             db,
             client,
@@ -570,8 +651,7 @@ async def _normalized_stage_payloads(
     db: AsyncSession,
     draft_plan_json: dict[str, Any],
 ) -> list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]]:
-    # Re-resolve every slug at write time so persisted plan items always point
-    # at local Problem rows, even if a caller passes a stale validated draft.
+    # 落库前重新解析每个 slug，防止调用方传入过期草稿导致计划项指向不存在的题目。
     seen_problem_ids: set[int] = set()
     normalized: list[tuple[dict[str, Any], list[tuple[dict[str, Any], Problem]]]] = []
     for stage_payload in _list_of_dicts(draft_plan_json.get("stages", [])):
@@ -594,6 +674,7 @@ async def _write_version_content(
     version: StudyPlanVersion,
     draft_plan_json: dict[str, Any],
 ) -> None:
+    # 一个版本的 stage 和 item 一次性写入，stage_index/order_index 是前端展示和重排的稳定顺序。
     normalized_stages = await _normalized_stage_payloads(db, draft_plan_json)
     item_count = 0
     for stage_index, (stage_payload, item_payloads) in enumerate(
@@ -630,7 +711,9 @@ async def _write_version_content(
                         item_payload.get("skill_tags", [])
                     ),
                     difficulty=problem.difficulty,
-                    suggested_mode=str(item_payload.get("suggested_mode", "guided")),
+                    suggested_mode=normalise_suggested_mode(
+                        item_payload.get("suggested_mode")
+                    ),
                     recommendation_reason=str(
                         item_payload.get("recommendation_reason", "")
                     ),
@@ -662,7 +745,6 @@ async def confirm_plan_draft(
             select(GoalCalibrationDraft).where(
                 GoalCalibrationDraft.id == draft_id,
                 GoalCalibrationDraft.user_id == user.id,
-                GoalCalibrationDraft.status == "ready_for_review",
             )
         )
         draft = result.scalar_one_or_none()
@@ -674,13 +756,33 @@ async def confirm_plan_draft(
                 draft_id,
             )
             raise StudyPlanError("plan_draft_not_ready")
+        if draft.status == "confirmed" and draft.confirmed_plan_id is not None:
+            logger.info(
+                "study plan confirmation reused confirmed draft user_id=%s "
+                "draft_id=%s plan_id=%s",
+                user.id,
+                draft.id,
+                draft.confirmed_plan_id,
+            )
+            return await _load_plan(db, user, draft.confirmed_plan_id)
+        if draft.status != "ready_for_review":
+            logger.warning(
+                "study plan confirmation rejected user_id=%s draft_id=%s "
+                "status=%s reason=plan_draft_not_ready",
+                user.id,
+                draft.id,
+                draft.status,
+            )
+            raise StudyPlanError("plan_draft_not_ready")
 
         await pause_other_active_plans(db, user)
         stage_count, item_count = _draft_plan_counts(draft.draft_plan_json)
         now = datetime.now(UTC)
+        plan_title = await _build_confirmed_plan_title(db, user, draft, now)
+        # 确认草稿时才创建正式 v1；同时暂停用户其他 active 计划，保证训练上下文唯一。
         plan = StudyPlan(
             user_id=user.id,
-            title=str(draft.draft_plan_json.get("title", "学习计划")),
+            title=plan_title,
             status="active",
             active_version_number=1,
             created_at=now,
@@ -758,7 +860,7 @@ def _stage_payload_from_items(
             {
                 "problem_slug": item.problem_slug,
                 "skill_tags": item.skill_tags_json,
-                "suggested_mode": item.suggested_mode,
+                "suggested_mode": normalise_suggested_mode(item.suggested_mode),
                 "recommendation_reason": item.recommendation_reason,
             }
             for item in items
@@ -787,8 +889,7 @@ def _merged_adjustment_draft(
     old_version: StudyPlanVersion,
     draft_plan_json: dict[str, Any],
 ) -> dict[str, Any]:
-    # Preserve locked/progress items that the LLM did not include, so an
-    # adjustment cannot silently drop work the user has already acted on.
+    # 如果 LLM 调整草稿漏掉已锁定或已有进度的题，后端会把它们追加回新版本。
     preserved = _preserved_items(old_version)
     draft_slugs = _draft_problem_slugs(draft_plan_json)
     preserved_stages: list[dict[str, Any]] = []
@@ -1062,6 +1163,8 @@ async def create_adjustment_draft(
         )
         client, credential = await _client_for_user_or_error(db, user)
         preserved_by_slug = _preserved_items(old_version)
+        # 调整计划复用同一套 LLM + validator 流程，但把已有进度题作为 locked slugs，
+        # 避免 repair loop 选择这些题作为替换项后造成重复。
         logger.info(
             "study plan adjustment draft generation started user_id=%s plan_id=%s "
             "active_version_id=%s preserved_count=%s credential_id=%s model=%s",
@@ -1372,7 +1475,7 @@ def _item_payload(item: StudyPlanItem) -> dict[str, Any]:
         "translated_title": item.problem.translated_title,
         "difficulty": item.difficulty,
         "skill_tags": item.skill_tags_json,
-        "suggested_mode": item.suggested_mode,
+        "suggested_mode": normalise_suggested_mode(item.suggested_mode),
         "recommendation_reason": item.recommendation_reason,
         "status": item.status,
         "order_index": item.order_index,

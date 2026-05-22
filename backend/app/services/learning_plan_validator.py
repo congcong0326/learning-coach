@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ValidationIssue(str, Enum):
-    """Stable issue codes stored in validation reports and repair logs."""
+    """稳定的校验问题码，会写入 validation report 和 repair log。"""
 
     EMPTY_PROBLEM_LIBRARY = "empty_problem_library"
     EMPTY_PLAN_STAGES = "empty_plan_stages"
@@ -23,6 +23,23 @@ class ValidationIssue(str, Enum):
     PROBLEM_NOT_FOUND = "problem_not_found"
     PAID_ONLY_PROBLEM = "paid_only_problem"
     DUPLICATE_PROBLEM = "duplicate_problem"
+    INVALID_SUGGESTED_MODE = "invalid_suggested_mode"
+
+
+TRAINING_MODE_ALIASES = {
+    "independent_first": "independent",
+    "interviewer_style": "mock_interview",
+}
+TRAINING_MODES = {"guided", "independent", "mock_interview"}
+
+
+def normalise_suggested_mode(value: Any) -> str:
+    if not isinstance(value, str):
+        return "guided"
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in TRAINING_MODES:
+        return normalized
+    return TRAINING_MODE_ALIASES.get(normalized, "guided")
 
 
 def _problem_tags(problem: Problem) -> set[str]:
@@ -49,8 +66,8 @@ def _candidate_for_tags(
     wanted_tags: list[str],
     unavailable: set[str],
 ) -> Problem | None:
-    # Prefer a tag-compatible free problem, then fall back to the first available
-    # free problem so an empty or invalid LLM draft can still become trainable.
+    # 优先选择标签匹配的免费题；如果没有匹配项，再退到第一道可用免费题，
+    # 这样空草稿或无效草稿也能被修成可训练的最小计划。
     wanted = set(wanted_tags)
     for candidate in candidates:
         if candidate.slug in unavailable:
@@ -109,6 +126,7 @@ def _item_from_problem(
         "title": _problem_display_title(problem),
         "difficulty": problem.difficulty,
         "skill_tags": _skill_tags(problem),
+        "suggested_mode": normalise_suggested_mode(original.get("suggested_mode")),
         "order_index": order_index,
     }
 
@@ -151,6 +169,36 @@ def _append_repair_log(
     )
 
 
+def _safe_suggested_mode_value(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    stripped = value.strip()
+    if len(stripped) <= 64 and all(
+        character.isalnum() or character in "_-" for character in stripped
+    ):
+        return stripped
+    return "invalid"
+
+
+def _append_suggested_mode_repair_log(
+    repair_log: list[dict[str, Any]],
+    *,
+    problem_slug: str,
+    original_suggested_mode: Any,
+    replacement_suggested_mode: str,
+) -> None:
+    repair_log.append(
+        {
+            "reason": ValidationIssue.INVALID_SUGGESTED_MODE.value,
+            "problem_slug": problem_slug,
+            "original_suggested_mode": _safe_suggested_mode_value(
+                original_suggested_mode
+            ),
+            "replacement_suggested_mode": replacement_suggested_mode,
+        }
+    )
+
+
 def _repair_empty_stage_items(
     stage: dict[str, Any],
     candidates: list[Problem],
@@ -181,6 +229,8 @@ async def validate_and_repair_plan_draft(
     *,
     locked_problem_slugs: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    # validator 是 LLM 输出进入正式计划前的后端闸门：只允许本地题库中存在、
+    # 非 paid only、且未重复的题目进入后续落库流程。
     locked = locked_problem_slugs or set()
     problems = await _load_problems(session)
     candidates = [problem for problem in problems if not problem.is_paid_only]
@@ -212,6 +262,8 @@ async def validate_and_repair_plan_draft(
     )
 
     if not stages:
+        # LLM 偶尔会返回空 stages。这里用本地题库补一个“当前阶段”，
+        # 保证用户至少能看到一份可训练的草稿，而不是直接失败。
         fallback_stage, replacement = _repair_empty_stage_items(
             _fallback_stage_payload(),
             candidates,
@@ -235,6 +287,7 @@ async def validate_and_repair_plan_draft(
         repaired_stage = {**stage, "items": []}
         stage_items = _list_of_dicts(stage.get("items", []))
         if not stage_items:
+            # 空阶段没有训练价值；按阶段 focus_tags 补位，避免后续确认计划时生成空 stage。
             fallback_stage, replacement = _repair_empty_stage_items(
                 stage,
                 candidates,
@@ -273,6 +326,8 @@ async def validate_and_repair_plan_draft(
                 problem = None
 
             if problem is None:
+                # 对不存在、付费或重复题做同位替换，repair_log 保留原 slug 和替换原因，
+                # 方便前端或排障时解释为什么最终题单和 LLM 原始输出不同。
                 replacement = _candidate_for_tags(
                     candidates,
                     _list_of_strings(item.get("skill_tags", [])),
@@ -305,6 +360,23 @@ async def validate_and_repair_plan_draft(
                 problem = replacement
 
             used.add(problem.slug)
+            raw_suggested_mode = item.get("suggested_mode")
+            suggested_mode = normalise_suggested_mode(raw_suggested_mode)
+            if raw_suggested_mode is not None and suggested_mode != raw_suggested_mode:
+                _append_suggested_mode_repair_log(
+                    repair_log,
+                    problem_slug=problem.slug,
+                    original_suggested_mode=raw_suggested_mode,
+                    replacement_suggested_mode=suggested_mode,
+                )
+                logger.warning(
+                    "learning plan validation normalized suggested mode "
+                    "problem_slug=%s order_index=%s original_mode=%s replacement_mode=%s",
+                    problem.slug,
+                    order_index,
+                    _safe_suggested_mode_value(raw_suggested_mode),
+                    suggested_mode,
+                )
             repaired_stage["items"].append(
                 _item_from_problem(problem, item, order_index)
             )

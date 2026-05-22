@@ -17,8 +17,8 @@ from backend.app.services.llm_credential_service import select_llm_credential_fo
 
 logger = logging.getLogger(__name__)
 
-# The model receives this schema to stay close to the API contract, but the
-# backend validator remains the source of truth for problem slugs and paid status.
+# LLM 只负责生成结构化草稿，schema 用来把输出约束到 API 形状附近；
+# 题目 slug 是否真实、是否付费、是否重复仍以后端本地 validator 为准。
 PLAN_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -89,8 +89,7 @@ PLAN_JSON_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Keep display text in Chinese while preserving machine-readable enum and slug
-# values. This prevents downstream code from depending on translated identifiers.
+# 展示文本默认中文，但机器字段保留原始枚举和 slug，避免下游代码依赖翻译后的标识。
 DEFAULT_LANGUAGE_CONTEXT_INSTRUCTIONS = (
     "默认语言语境：简体中文。除 machine-readable 字段（problem_slug、difficulty、"
     "suggested_mode、skill_tags、枚举值、URL、代码语言名称和 target_snapshot 原始值）外，"
@@ -121,7 +120,7 @@ REPAIR_PLAN_INSTRUCTIONS = _with_default_language_context(
 
 
 class LearningPlanLlmClient(Protocol):
-    """Small interface used by tests and services to swap the OpenAI client."""
+    """服务层依赖的最小 LLM 接口，测试可以替换成 fake client。"""
 
     async def followup_question(
         self,
@@ -144,7 +143,7 @@ class LearningPlanLlmClient(Protocol):
 
 
 class OpenAILearningPlanClient:
-    """OpenAI Responses client for goal followups and structured plan drafts."""
+    """封装 OpenAI Responses API，负责追问、首轮草稿和修复草稿。"""
 
     def __init__(self, credential: LlmCredential, api_key: str) -> None:
         self.credential = credential
@@ -155,8 +154,7 @@ class OpenAILearningPlanClient:
         instructions: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        # Payloads can contain user free text, so logs around this call only use
-        # counts and credential metadata from the caller instead of raw content.
+        # payload 里可能包含用户自由输入，日志只能记录数量和凭据元信息，不能记录原文。
         response = await self.client.responses.create(
             model=self.credential.model_name,
             instructions=instructions,
@@ -309,8 +307,7 @@ async def generate_plan_with_repair(
         max_repairs,
         locked_problem_count,
     )
-    # The first draft is treated as untrusted: the LLM proposes structure and
-    # slugs, then the local validator repairs or rejects before anything is saved.
+    # 首轮草稿不可信：LLM 只提出阶段结构和题目 slug，保存前必须经过本地题库校验。
     draft = await client.plan_draft(payload, history)
     logger.info(
         "learning plan draft generated stage_count=%s item_count=%s",
@@ -318,8 +315,7 @@ async def generate_plan_with_repair(
         _draft_item_count(draft),
     )
     combined_repair_log: list[dict[str, Any]] = []
-    # Each pass first applies deterministic backend repair, then optionally asks
-    # the model to produce a cleaner draft using only the validation report.
+    # 每轮先做确定性的后端修复；如果仍不合法，再把校验报告交给 LLM 生成更干净的草稿。
     for attempt in range(max_repairs + 1):
         repaired, report, repair_log = await validate_and_repair_plan_draft(
             session,

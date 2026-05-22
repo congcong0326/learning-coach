@@ -266,6 +266,41 @@ async def test_validator_replaces_duplicate_problem(
 
 
 @pytest.mark.asyncio
+async def test_validator_normalizes_goal_training_preference_aliases(
+    validator_session_factory,
+) -> None:
+    async with validator_session_factory() as session:
+        session.add(problem("two-sum"))
+        await session.commit()
+
+        draft = {
+            "stages": [
+                {
+                    "title": "基础",
+                    "items": [
+                        {
+                            "problem_slug": "two-sum",
+                            "skill_tags": ["array"],
+                            "suggested_mode": "independent_first",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        repaired, report, repair_log = await validate_and_repair_plan_draft(
+            session,
+            draft,
+        )
+
+        assert repaired["stages"][0]["items"][0]["suggested_mode"] == "independent"
+        assert report["valid"] is True
+        assert repair_log[0]["reason"] == ValidationIssue.INVALID_SUGGESTED_MODE.value
+        assert repair_log[0]["original_suggested_mode"] == "independent_first"
+        assert repair_log[0]["replacement_suggested_mode"] == "independent"
+
+
+@pytest.mark.asyncio
 async def test_validator_skips_locked_replacement_candidate(
     validator_session_factory,
 ) -> None:
