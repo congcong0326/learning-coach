@@ -44,6 +44,7 @@
 - `docs/dev-setup.md`：WSL Ubuntu 本地开发环境和常用流程。
 - `docs/data-flow.md`：研发按需补充的数据流程备注，用于解释具体页面和后端服务之间的数据写入、返回和关联关系，不作为代码变更后的强维护契约。
 - `docs/prd/prd.md`：产品定位、目标用户、核心训练流程、AI Coach 产品边界和 MVP 范围。
+- `docs/prd/ai-coach-workbench-prd.md`：做题工作台右侧 AI 教练区专题 PRD，说明按计划题复用聊天框、画像驱动起手提问、训练状态跳转、LeetCode 回填和复盘沉淀。
 - `docs/project-todolist.md`：从 PRD 拆分出的总体阶段、当前进度和后续任务追踪。
 
 ## 代码变更后的文档维护映射
