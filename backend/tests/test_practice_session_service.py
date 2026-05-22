@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import backend.app.models.llm_run  # noqa: F401
@@ -20,6 +21,8 @@ from backend.app.models.practice import (
     CodeSnapshot,
     PracticeEvent,
     PracticeSession,
+    ProfileDelta,
+    SessionSummary,
     SubmissionFeedback,
     UserProfileSnapshot,
 )
@@ -487,3 +490,100 @@ async def test_profile_snapshot_json_uses_safe_prompt_payload(
     assert "full_code" not in session.profile_snapshot_json["coach_strategy"]["nested"]
     assert "safe" in session.profile_snapshot_json["coach_strategy"]["nested"]
     assert "full_solution" not in session.profile_snapshot_json["evidence"][0]
+
+
+@pytest.mark.asyncio
+async def test_session_summary_profile_update_creates_summary_delta_and_snapshot(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    previous_snapshot_id = practice_session.profile_snapshot_id
+
+    result = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+
+    summary = await db_session.get(SessionSummary, result.summary_id)
+    delta = await db_session.get(ProfileDelta, result.delta_id)
+    snapshot = await db_session.get(UserProfileSnapshot, result.next_snapshot_id)
+
+    assert summary is not None
+    assert delta is not None
+    assert snapshot is not None
+    assert result.accepted is True
+    assert summary.session_id == practice_session.id
+    assert summary.profile_update_suggestion_json == delta.patch_json
+    assert delta.status == "accepted"
+    assert delta.previous_snapshot_id == previous_snapshot_id
+    assert delta.next_snapshot_id == snapshot.id
+    assert snapshot.version_number == 2
+    assert snapshot.created_from_summary_id == summary.id
+    assert delta.evidence_json[0]["source"] == "session_summary"
+    assert delta.evidence_json[0]["summary_id"] == summary.id
+
+
+@pytest.mark.asyncio
+async def test_session_summary_profile_update_updates_one_summary_per_session(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    first = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+    practice_session.final_result = "ac"
+    second = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+
+    summaries = (
+        await db_session.execute(
+            select(SessionSummary).where(SessionSummary.session_id == practice_session.id)
+        )
+    ).scalars().all()
+
+    assert len(summaries) == 1
+    assert first.summary_id == second.summary_id
+    assert summaries[0].final_submission_result == "ac"
+
+
+@pytest.mark.asyncio
+async def test_session_summary_profile_update_rejects_delta_without_evidence(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    result = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+        summary_payload={"evidence_json": []},
+    )
+
+    delta = await db_session.get(ProfileDelta, result.delta_id)
+
+    assert result.accepted is False
+    assert result.next_snapshot_id is None
+    assert delta is not None
+    assert delta.status == "rejected"
+    assert delta.next_snapshot_id is None
+    assert delta.rejection_reason == "profile_delta_missing_evidence"

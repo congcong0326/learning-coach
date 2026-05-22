@@ -9,7 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
-from backend.app.models.practice import ProfileDelta, UserProfileSnapshot
+from backend.app.models.practice import (
+    PracticeEvent,
+    PracticeSession,
+    ProfileDelta,
+    SessionSummary,
+    UserProfileSnapshot,
+)
 from backend.app.services.profile_provider import (
     ProfileConfidence,
     ProfileSnapshot,
@@ -85,6 +91,16 @@ class ApplyProfileDeltaResult:
     accepted: bool
     snapshot: UserProfileSnapshot | None
     delta: ProfileDelta
+    rejection_reason: str = ""
+
+
+@dataclass(frozen=True)
+class PersistSessionSummaryProfileUpdateResult:
+    summary_id: int
+    delta_id: int
+    accepted: bool
+    previous_snapshot_id: int | None
+    next_snapshot_id: int | None
     rejection_reason: str = ""
 
 
@@ -177,6 +193,120 @@ async def ensure_initial_profile_snapshot(
         snapshot.id,
     )
     return snapshot
+
+
+async def persist_session_summary_profile_update(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+    summary_payload: dict[str, Any] | None = None,
+) -> PersistSessionSummaryProfileUpdateResult:
+    """持久化单题复盘和画像增量，画像合并统一交给 apply_profile_delta_result。"""
+
+    payload = summary_payload or {}
+    await _lock_user(session, user_id)
+    practice_session = await _load_practice_session_for_summary(
+        session,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    events = await _session_events(session, user_id=user_id, session_id=session_id)
+    previous_snapshot = await latest_profile_snapshot(session, user_id)
+    now = datetime.now(UTC)
+
+    summary = await _load_session_summary_for_update(
+        session,
+        user_id=user_id,
+        session_id=practice_session.id,
+    )
+    patch_json = _profile_patch_from_summary_payload(
+        practice_session,
+        events=events,
+        payload=payload,
+    )
+    if summary is None:
+        summary = SessionSummary(
+            session_id=practice_session.id,
+            user_id=user_id,
+            problem_id=practice_session.problem_id,
+            result=_summary_result(practice_session),
+            final_submission_result=practice_session.final_result or "unknown",
+            training_mode=practice_session.training_mode,
+            phases_visited_json=_phases_visited(practice_session, events),
+            transitions_json=_phase_transitions(events),
+            main_stuck_points_json=_main_stuck_points(practice_session, events),
+            error_types_json=_error_types(practice_session),
+            max_hint_level_used=practice_session.max_hint_level_used,
+            avg_hint_level=None,
+            attempt_count=practice_session.attempt_count,
+            time_spent_seconds=None,
+            complexity_analysis_json={},
+            invariant_summary_md="",
+            review_summary_md="",
+            profile_signals_json=_profile_signals(practice_session),
+            profile_update_suggestion_json=patch_json,
+            next_recommendation_json=_next_recommendation(practice_session),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(summary)
+    else:
+        summary.result = _summary_result(practice_session)
+        summary.final_submission_result = practice_session.final_result or "unknown"
+        summary.training_mode = practice_session.training_mode
+        summary.phases_visited_json = _phases_visited(practice_session, events)
+        summary.transitions_json = _phase_transitions(events)
+        summary.main_stuck_points_json = _main_stuck_points(practice_session, events)
+        summary.error_types_json = _error_types(practice_session)
+        summary.max_hint_level_used = practice_session.max_hint_level_used
+        summary.attempt_count = practice_session.attempt_count
+        summary.profile_signals_json = _profile_signals(practice_session)
+        summary.profile_update_suggestion_json = patch_json
+        summary.next_recommendation_json = _next_recommendation(practice_session)
+        summary.updated_at = now
+    await session.flush()
+
+    evidence_json = _evidence_from_summary_payload(
+        summary,
+        practice_session=practice_session,
+        payload=payload,
+    )
+    delta = ProfileDelta(
+        user_id=user_id,
+        session_id=practice_session.id,
+        summary_id=summary.id,
+        previous_snapshot_id=previous_snapshot.id if previous_snapshot is not None else None,
+        next_snapshot_id=None,
+        status="proposed",
+        patch_json=summary.profile_update_suggestion_json,
+        evidence_json=evidence_json,
+        merge_result_json={},
+        rejection_reason="",
+        created_at=now,
+    )
+    session.add(delta)
+    await session.flush()
+
+    result = await apply_profile_delta_result(session, delta.id)
+    logger.info(
+        "session_summary_profile_update_persisted user_id=%s session_id=%s "
+        "summary_id=%s delta_id=%s accepted=%s next_snapshot_id=%s",
+        user_id,
+        practice_session.id,
+        summary.id,
+        delta.id,
+        result.accepted,
+        result.snapshot.id if result.snapshot is not None else None,
+    )
+    return PersistSessionSummaryProfileUpdateResult(
+        summary_id=summary.id,
+        delta_id=delta.id,
+        accepted=result.accepted,
+        previous_snapshot_id=delta.previous_snapshot_id,
+        next_snapshot_id=result.snapshot.id if result.snapshot is not None else None,
+        rejection_reason=result.rejection_reason,
+    )
 
 
 def validate_profile_patch(
@@ -342,6 +472,198 @@ async def apply_profile_delta_result(
         snapshot.version_number,
     )
     return ApplyProfileDeltaResult(accepted=True, snapshot=snapshot, delta=delta)
+
+
+async def _load_practice_session_for_summary(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+) -> PracticeSession:
+    result = await session.execute(
+        select(PracticeSession)
+        .where(PracticeSession.id == session_id, PracticeSession.user_id == user_id)
+        .with_for_update()
+    )
+    practice_session = result.scalar_one_or_none()
+    if practice_session is None:
+        raise ProfileServiceError(f"practice_session not found: {session_id}")
+    return practice_session
+
+
+async def _load_session_summary_for_update(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+) -> SessionSummary | None:
+    result = await session.execute(
+        select(SessionSummary)
+        .where(SessionSummary.session_id == session_id, SessionSummary.user_id == user_id)
+        .with_for_update()
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _session_events(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+) -> list[PracticeEvent]:
+    result = await session.execute(
+        select(PracticeEvent)
+        .where(PracticeEvent.session_id == session_id, PracticeEvent.user_id == user_id)
+        .order_by(PracticeEvent.created_at, PracticeEvent.id)
+    )
+    return list(result.scalars().all())
+
+
+def _profile_patch_from_summary_payload(
+    practice_session: PracticeSession,
+    *,
+    events: list[PracticeEvent],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    explicit_patch = payload.get("profile_update_suggestion_json")
+    if explicit_patch is not None:
+        if not isinstance(explicit_patch, dict):
+            raise ProfileServiceError("profile_update_suggestion_json must be an object")
+        return explicit_patch
+
+    summary_text = _bounded_summary_text(practice_session)
+    return {
+        "source": "summary_patch",
+        "confidence": _summary_confidence(practice_session),
+        "recent_summary": summary_text,
+        "skill_profile_json": {
+            "recent_problem_slugs": [practice_session.problem_slug],
+        },
+        "stuck_point_profile_json": {
+            "weak_stuck_points": _main_stuck_points(practice_session, events),
+        },
+        "strategy_json": {
+            "hint_policy_hint": _hint_policy_hint(practice_session),
+            "last_summary_session_id": practice_session.id,
+        },
+    }
+
+
+def _evidence_from_summary_payload(
+    summary: SessionSummary,
+    *,
+    practice_session: PracticeSession,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    explicit_evidence = payload.get("evidence_json")
+    if explicit_evidence is not None:
+        if not isinstance(explicit_evidence, list):
+            raise ProfileServiceError("evidence_json must be a list")
+        return explicit_evidence
+    return [
+        {
+            "source": "session_summary",
+            "summary": _bounded_summary_text(practice_session),
+            "session_id": practice_session.id,
+            "summary_id": summary.id,
+            "problem_id": practice_session.problem_id,
+            "confidence": _summary_confidence(practice_session),
+        }
+    ]
+
+
+def _summary_result(practice_session: PracticeSession) -> str:
+    if practice_session.final_result == "ac":
+        return "completed"
+    if practice_session.attempt_count > 0:
+        return "attempted"
+    return "in_progress"
+
+
+def _summary_confidence(practice_session: PracticeSession) -> str:
+    if practice_session.final_result == "ac":
+        return "medium"
+    return "low"
+
+
+def _bounded_summary_text(practice_session: PracticeSession) -> str:
+    final_result = practice_session.final_result or "unknown"
+    return (
+        f"本次训练题目={practice_session.problem_slug} phase={practice_session.phase} "
+        f"result={final_result} attempts={practice_session.attempt_count} "
+        f"max_hint={practice_session.max_hint_level_used}"
+    )[:_LONG_TEXT_LIMIT]
+
+
+def _phases_visited(
+    practice_session: PracticeSession,
+    events: list[PracticeEvent],
+) -> list[str]:
+    phases: list[str] = []
+    for phase in [event.phase for event in events] + [practice_session.phase]:
+        if phase and phase not in phases:
+            phases.append(phase)
+    return phases[:_MAX_PROFILE_LIST_LENGTH]
+
+
+def _phase_transitions(events: list[PracticeEvent]) -> list[dict[str, Any]]:
+    transitions: list[dict[str, Any]] = []
+    for event in events:
+        if event.event_type != "phase_changed":
+            continue
+        payload = _dict_or_empty(event.payload_json)
+        transitions.append(
+            {
+                "phase_before": str(payload.get("phase_before") or ""),
+                "phase_after": str(payload.get("phase_after") or event.phase),
+                "reason": str(payload.get("reason") or ""),
+            }
+        )
+        if len(transitions) >= _MAX_PROFILE_LIST_LENGTH:
+            break
+    return transitions
+
+
+def _main_stuck_points(
+    practice_session: PracticeSession,
+    events: list[PracticeEvent],
+) -> list[str]:
+    points: list[str] = []
+    if practice_session.final_result and practice_session.final_result != "ac":
+        points.append(f"submission_{practice_session.final_result}")
+    for event in events:
+        if event.intent == "stuck" and "user_reported_stuck" not in points:
+            points.append("user_reported_stuck")
+    return points[:_MAX_PROFILE_LIST_LENGTH]
+
+
+def _error_types(practice_session: PracticeSession) -> list[str]:
+    if practice_session.final_result and practice_session.final_result not in {"ac", "unknown"}:
+        return [practice_session.final_result]
+    return []
+
+
+def _profile_signals(practice_session: PracticeSession) -> dict[str, Any]:
+    return {
+        "phase": practice_session.phase,
+        "final_result": practice_session.final_result or "unknown",
+        "attempt_count": practice_session.attempt_count,
+        "max_hint_level_used": practice_session.max_hint_level_used,
+    }
+
+
+def _next_recommendation(practice_session: PracticeSession) -> dict[str, Any]:
+    return {
+        "preferred_training_mode": practice_session.training_mode,
+        "review_focus": "复盘本题关键状态与边界用例",
+    }
+
+
+def _hint_policy_hint(practice_session: PracticeSession) -> str:
+    if practice_session.max_hint_level_used in {"key_hint", "reflection"}:
+        return "下次同类题先追问关键状态，再逐步提高提示档位。"
+    return "下次同类题保持追问式提示，优先确认思路和边界。"
 
 
 async def _load_delta_for_update(
