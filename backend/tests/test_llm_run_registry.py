@@ -6,6 +6,8 @@ from typing import Any, cast
 import pytest
 
 from backend.app.services.llm_run_registry import (
+    CoachSummaryHandler,
+    CoachTurnHandler,
     GoalFollowupHandler,
     GoalPlanGenerateHandler,
     handler_for_kind,
@@ -15,7 +17,12 @@ from backend.app.services.llm_run_registry import (
 
 
 def test_supported_run_kinds_contains_current_streaming_flows() -> None:
-    assert supported_run_kinds() == {"goal_followup", "goal_plan_generate"}
+    assert supported_run_kinds() == {
+        "coach_summary",
+        "coach_turn",
+        "goal_followup",
+        "goal_plan_generate",
+    }
 
 
 def test_related_from_payload_returns_empty_for_initial_goal_followup() -> None:
@@ -71,6 +78,26 @@ def test_related_from_payload_maps_study_plan_adjustment_to_plan() -> None:
     assert related_id == 9
 
 
+def test_related_from_payload_maps_coach_turn_to_practice_session() -> None:
+    related_type, related_id = related_from_payload(
+        "coach_turn",
+        {"session_id": 23},
+    )
+
+    assert related_type == "practice_session"
+    assert related_id == 23
+
+
+def test_related_from_payload_maps_coach_summary_to_practice_session() -> None:
+    related_type, related_id = related_from_payload(
+        "coach_summary",
+        {"session_id": 23},
+    )
+
+    assert related_type == "practice_session"
+    assert related_id == 23
+
+
 def test_related_from_payload_rejects_boolean_plan_id() -> None:
     related_type, related_id = related_from_payload(
         "study_plan_adjustment",
@@ -84,6 +111,8 @@ def test_related_from_payload_rejects_boolean_plan_id() -> None:
 def test_handler_for_kind_returns_registered_handler() -> None:
     assert isinstance(handler_for_kind("goal_followup"), GoalFollowupHandler)
     assert isinstance(handler_for_kind("goal_plan_generate"), GoalPlanGenerateHandler)
+    assert isinstance(handler_for_kind("coach_turn"), CoachTurnHandler)
+    assert isinstance(handler_for_kind("coach_summary"), CoachSummaryHandler)
     assert handler_for_kind("study_plan_adjustment") is None
 
 

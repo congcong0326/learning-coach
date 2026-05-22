@@ -7,6 +7,8 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.llm_run import LlmRun
+from backend.app.services.learning_flows.coach_summary import CoachSummaryHandler
+from backend.app.services.learning_flows.coach_turn import CoachTurnHandler
 from backend.app.services.learning_flows.goal_calibration import run_goal_followup
 from backend.app.services.learning_flows.goal_plan import run_goal_plan_generate
 from backend.app.services.llm_providers.base import LlmProvider
@@ -73,6 +75,18 @@ RUN_KIND_SPECS: dict[str, RunKindSpec] = {
         handler=GoalPlanGenerateHandler(),
         related_type="goal_calibration_draft",
         related_id_key="draft_id",
+    ),
+    # practice_session：单题训练会话中的 AI 教练回复，handler 负责持久化 assistant event 和 coach_turn。
+    "coach_turn": RunKindSpec(
+        handler=CoachTurnHandler(),
+        related_type="practice_session",
+        related_id_key="session_id",
+    ),
+    # practice_session：单题训练复盘入口，第一版复用安全确定性回复，完整 summary/profile delta 后续接入。
+    "coach_summary": RunKindSpec(
+        handler=CoachSummaryHandler(),
+        related_type="practice_session",
+        related_id_key="session_id",
     ),
     # study_plan：正式学习计划。当前只保留创建 run 时的关联元数据，执行 handler 尚未接入。
     "study_plan_adjustment": RunKindSpec(

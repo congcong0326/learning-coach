@@ -42,6 +42,9 @@ ERROR_MESSAGES = {
     "followup_json_invalid": "模型返回的追问格式无效",
     "plan_json_invalid": "模型返回的计划格式无效",
     "plan_validation_failed": "计划生成结果未通过题库校验",
+    "practice_session_not_found": "训练会话不存在或无权访问",
+    "coach_output_invalid": "教练回复格式无效",
+    "coach_state_conflict": "教练状态已变化，请刷新后重试",
     "run_kind_unsupported": "当前生成类型暂未接入",
     "run_status_conflict": "本次生成已结束或已取消",
 }
