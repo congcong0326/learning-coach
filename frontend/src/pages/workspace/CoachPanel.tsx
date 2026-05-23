@@ -1,14 +1,14 @@
-import { Alert, Button, Input, Select, Space, Tag, Typography, message as toast } from 'antd'
+import { Alert, Button, Input, Space, Tag, Typography, message as toast } from 'antd'
 import { useState } from 'react'
 
 import {
   sendPracticeMessage,
-  type HintLevel,
+  submitLeetCodeFeedback,
   type UserIntent,
 } from '../../api/practice'
 import { useLlmRun } from '../../hooks/useLlmRun'
+import { CodeAttemptDrawer } from './CodeAttemptDrawer'
 import { hintLevelLabel, phaseLabel } from './coachDisplay'
-import { SubmissionFeedbackModal } from './SubmissionFeedbackModal'
 import type { WorkspacePracticeSession } from './types'
 
 type CoachPanelProps = {
@@ -17,63 +17,38 @@ type CoachPanelProps = {
   onSessionRefresh: () => void
 }
 
-const intentOptions: Array<{ label: string; value: UserIntent }> = [
-  { label: '描述思路', value: 'describe_idea' },
-  { label: '我卡住了', value: 'stuck' },
-  { label: '请求提示', value: 'request_hint' },
-  { label: '代码 Review', value: 'code_review' },
-  { label: '提交反馈', value: 'submit_feedback' },
-  { label: '请求复盘', value: 'request_summary' },
-]
+const REQUEST_HINT_MESSAGE = '我需要一个提示。'
 
-const hintOptions: Array<{ label: string; value: HintLevel }> = [
-  { label: hintLevelLabel('questioning'), value: 'questioning' },
-  { label: hintLevelLabel('direction'), value: 'direction' },
-  { label: hintLevelLabel('key_hint'), value: 'key_hint' },
-  { label: hintLevelLabel('reflection'), value: 'reflection' },
-]
-
-export function CoachPanel({
-  session,
-  codeSnapshotId = null,
-  onSessionRefresh,
-}: CoachPanelProps) {
-  const [intent, setIntent] = useState<UserIntent>('describe_idea')
-  const [hintDraft, setHintDraft] = useState<{
-    sessionHintLevel: HintLevel
-    value: HintLevel
-  }>({ sessionHintLevel: session.visible_hint_gear, value: session.visible_hint_gear })
+export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
   const [content, setContent] = useState('')
   const [isSending, setIsSending] = useState(false)
-  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [attemptDrawerOpen, setAttemptDrawerOpen] = useState(false)
+  const [isMarkingAccepted, setIsMarkingAccepted] = useState(false)
   const llmRun = useLlmRun({ onResult: onSessionRefresh })
-  const profile = session.profile_snapshot
-  const canRequestSummary =
-    session.final_result === 'ac' ||
-    session.status === 'summarizing' ||
-    session.phase === 'summarize'
-  const requestedHintLevel =
-    hintDraft.sessionHintLevel === session.visible_hint_gear
-      ? hintDraft.value
-      : session.visible_hint_gear
+  const shouldShowRunOutput = llmRun.isRunning && Boolean(llmRun.displayText.trim())
+  const codeAttempts = session.code_attempts ?? []
+  const latestAttemptSnapshotId =
+    codeAttempts.length > 0
+      ? codeAttempts[codeAttempts.length - 1].snapshot_id
+      : null
 
-  async function handleSend() {
-    const trimmedContent = content.trim()
+  async function sendCoachMessage(messageIntent: UserIntent, messageContent: string) {
+    const trimmedContent = messageContent.trim()
     if (!trimmedContent) {
       return
     }
     setIsSending(true)
     try {
       const createdMessage = await sendPracticeMessage(session.id, {
-        intent,
+        intent: messageIntent,
         content_md: trimmedContent,
-        requested_hint_level: intent === 'request_hint' ? requestedHintLevel : null,
+        requested_hint_level: null,
       })
       setContent('')
       await llmRun.startRun('coach_turn', {
         session_id: session.id,
         user_event_id: createdMessage.event_id,
-        trigger: intent,
+        trigger: messageIntent,
       })
     } catch {
       toast.error('消息发送失败，请稍后重试')
@@ -82,14 +57,30 @@ export function CoachPanel({
     }
   }
 
-  async function handleSummary() {
+  async function handleSend() {
+    await sendCoachMessage('unknown', content)
+  }
+
+  async function handleRequestHint() {
+    await sendCoachMessage('request_hint', content.trim() || REQUEST_HINT_MESSAGE)
+  }
+
+  async function handleAccepted() {
+    setIsMarkingAccepted(true)
     try {
+      await submitLeetCodeFeedback(session.id, {
+        result: 'ac',
+        code_snapshot_id: latestAttemptSnapshotId,
+      })
+      onSessionRefresh()
       await llmRun.startRun('coach_summary', {
         session_id: session.id,
         trigger: 'request_summary',
       })
     } catch {
-      toast.error('复盘生成失败，请稍后重试')
+      toast.error('AC 状态记录失败，请稍后重试')
+    } finally {
+      setIsMarkingAccepted(false)
     }
   }
 
@@ -98,12 +89,14 @@ export function CoachPanel({
       <div className="workspace-pane-heading">
         <h3>教练</h3>
         <Space wrap>
-          {canRequestSummary ? (
-            <Button type="primary" onClick={handleSummary} loading={llmRun.isRunning}>
-              进入复盘
-            </Button>
-          ) : null}
-          <Button onClick={() => setFeedbackOpen(true)}>提交回填</Button>
+          <Button onClick={() => setAttemptDrawerOpen(true)}>代码尝试记录</Button>
+          <Button
+            type="primary"
+            onClick={handleAccepted}
+            loading={isMarkingAccepted || llmRun.isRunning}
+          >
+            LeetCode 已 AC
+          </Button>
         </Space>
       </div>
 
@@ -113,69 +106,48 @@ export function CoachPanel({
         <Tag>{hintLevelLabel(session.visible_hint_gear)}</Tag>
       </div>
 
-      <section className="coach-section">
-        <Typography.Text strong>画像快照</Typography.Text>
-        <div className="coach-profile-grid">
-          <span>画像来源</span>
-          <Typography.Text>{profile.source}</Typography.Text>
-          <span>置信度</span>
-          <Typography.Text>{profile.confidence}</Typography.Text>
-          <span>水平</span>
-          <Typography.Text>{profile.overall_level}</Typography.Text>
-          <span>训练偏好</span>
-          <Typography.Text>{profile.preferred_training_mode}</Typography.Text>
-        </div>
-        {profile.recent_summary ? (
-          <Typography.Paragraph className="coach-summary">
-            {profile.recent_summary}
-          </Typography.Paragraph>
-        ) : null}
-      </section>
-
-      <section className="coach-section">
-        <Typography.Text strong>事件时间线</Typography.Text>
-        <div className="coach-timeline">
-          {session.events.length === 0 ? (
-            <Typography.Text type="secondary">暂无训练事件</Typography.Text>
-          ) : (
-            session.events.map((event) => (
-              <div className="coach-timeline-item" key={event.id}>
-                <Space wrap size={6}>
-                  <Tag>{event.role}</Tag>
-                  <Tag>{phaseLabel(event.phase)}</Tag>
-                  {event.visible_hint_gear ? (
-                    <Tag>{hintLevelLabel(event.visible_hint_gear)}</Tag>
-                  ) : null}
-                </Space>
-                <Typography.Paragraph className="coach-event-content">
+      <section className="coach-chat-timeline" aria-label="教练聊天记录">
+        {session.events.length === 0 ? (
+          <Typography.Text type="secondary">暂无训练消息</Typography.Text>
+        ) : (
+          session.events.map((event) => (
+            <div
+              className={`coach-chat-message coach-chat-message-${event.role}`}
+              key={event.id}
+            >
+              <Space wrap size={6}>
+                <Tag>
+                  {event.role === 'assistant'
+                    ? '教练'
+                    : event.role === 'user'
+                      ? '我'
+                      : '系统'}
+                </Tag>
+                <Tag>{phaseLabel(event.phase)}</Tag>
+                {event.visible_hint_gear ? (
+                  <Tag>{hintLevelLabel(event.visible_hint_gear)}</Tag>
+                ) : null}
+              </Space>
+              {event.content_md ? (
+                <Typography.Paragraph className="coach-chat-content">
                   {event.content_md}
                 </Typography.Paragraph>
-              </div>
-            ))
-          )}
-        </div>
+              ) : (
+                <Typography.Text type="secondary">
+                  {event.event_type === 'code_saved'
+                    ? '已记录一次代码尝试'
+                    : event.event_type === 'submission_feedback'
+                      ? '已记录 LeetCode 结果'
+                      : event.event_type}
+                </Typography.Text>
+              )}
+            </div>
+          ))
+        )}
       </section>
 
       <section className="coach-section">
         <div className="coach-message-box">
-          <Space wrap>
-            <Select
-              aria-label="消息意图"
-              value={intent}
-              options={intentOptions}
-              onChange={setIntent}
-              style={{ width: 132 }}
-            />
-            <Select
-              aria-label="提示档位"
-              value={requestedHintLevel}
-              options={hintOptions}
-              onChange={(value) =>
-                setHintDraft({ sessionHintLevel: session.visible_hint_gear, value })
-              }
-              style={{ width: 132 }}
-            />
-          </Space>
           <Input.TextArea
             aria-label="发送给教练"
             value={content}
@@ -192,26 +164,27 @@ export function CoachPanel({
             >
               发送
             </Button>
+            <Button onClick={handleRequestHint} disabled={isSending || llmRun.isRunning}>
+              请求提示
+            </Button>
             {llmRun.isRunning ? <Button onClick={llmRun.cancelRun}>取消</Button> : null}
-            {llmRun.stage ? (
+            {llmRun.isRunning && llmRun.stage ? (
               <Typography.Text type="secondary">状态 {llmRun.stage}</Typography.Text>
             ) : null}
           </Space>
           {llmRun.error ? (
             <Alert showIcon type="error" message={llmRun.error.message} />
           ) : null}
-          {llmRun.displayText ? (
+          {shouldShowRunOutput ? (
             <div className="coach-run-output">{llmRun.displayText}</div>
           ) : null}
         </div>
       </section>
 
-      <SubmissionFeedbackModal
-        open={feedbackOpen}
-        sessionId={session.id}
-        codeSnapshotId={codeSnapshotId}
-        onClose={() => setFeedbackOpen(false)}
-        onSubmitted={onSessionRefresh}
+      <CodeAttemptDrawer
+        open={attemptDrawerOpen}
+        attempts={codeAttempts}
+        onClose={() => setAttemptDrawerOpen(false)}
       />
     </div>
   )

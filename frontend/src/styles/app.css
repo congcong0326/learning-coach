@@ -386,6 +386,39 @@ body {
   white-space: pre-wrap;
 }
 
+.coach-chat-timeline {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 420px;
+  padding: 4px 0;
+}
+
+.coach-chat-message {
+  max-width: 92%;
+  padding: 12px;
+  border: 1px solid #e5e6df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.coach-chat-message-user {
+  align-self: flex-end;
+  background: #eef5f1;
+}
+
+.coach-chat-message-assistant,
+.coach-chat-message-system,
+.coach-chat-message-tool {
+  align-self: flex-start;
+}
+
+.coach-chat-content {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
 .settings-table-wrap {
   overflow-x: auto;
   border: 1px solid #deded8;
