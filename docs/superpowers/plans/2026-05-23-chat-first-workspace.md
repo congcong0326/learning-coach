@@ -1444,7 +1444,7 @@ git commit -m "docs: align workspace chat-first flow"
 **Files:**
 - Verify all changed files from Tasks 1-6.
 
-- [ ] **Step 1: Run backend focused tests**
+- [x] **Step 1: Run backend focused tests**
 
 Run:
 
@@ -1454,7 +1454,7 @@ uv run pytest backend/tests/test_practice_session_service.py backend/tests/test_
 
 Expected: PASS.
 
-- [ ] **Step 2: Run frontend focused tests**
+- [x] **Step 2: Run frontend focused tests**
 
 Run:
 
@@ -1464,7 +1464,7 @@ cd frontend && corepack pnpm test -- WorkspacePage.test.tsx CoachPanel.test.tsx 
 
 Expected: PASS.
 
-- [ ] **Step 3: Run frontend typecheck**
+- [x] **Step 3: Run frontend typecheck**
 
 Run:
 
@@ -1474,7 +1474,7 @@ cd frontend && corepack pnpm exec tsc -b
 
 Expected: PASS.
 
-- [ ] **Step 4: Run repository build check**
+- [x] **Step 4: Run repository build check**
 
 Run:
 
@@ -1484,7 +1484,7 @@ make build
 
 Expected: PASS.
 
-- [ ] **Step 5: Inspect final git diff**
+- [x] **Step 5: Inspect final git diff**
 
 Run:
 
