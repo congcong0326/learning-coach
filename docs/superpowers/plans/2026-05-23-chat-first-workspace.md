@@ -41,7 +41,7 @@ Before editing, run `git status --short` and do not revert existing user changes
 - Modify: `backend/app/services/practice_session_service.py`
 - Test: `backend/tests/test_practice_session_service.py`
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
 Add these tests to `backend/tests/test_practice_session_service.py` near the submission feedback tests:
 
@@ -106,7 +106,7 @@ async def test_ac_submission_feedback_without_code_snapshot_is_allowed(
     assert practice_session.status == "summarizing"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
@@ -116,7 +116,7 @@ uv run pytest backend/tests/test_practice_session_service.py::test_session_paylo
 
 Expected: FAIL because `PracticeSessionResponse` has no `code_attempts`, and AC without a snapshot raises `code_snapshot_required_for_submission_feedback`.
 
-- [ ] **Step 3: Extend practice schemas**
+- [x] **Step 3: Extend practice schemas**
 
 In `backend/app/schemas/practice.py`, update `CodeSnapshotSource` and add `CodeAttemptResponse`:
 
@@ -154,7 +154,7 @@ Add this field to `PracticeSessionResponse`:
     code_attempts: list[CodeAttemptResponse] = Field(default_factory=list)
 ```
 
-- [ ] **Step 4: Implement code attempts in session service**
+- [x] **Step 4: Implement code attempts in session service**
 
 In `backend/app/services/practice_session_service.py`, import `CodeAttemptResponse`:
 
@@ -307,7 +307,7 @@ def _session_response(
     )
 ```
 
-- [ ] **Step 5: Run tests to verify Task 1 passes**
+- [x] **Step 5: Run tests to verify Task 1 passes**
 
 Run:
 
@@ -317,7 +317,7 @@ uv run pytest backend/tests/test_practice_session_service.py::test_session_paylo
 
 Expected: PASS. The existing rejection test must still pass for `wa` without a snapshot.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add backend/app/schemas/practice.py backend/app/services/practice_session_service.py backend/tests/test_practice_session_service.py
@@ -333,7 +333,7 @@ git commit -m "feat: expose code attempt records"
 - Modify: `backend/app/services/learning_flows/coach_turn.py`
 - Test: `backend/tests/test_learning_flows.py`
 
-- [ ] **Step 1: Write failing flow tests**
+- [x] **Step 1: Write failing flow tests**
 
 Add tests to `backend/tests/test_learning_flows.py` near existing `coach_turn` tests:
 
@@ -458,7 +458,7 @@ async def test_coach_turn_does_not_extract_code_attempt_outside_review_code(
         assert result.scalars().all() == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
@@ -468,7 +468,7 @@ uv run pytest backend/tests/test_learning_flows.py::test_coach_turn_extracts_cod
 
 Expected: FAIL because no automatic code extraction exists and `review_code` is rejected when no previous code snapshot exists.
 
-- [ ] **Step 3: Create code attempt helper module**
+- [x] **Step 3: Create code attempt helper module**
 
 Create `backend/app/services/code_attempts.py`:
 
@@ -604,7 +604,7 @@ def _looks_like_code(text: str) -> bool:
     return marker_hits >= 2
 ```
 
-- [ ] **Step 4: Wire helper into coach turn flow**
+- [x] **Step 4: Wire helper into coach turn flow**
 
 In `backend/app/services/learning_flows/coach_turn.py`, import helpers:
 
@@ -716,7 +716,7 @@ and returning:
         "code_attempt_snapshot_id": code_attempt_snapshot_id,
 ```
 
-- [ ] **Step 5: Run focused backend tests**
+- [x] **Step 5: Run focused backend tests**
 
 Run:
 
@@ -726,7 +726,7 @@ uv run pytest backend/tests/test_learning_flows.py::test_coach_turn_extracts_cod
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add backend/app/services/code_attempts.py backend/app/services/learning_flows/coach_turn.py backend/tests/test_learning_flows.py
@@ -743,7 +743,7 @@ git commit -m "feat: extract review code attempts"
 - Create: `frontend/src/pages/workspace/CodeAttemptDrawer.test.tsx`
 - Modify: `frontend/src/styles/app.css`
 
-- [ ] **Step 1: Write failing drawer tests**
+- [x] **Step 1: Write failing drawer tests**
 
 Create `frontend/src/pages/workspace/CodeAttemptDrawer.test.tsx`:
 
@@ -813,7 +813,7 @@ describe('CodeAttemptDrawer', () => {
 })
 ```
 
-- [ ] **Step 2: Run drawer test to verify it fails**
+- [x] **Step 2: Run drawer test to verify it fails**
 
 Run:
 
@@ -823,7 +823,7 @@ cd frontend && corepack pnpm test -- CodeAttemptDrawer.test.tsx
 
 Expected: FAIL because component and types do not exist.
 
-- [ ] **Step 3: Extend frontend API types**
+- [x] **Step 3: Extend frontend API types**
 
 In `frontend/src/api/practice.ts`, add:
 
@@ -862,7 +862,7 @@ Add this field to `PracticeSession`:
   code_attempts: CodeAttempt[]
 ```
 
-- [ ] **Step 4: Implement CodeAttemptDrawer**
+- [x] **Step 4: Implement CodeAttemptDrawer**
 
 Create `frontend/src/pages/workspace/CodeAttemptDrawer.tsx`:
 
@@ -951,7 +951,7 @@ export function CodeAttemptDrawer({
 }
 ```
 
-- [ ] **Step 5: Add drawer styles**
+- [x] **Step 5: Add drawer styles**
 
 Append to `frontend/src/styles/app.css`:
 
@@ -1013,7 +1013,7 @@ Append to `frontend/src/styles/app.css`:
 }
 ```
 
-- [ ] **Step 6: Run drawer tests**
+- [x] **Step 6: Run drawer tests**
 
 Run:
 
@@ -1023,7 +1023,7 @@ cd frontend && corepack pnpm test -- CodeAttemptDrawer.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```bash
 git add frontend/src/api/practice.ts frontend/src/pages/workspace/CodeAttemptDrawer.tsx frontend/src/pages/workspace/CodeAttemptDrawer.test.tsx frontend/src/styles/app.css
@@ -1039,7 +1039,7 @@ git commit -m "feat: add code attempt drawer"
 - Modify: `frontend/src/pages/workspace/CoachPanel.test.tsx`
 - Modify: `frontend/src/styles/app.css`
 
-- [ ] **Step 1: Write failing CoachPanel tests**
+- [x] **Step 1: Write failing CoachPanel tests**
 
 Update `frontend/src/pages/workspace/CoachPanel.test.tsx` so the expected primary controls are chat-first:
 
@@ -1089,7 +1089,7 @@ Update `stubSession()` to include:
     code_attempts: [],
 ```
 
-- [ ] **Step 2: Run CoachPanel tests to verify they fail**
+- [x] **Step 2: Run CoachPanel tests to verify they fail**
 
 Run:
 
@@ -1099,7 +1099,7 @@ cd frontend && corepack pnpm test -- CoachPanel.test.tsx
 
 Expected: FAIL because current panel still shows profile/timeline sections and has no AC button.
 
-- [ ] **Step 3: Implement chat-first CoachPanel**
+- [x] **Step 3: Implement chat-first CoachPanel**
 
 In `frontend/src/pages/workspace/CoachPanel.tsx`:
 
@@ -1204,7 +1204,7 @@ In `frontend/src/pages/workspace/CoachPanel.tsx`:
       />
 ```
 
-- [ ] **Step 4: Add chat styles**
+- [x] **Step 4: Add chat styles**
 
 Append to `frontend/src/styles/app.css`:
 
@@ -1243,7 +1243,7 @@ Append to `frontend/src/styles/app.css`:
 }
 ```
 
-- [ ] **Step 5: Run CoachPanel tests**
+- [x] **Step 5: Run CoachPanel tests**
 
 Run:
 
@@ -1253,7 +1253,7 @@ cd frontend && corepack pnpm test -- CoachPanel.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add frontend/src/pages/workspace/CoachPanel.tsx frontend/src/pages/workspace/CoachPanel.test.tsx frontend/src/styles/app.css
@@ -1269,7 +1269,7 @@ git commit -m "feat: make coach panel chat first"
 - Modify: `frontend/src/pages/WorkspacePage.test.tsx`
 - Modify: `frontend/src/styles/app.css`
 
-- [ ] **Step 1: Write failing workspace tests**
+- [x] **Step 1: Write failing workspace tests**
 
 In `frontend/src/pages/WorkspacePage.test.tsx`, replace code draft tests with:
 
@@ -1306,7 +1306,7 @@ Update `stubPracticeSession()` with:
 
 Remove tests that depend on `CodePane` preserving a draft and saving snapshots from the main workspace.
 
-- [ ] **Step 2: Run workspace tests to verify they fail**
+- [x] **Step 2: Run workspace tests to verify they fail**
 
 Run:
 
@@ -1316,7 +1316,7 @@ cd frontend && corepack pnpm test -- WorkspacePage.test.tsx
 
 Expected: FAIL because `WorkspacePage` still renders `CodePane`.
 
-- [ ] **Step 3: Remove main CodePane from workspace**
+- [x] **Step 3: Remove main CodePane from workspace**
 
 In `frontend/src/pages/WorkspacePage.tsx`:
 
@@ -1355,7 +1355,7 @@ import { CodePane } from './workspace/CodePane'
 
 4. Remove `codeSnapshotId` prop from `CoachPanel` calls.
 
-- [ ] **Step 4: Run workspace tests**
+- [x] **Step 4: Run workspace tests**
 
 Run:
 
@@ -1365,7 +1365,7 @@ cd frontend && corepack pnpm test -- WorkspacePage.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```bash
 git add frontend/src/pages/WorkspacePage.tsx frontend/src/pages/WorkspacePage.test.tsx frontend/src/styles/app.css
@@ -1381,7 +1381,7 @@ git commit -m "feat: simplify workspace to two columns"
 - Modify: `docs/architecture/foundation.md`
 - Modify: `docs/project-todolist.md`
 
-- [ ] **Step 1: Update workbench PRD**
+- [x] **Step 1: Update workbench PRD**
 
 In `docs/prd/ai-coach-workbench-prd.md`, update section `13.1 工作台布局` to state:
 
@@ -1402,7 +1402,7 @@ AI 教练区顶部展示轻量状态：当前阶段、提示档位、训练模�
 聊天输入区提供“LeetCode 已 AC”动作。用户点击后表示已经在 LeetCode 官网通过本题，系统进入复盘流程；MVP 不要求填写运行时间或内存消耗。
 ```
 
-- [ ] **Step 2: Update foundation architecture**
+- [x] **Step 2: Update foundation architecture**
 
 In `docs/architecture/foundation.md`, replace the current workspace sentence that says “左侧展示题目与代码草稿” with:
 
@@ -1410,17 +1410,17 @@ In `docs/architecture/foundation.md`, replace the current workspace sentence tha
 计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，左侧展示题面，右侧展示 ChatGPT 式 AI 教练聊天区、训练阶段、提示档位、代码尝试记录入口和 LeetCode 已 AC 动作。代码尝试记录来自 `review_code` 阶段的聊天代码提取，AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型。
 ```
 
-- [ ] **Step 3: Update project todo**
+- [x] **Step 3: Update project todo**
 
 In `docs/project-todolist.md`, update the T2/T3/T5 frontend bullets so they mention:
 
 ```markdown
-- [ ] 工作台采用题面 + Chat-first AI 教练两栏布局。
-- [ ] 工作台展示训练模式、提示档位、AI 教练对话区、代码尝试记录入口和 LeetCode 已 AC 动作。
-- [ ] 代码尝试记录从 `review_code` 阶段的聊天代码自动提取。
+- [x] 工作台采用题面 + Chat-first AI 教练两栏布局。
+- [x] 工作台展示训练模式、提示档位、AI 教练对话区、代码尝试记录入口和 LeetCode 已 AC 动作。
+- [x] 代码尝试记录从 `review_code` 阶段的聊天代码自动提取。
 ```
 
-- [ ] **Step 4: Review docs diff**
+- [x] **Step 4: Review docs diff**
 
 Run:
 
@@ -1430,7 +1430,7 @@ git diff -- docs/prd/ai-coach-workbench-prd.md docs/architecture/foundation.md d
 
 Expected: Diff only updates product and architecture text for the Chat-first workspace.
 
-- [ ] **Step 5: Commit Task 6**
+- [x] **Step 5: Commit Task 6**
 
 ```bash
 git add docs/prd/ai-coach-workbench-prd.md docs/architecture/foundation.md docs/project-todolist.md

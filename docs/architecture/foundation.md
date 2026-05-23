@@ -58,7 +58,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
-计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，左侧展示题目与代码草稿，右侧展示画像摘要、训练阶段、教练时间线、LeetCode 回填和复盘入口。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型。
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用左侧题面、右侧 Chat-first 教练区的两栏布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传，右侧教练区提供代码尝试记录抽屉和“LeetCode 已 AC”动作。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型。
 
 ## 后端选型
 
@@ -139,6 +139,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
 - `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、阶段状态和前端 payload 组装。
+- `backend.app.services.code_attempts`：从 `review_code` 阶段聊天消息中提取代码、校验 AI 质量判断，并把代码尝试持久化为 `code_snapshot` 与 `practice_event`。
 - `backend.app.services.profile_provider`：面向 AI 教练的安全画像摘要 Provider，隔离长期画像表和 prompt 输入。
 - `backend.app.services.profile_service`：初始画像、画像增量校验、画像快照版本化、单题复盘到画像更新的合并逻辑。
 - `backend.app.services.coach_guard`：教练阶段跳转和提示档位守卫，防止低提示档位输出完整解法或无证据快进。
@@ -206,9 +207,9 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 当前训练工作台和用户画像相关 migration 会：
 
 - 创建 `practice_session`，以 `user_id + study_plan_id + problem_id` 保证同一计划题复用同一个训练会话，并记录 origin/latest 计划版本追溯字段。
-- 创建 `practice_event`，保存用户消息、AI 回复、代码保存、提交回填、阶段变化、复盘和画像更新等训练时间线事件。
-- 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
-- 创建 `submission_feedback`，保存用户手动回填的 LeetCode 结果、失败样例摘要、错误信息和运行指标。
+- 创建 `practice_event`，保存用户消息、AI 回复、自动代码尝试、LeetCode AC、阶段变化、复盘和画像更新等训练时间线事件。
+- 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；第一版代码主要从 `review_code` 聊天流程自动提取，完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
+- 创建 `submission_feedback`，保存用户确认的 LeetCode 结果；AC 允许不携带运行时间、内存或代码快照，非 AC 反馈仍可关联失败样例摘要、错误信息和代码尝试。
 - 创建 `coach_turn`，保存一次 AI 教练回复的阶段判断、提示档位、守卫结果、上下文快照和 assistant event 关联。
 - 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、错因、画像信号和画像更新建议，且一个 session 只保留一个 summary。
 - 创建 `user_profile_snapshot`，保存面向 AI 教练读取的长期画像版本，不原地覆盖旧版本。

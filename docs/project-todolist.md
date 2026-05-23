@@ -15,11 +15,11 @@
 | 项目 | 当前状态 |
 | --- | --- |
 | 当前阶段 | 阶段 2：学习入口与训练状态底座 |
-| 当前主线任务 | T2：训练会话与工作台状态持久化 |
-| 当前任务状态 | 未开始 |
-| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层 |
-| 下一步建议 | 开始 T2：把学习计划项和工作台训练会话、训练事件、提交结果关联起来 |
-| 第一版闭环状态 | 未闭环。当前已有题库、静态工作台、登录、API 资产池、目标校准和学习计划基础，尚缺训练会话、AI 教练、提交回填归因、复盘画像和推荐 |
+| 当前主线任务 | T3：基础 AI 教练闭环 |
+| 当前任务状态 | 进行中 |
+| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、计划题训练会话、Chat-first 工作台、自动代码尝试记录和 LeetCode 已 AC 入口 |
+| 下一步建议 | 继续完善 T3 / T5：补齐非 AC 提交反馈归因、复盘模型化和画像沉淀闭环 |
+| 第一版闭环状态 | 未闭环。当前已有训练会话、Chat-first AI 教练、代码 review 尝试记录和 AC 复盘入口，尚缺完整错因归因、复盘画像和下一题推荐 |
 
 ## 总体阶段进度
 
@@ -27,8 +27,8 @@
 | --- | --- | --- | --- | --- | --- |
 | 阶段 0 | 工程与题库基座 | 已完成 | 100% | B0、B1 | 本地全栈可运行，题库数据可导入、查询和展示 |
 | 阶段 1 | 本地用户与模型资产基础 | 已完成 | 100% | T0 | 用户可注册登录，并配置自己的 OpenAI API 资产池 |
-| 阶段 2 | 学习入口与训练状态底座 | 进行中 | 60% | T1、T2.5、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
-| 阶段 3 | 基础反馈闭环 | 未开始 | 0% | T3、T5 | AI 可分层提示和 review，用户可回填 LeetCode 提交结果并获得错因归因 |
+| 阶段 2 | 学习入口与训练状态底座 | 进行中 | 75% | T1、T2.5、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
+| 阶段 3 | 基础反馈闭环 | 进行中 | 25% | T3、T5 | AI 可分层提示和 review，用户可回填 LeetCode 提交结果并获得错因归因 |
 | 阶段 4 | Agent 状态机与知识增强 | 未开始 | 0% | T4、T6 | LangGraph 可恢复状态机接入，RAG 教练知识库可检索并受 hint level 控制 |
 | 阶段 5 | 复盘画像与学习仪表盘 | 未开始 | 0% | T7 | 完成训练后生成复盘、画像增量、下一题推荐和仪表盘指标 |
 | 阶段 6 | 面试模拟与可观测性 | 未开始 | 0% | T8、T9 | 支持轻量面试模拟，Trace 和 Eval 能展示 Agent 行为质量 |
@@ -43,27 +43,33 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 进行中 |
 | 前置条件 | T1、T0、B1 已完成 |
 | 主要交付 | practice session、practice event、submission feedback、工作台状态恢复 |
 | 完成后解锁 | T3 基础 AI 教练闭环、T5 提交回填与错因归因 |
 
 **待办**
 
-- [ ] 设计 `practice_session`、`practice_event`、`submission_feedback`。
-- [ ] 实现 session 创建、读取、恢复和状态更新 API。
-- [ ] 将 session 与 `study_plan`、`study_plan_version`、`study_plan_item` 关联。
-- [ ] 工作台接入从 active 学习计划进入训练。
-- [ ] 工作台展示训练模式、计划项状态、AI 教练对话区和提交回填入口。
-- [ ] 增加测试。
-- [ ] 完成文档影响评估。
+- [x] 设计 `practice_session`、`practice_event`、`submission_feedback`。
+- [x] 实现 session 创建、读取、恢复和状态更新 API。
+- [x] 将 session 与 `study_plan`、`study_plan_version`、`study_plan_item` 关联。
+- [x] 工作台接入从 active 学习计划进入训练。
+- [x] 工作台展示题面、AI 教练对话区、代码尝试记录入口和 LeetCode 已 AC 入口。
+- [x] 增加测试。
+- [x] 完成文档影响评估。
 
 **完成标准**
 
 - 用户从当前 active 学习计划项进入工作台时可以创建或恢复训练会话。
-- 训练事件、用户粘贴的代码片段和提交回填能关联到用户、题目、计划、计划版本和计划项。
+- 训练事件、`review_code` 自动提取的代码尝试和 LeetCode AC 能关联到用户、题目、计划、计划版本和计划项。
 - 工作台刷新后能恢复当前训练上下文。
 - 验证命令至少包含后端测试、前端测试和必要的构建检查。
+
+**最近验证命令**
+
+- `uv run pytest backend/tests/test_practice_session_service.py backend/tests/test_code_attempts.py backend/tests/test_coach_guard.py backend/tests/test_learning_flows.py -q`
+- `cd frontend && corepack pnpm exec vitest run src/pages/WorkspacePage.test.tsx src/pages/workspace/CoachPanel.test.tsx src/pages/workspace/CodeAttemptDrawer.test.tsx`
+- `cd frontend && corepack pnpm exec tsc -p tsconfig.app.json --noEmit --pretty false`
 
 ## 任务进度清单
 
@@ -181,7 +187,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 进行中 |
 | 前置任务 | T1、T2.5 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | `practice_session`、`practice_event`、`submission_feedback`、工作台状态恢复 |
@@ -189,35 +195,36 @@
 
 **待办**
 
-- [ ] 设计 session、event、submission feedback 表。
-- [ ] 实现 session 创建、读取、恢复和状态更新 API。
-- [ ] 实现 event 记录 API。
-- [ ] 工作台接入 session 创建和恢复。
-- [ ] 工作台展示训练模式、提示档位、AI 教练对话区和提交回填入口。
-- [ ] 增加测试。
-- [ ] 完成文档影响评估。
+- [x] 设计 session、event、submission feedback 表。
+- [x] 实现 session 创建、读取、恢复和状态更新 API。
+- [x] 实现 event 记录 API。
+- [x] 工作台接入 session 创建和恢复。
+- [x] 工作台展示提示档位、AI 教练对话区、代码尝试记录入口和 LeetCode 已 AC 入口。
+- [x] 增加测试。
+- [x] 完成文档影响评估。
 
 ### T3：基础 AI 教练闭环
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 进行中 |
 | 前置任务 | T2 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | LLM 调用、教练 prompt、结构化输出、hint level 控制、入门引导和独立训练模式 |
-| 完成日期 | 未完成 |
+| 完成日期 | 未完成，`coach_turn` 模型接入已部分完成 |
 
 **待办**
 
-- [ ] 增加 LLM 配置、模型名称、超时和 API 资产路由读取。
-- [ ] 定义 prompt 版本和教练原则。
+- [x] 为 `coach_turn` 增加用户模型资产路由读取和模型名称传递。
+- [x] 定义 `coach_turn` 结构化 prompt 版本和教练原则。
 - [ ] 实现 `StuckPointDiagnosis`、`CoachAction`、`CodeReviewResult` schema。
 - [ ] 实现 hint level 到用户可见档位的映射。
 - [ ] 实现训练模式下的提示升级和降级规则。
 - [ ] 实现 coach API。
-- [ ] 前端工作台接入 AI 教练对话。
-- [ ] 增加低层级泄题测试和结构化输出测试。
+- [x] 前端工作台接入 Chat-first AI 教练对话。
+- [x] 增加 `coach_turn` 结构化输出和模型资产编排测试。
+- [ ] 增加低层级泄题测试。
 
 ### T4：LangGraph 状态机与会话恢复
 
@@ -245,20 +252,21 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 进行中 |
 | 前置任务 | T2 |
 | 当前阶段 | 阶段 2 |
-| 主要交付 | LeetCode 提交结果回填、结果状态管理、AI 错因归因、后续引导 |
-| 完成日期 | 未完成 |
+| 主要交付 | LeetCode 已 AC 入口、非 AC 提交反馈、结果状态管理、AI 错因归因、后续引导 |
+| 完成日期 | 未完成，AC 入口和复盘触发已部分完成 |
 
 **待办**
 
-- [ ] 定义提交结果状态：AC、WA、TLE、RE、CE、UNKNOWN。
-- [ ] 实现提交结果回填 API，并关联训练会话、题目和计划项。
+- [x] 定义提交结果状态：AC、WA、TLE、RE、CE、UNKNOWN。
+- [x] 实现提交结果回填 API，并关联训练会话、题目和计划项。
+- [x] 前端工作台接入“LeetCode 已 AC”入口，AC 可不要求运行时间、内存或代码快照。
 - [ ] 允许用户补充 LeetCode 错误摘要、失败用例摘要或提交备注。
 - [ ] 实现基于用户思路、粘贴代码和提交结果的 AI 错因归因。
 - [ ] AI 根据回填结果决定继续追问、建议修改、要求再次提交或进入复盘。
-- [ ] 前端工作台接入提交回填入口和结果历史展示。
+- [ ] 前端工作台接入非 AC 失败反馈入口和结果历史展示。
 - [ ] 增加提交回填、错因归因和状态流转测试。
 
 ### T6：RAG 教练知识库
