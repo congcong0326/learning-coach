@@ -21,6 +21,7 @@ from backend.app.models.practice import (
     PracticeSession,
     ProfileDelta,
     SessionSummary,
+    SubmissionFeedback,
     UserProfileSnapshot,
 )
 from backend.app.models.problem import Base, Problem
@@ -570,10 +571,12 @@ async def test_coach_turn_uses_model_reply_when_user_already_described_hash_idea
         assert input_context["user_message"]["content_md"] == idea
         assert assistant.content_md == reply
         assert coach_turn.response_json["content_md"] == reply
-        assert coach_turn.phase_after == "define_invariant"
+        assert coach_turn.phase_after == "understand_problem"
         assert coach_turn.diagnosed_stuck_point == "hash_state_needs_precision"
         assert coach_turn.next_action == "ask_hash_invariant"
         assert run.display_text_md == reply
+        assert result["guard"]["accepted"] is False
+        assert result["guard"]["reason"] == "phase_transition_not_allowed"
         assert events[-1].data["text"] == reply
 
 
@@ -634,7 +637,13 @@ async def test_coach_turn_extracts_code_attempt_when_review_code_is_accepted(
         assert snapshot is not None
         assert snapshot.source == "chat_review"
         assert snapshot.language == "python3"
-        assert "def twoSum" in snapshot.code_text
+        expected_code = (
+            "class Solution:\n"
+            "    def twoSum(self, nums, target):\n"
+            "        return []"
+        )
+        assert snapshot.code_text == expected_code
+        assert practice_session.latest_code_snapshot_id == snapshot.id
 
         event_result = await session.execute(
             select(PracticeEvent).where(
@@ -643,8 +652,17 @@ async def test_coach_turn_extracts_code_attempt_when_review_code_is_accepted(
             )
         )
         code_event = event_result.scalar_one()
+        coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
+        assert coach_turn is not None
+        assert coach_turn.response_json["code_attempt_snapshot_id"] == snapshot.id
         assert code_event.payload_json["quality_status"] == "needs_fix"
         assert code_event.payload_json["quality_comment"] == "当前代码直接返回空列表，不建议提交。"
+        assert code_event.payload_json["snapshot_id"] == snapshot.id
+        assert expected_code not in json.dumps(coach_turn.response_json, ensure_ascii=False)
+        assert expected_code not in json.dumps(
+            coach_turn.context_snapshot_json,
+            ensure_ascii=False,
+        )
 
 
 @pytest.mark.asyncio
@@ -711,6 +729,32 @@ def test_parse_coach_json_rejects_non_string_code_quality_status() -> None:
                 ensure_ascii=False,
             )
         )
+
+    assert exc_info.value.code == "coach_output_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("next_action", f" {'a' * 61} "),
+        ("diagnosed_stuck_point", f" {'a' * 121} "),
+    ],
+)
+def test_parse_coach_json_rejects_overlong_fields(
+    field_name: str,
+    value: str,
+) -> None:
+    payload = {
+        "phase_after": "review_code",
+        "diagnosed_stuck_point": "implementation_bug",
+        "next_action": "review_code",
+        "reply_md": "这版代码需要修改。",
+        "should_reveal_solution": False,
+    }
+    payload[field_name] = value
+
+    with pytest.raises(LearningFlowError) as exc_info:
+        _parse_coach_json(json.dumps(payload, ensure_ascii=False))
 
     assert exc_info.value.code == "coach_output_invalid"
 
@@ -907,6 +951,22 @@ async def test_coach_summary_does_not_require_user_event_id(
             phase="analyze_feedback",
             user_intent="request_summary",
         )
+        session.add(
+            SubmissionFeedback(
+                session_id=practice_session.id,
+                user_id=user.id,
+                source="leetcode_manual",
+                result="accepted",
+                runtime_ms=12,
+                memory_kb=1024,
+                failed_case_text="",
+                error_message="",
+                raw_feedback_json={"status": "Accepted"},
+                submitted_at=datetime.now(UTC),
+                created_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
         run = await create_coach_run(
             session,
             user,

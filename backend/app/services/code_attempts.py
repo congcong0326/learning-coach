@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +29,8 @@ _LANGUAGE_ALIASES = {
     "c": "c",
 }
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class ExtractedCode:
@@ -36,14 +39,17 @@ class ExtractedCode:
 
 
 def extract_code_from_message(content_md: str) -> ExtractedCode | None:
-    match = _FENCED_CODE_RE.search(content_md)
-    if match is not None:
+    has_fenced_block = False
+    for match in _FENCED_CODE_RE.finditer(content_md):
+        has_fenced_block = True
         code_text = match.group("code").strip()
         if _looks_like_code(code_text):
             return ExtractedCode(
                 language=_normalize_language(match.group("language")),
                 code_text=code_text,
             )
+    if has_fenced_block:
+        return None
     stripped = content_md.strip()
     if _looks_like_code(stripped):
         return ExtractedCode(language="python3", code_text=stripped)
@@ -112,6 +118,17 @@ async def persist_review_code_attempt(
         "snapshot_id": snapshot.id,
     }
     practice_session.latest_code_snapshot_id = snapshot.id
+    logger.info(
+        "practice_review_code_snapshot_saved user_id=%s session_id=%s snapshot_id=%s "
+        "event_id=%s source=%s client_revision=%s quality_status=%s",
+        user_id,
+        practice_session.id,
+        snapshot.id,
+        event.id,
+        snapshot.source,
+        snapshot.client_revision,
+        quality_status,
+    )
     return snapshot
 
 

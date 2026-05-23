@@ -34,6 +34,8 @@ from backend.app.services.llm_run_service import (
 
 PROMPT_VERSION = "coach-turn-v2-structured"
 SAFE_REPLY = "我已经记录你的输入。先说明你的暴力解法、你准备维护的关键状态，以及你认为必须覆盖的边界用例。"
+DIAGNOSED_STUCK_POINT_MAX_LENGTH = 120
+NEXT_ACTION_MAX_LENGTH = 60
 COACH_REPLY_INSTRUCTIONS = (
     "默认语言语境：简体中文。你是 Agentic Coding Learning Coach 的单题 AI 教练，"
     "必须根据当前题目训练上下文、用户画像、训练阶段、提示档位和用户本轮输入生成下一步教练回复。"
@@ -524,10 +526,16 @@ def _parse_coach_json(final_text: str) -> dict[str, Any]:
             raise LearningFlowError("coach_output_invalid")
     if code_quality_comment is not None and not isinstance(code_quality_comment, str):
         raise LearningFlowError("coach_output_invalid")
+    diagnosed_stuck_point = diagnosed_stuck_point.strip()
+    next_action = next_action.strip()
+    if len(diagnosed_stuck_point) > DIAGNOSED_STUCK_POINT_MAX_LENGTH:
+        raise LearningFlowError("coach_output_invalid")
+    if len(next_action) > NEXT_ACTION_MAX_LENGTH:
+        raise LearningFlowError("coach_output_invalid")
     return {
         "phase_after": phase_after,
-        "diagnosed_stuck_point": diagnosed_stuck_point.strip(),
-        "next_action": next_action.strip(),
+        "diagnosed_stuck_point": diagnosed_stuck_point,
+        "next_action": next_action,
         "reply_md": reply_md.strip(),
         "should_reveal_solution": should_reveal_solution,
         "code_quality_status": code_quality_status,
