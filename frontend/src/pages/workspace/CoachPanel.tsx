@@ -13,7 +13,6 @@ import type { WorkspacePracticeSession } from './types'
 
 type CoachPanelProps = {
   session: WorkspacePracticeSession
-  codeSnapshotId?: number | null
   onSessionRefresh: () => void
 }
 
@@ -21,7 +20,6 @@ const REQUEST_HINT_MESSAGE = '我需要一个提示。'
 
 export function CoachPanel({
   session,
-  codeSnapshotId = null,
   onSessionRefresh,
 }: CoachPanelProps) {
   const [content, setContent] = useState('')
@@ -35,12 +33,7 @@ export function CoachPanel({
     codeAttempts.length > 0
       ? codeAttempts[codeAttempts.length - 1].snapshot_id
       : null
-  // codeSnapshotId 只覆盖尚未被 session 回传的本地新快照，避免旧 CodePane 快照压过聊天 review 产生的新代码尝试。
-  const acceptedCodeSnapshotId =
-    codeSnapshotId !== null &&
-    (latestAttemptSnapshotId === null || codeSnapshotId > latestAttemptSnapshotId)
-      ? codeSnapshotId
-      : latestAttemptSnapshotId
+  const acceptedCodeSnapshotId = latestAttemptSnapshotId
 
   async function sendCoachMessage(messageIntent: UserIntent, messageContent: string) {
     const trimmedContent = messageContent.trim()

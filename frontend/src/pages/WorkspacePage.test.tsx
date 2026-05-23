@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -117,7 +117,7 @@ describe('WorkspacePage', () => {
     expect(container.querySelector('.markdown-statement img')).toBe(image)
   })
 
-  it('loads practice session from planned item entry', async () => {
+  it('loads planned item workspace as problem and chat coach columns', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString()
       if (url === '/api/study-plan/items/40/practice-session') {
@@ -131,106 +131,21 @@ describe('WorkspacePage', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    renderWorkspaceAt('/workspace/items/40', '/workspace/items/:itemId')
+    const { container } = renderWorkspaceAt('/workspace/items/40', '/workspace/items/:itemId')
 
     expect(await screen.findByText('计划题题面')).toBeInTheDocument()
-    expect(screen.getByText('画像来源')).toBeInTheDocument()
-    expect(screen.getByText('baseline')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '提交回填' })).toBeInTheDocument()
+    expect(screen.getByText('先复述题意。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '代码尝试记录' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'LeetCode 已 AC' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('代码草稿')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存快照' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '提交回填' })).not.toBeInTheDocument()
+    expect(screen.queryByText('画像来源')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.workspace-content-column')).toHaveLength(2)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/study-plan/items/40/practice-session',
       expect.objectContaining({ method: 'POST' }),
     )
-  })
-
-  it('preserves code draft when problem detail finishes loading after the session', async () => {
-    let resolveProblem: (response: Response) => void = () => undefined
-    const delayedProblem = new Promise<Response>((resolve) => {
-      resolveProblem = resolve
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = input.toString()
-        if (url === '/api/study-plan/items/40/practice-session') {
-          expect(init?.method).toBe('POST')
-          return okJson(stubPracticeSession())
-        }
-        if (url === '/api/problems/two-sum') {
-          return delayedProblem
-        }
-        return new Response('not found', { status: 404 })
-      }),
-    )
-
-    renderWorkspaceAt('/workspace/items/40', '/workspace/items/:itemId')
-
-    const draftInput = await screen.findByLabelText('代码草稿')
-    fireEvent.change(draftInput, {
-      target: { value: 'class Solution:\n    def twoSum(self, nums, target): pass' },
-    })
-    resolveProblem(okJson(stubProblemDetail('# Two Sum\n\n## 翻译\n\n延迟题面')))
-
-    expect(await screen.findByText('延迟题面')).toBeInTheDocument()
-    expect(screen.getByLabelText('代码草稿')).toHaveValue(
-      'class Solution:\n    def twoSum(self, nums, target): pass',
-    )
-  })
-
-  it('uses saved code snapshot when submitting LeetCode feedback', async () => {
-    const feedbackBodies: unknown[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = input.toString()
-        if (url === '/api/study-plan/items/40/practice-session') {
-          return okJson(stubPracticeSession())
-        }
-        if (url === '/api/problems/two-sum') {
-          return okJson(stubProblemDetail('# Two Sum\n\n## 翻译\n\n计划题题面'))
-        }
-        if (url === '/api/practice-sessions/100/code-snapshots') {
-          return okJson({
-            id: 777,
-            language: 'python3',
-            source: 'manual_save',
-            client_revision: 1,
-            code_hash: 'hash',
-            created_at: '2026-05-22T00:00:00Z',
-          })
-        }
-        if (url === '/api/practice-sessions/100/submission-feedback') {
-          feedbackBodies.push(JSON.parse(String(init?.body)))
-          return okJson({
-            id: 900,
-            result: 'unknown',
-            event_id: 901,
-            code_snapshot_id: 777,
-            created_at: '2026-05-22T00:00:00Z',
-          })
-        }
-        return new Response('not found', { status: 404 })
-      }),
-    )
-
-    renderWorkspaceAt('/workspace/items/40', '/workspace/items/:itemId')
-
-    expect(await screen.findByText('计划题题面')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('代码草稿'), {
-      target: { value: 'class Solution:\n    pass' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '保存快照' }))
-    await waitFor(() =>
-      expect(screen.getByText('上次保存', { exact: false })).toBeInTheDocument(),
-    )
-    fireEvent.click(screen.getByRole('button', { name: '提交回填' }))
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /保\s*存/ }))
-
-    await waitFor(() => expect(feedbackBodies).toHaveLength(1))
-    expect(feedbackBodies[0]).toMatchObject({
-      code_snapshot_id: 777,
-      result: 'unknown',
-    })
   })
 })
 
@@ -353,6 +268,7 @@ function stubPracticeSession() {
         created_at: '2026-05-22T00:00:00Z',
       },
     ],
+    code_attempts: [],
     created_at: '2026-05-22T00:00:00Z',
     updated_at: '2026-05-22T00:00:00Z',
   }

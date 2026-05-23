@@ -287,6 +287,18 @@ body {
   gap: 2px;
 }
 
+.workspace-content-row {
+  align-items: stretch;
+}
+
+.workspace-content-column {
+  display: flex;
+}
+
+.workspace-content-column > .workspace-pane {
+  width: 100%;
+}
+
 .workspace-pane {
   min-height: 360px;
   padding: 16px;

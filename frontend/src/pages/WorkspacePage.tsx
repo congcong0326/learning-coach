@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Alert, Button, Col, Row, Space, Tag, Typography } from 'antd'
-import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { createPracticeSessionForItem } from '../api/practice'
 import { getProblem } from '../api/problems'
 import { CoachPanel } from './workspace/CoachPanel'
-import { CodePane } from './workspace/CodePane'
 import { ProblemPane } from './workspace/ProblemPane'
 
 export function WorkspacePage() {
@@ -14,10 +12,6 @@ export function WorkspacePage() {
   const isItemRoute = itemId !== undefined
   const isValidItemRoute = itemId ? /^[1-9]\d*$/.test(itemId) : false
   const itemIdNumber = isValidItemRoute ? Number(itemId) : null
-  const [latestCodeSnapshot, setLatestCodeSnapshot] = useState<{
-    sessionId: number | null
-    snapshotId: number | null
-  }>({ sessionId: null, snapshotId: null })
   const sessionQuery = useQuery({
     queryKey: ['practice-session', 'plan-item', itemIdNumber],
     queryFn: () => createPracticeSessionForItem(itemIdNumber ?? 0),
@@ -33,10 +27,6 @@ export function WorkspacePage() {
     queryFn: () => getProblem(problemSlug ?? ''),
     enabled: Boolean(problemSlug) && (!isItemRoute || Boolean(sessionQuery.data)),
   })
-  const latestCodeSnapshotId =
-    latestCodeSnapshot.sessionId === (sessionQuery.data?.id ?? null)
-      ? latestCodeSnapshot.snapshotId
-      : null
 
   if (!slug && !isItemRoute) {
     return (
@@ -102,29 +92,14 @@ export function WorkspacePage() {
         />
       ) : null}
 
-      <Row gutter={16}>
-        <Col xs={24} lg={8}>
+      <Row className="workspace-content-row" gutter={[16, 16]}>
+        <Col className="workspace-content-column" xs={24} lg={12}>
           <ProblemPane markdown={problem?.statement_md} isLoading={isLoading} />
         </Col>
-        <Col xs={24} lg={8}>
-          <CodePane
-            key={`${sessionQuery.data?.id ?? problemSlug ?? 'workspace'}`}
-            sessionId={sessionQuery.data?.id}
-            initialCode={problem?.python3_snippet}
-            onSnapshotSaved={(snapshotId) => {
-              setLatestCodeSnapshot({
-                sessionId: sessionQuery.data?.id ?? null,
-                snapshotId,
-              })
-              void sessionQuery.refetch()
-            }}
-          />
-        </Col>
-        <Col xs={24} lg={8}>
+        <Col className="workspace-content-column" xs={24} lg={12}>
           {sessionQuery.data ? (
             <CoachPanel
               session={sessionQuery.data}
-              codeSnapshotId={latestCodeSnapshotId}
               onSessionRefresh={() => {
                 void sessionQuery.refetch()
               }}
