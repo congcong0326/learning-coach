@@ -200,6 +200,37 @@ describe('CoachPanel', () => {
     )
   })
 
+  it('uses the latest session code attempt when the transitional snapshot is stale', async () => {
+    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
+      id: 907,
+      result: 'ac',
+      event_id: 908,
+      code_snapshot_id: 888,
+      created_at: '2026-05-23T00:00:00Z',
+    })
+    llmRunMock.startRun.mockResolvedValue({ run_id: 1003 })
+
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          code_attempts: [stubCodeAttempt(888)],
+        }}
+        codeSnapshotId={777}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'LeetCode 已 AC' }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledWith(100, {
+        result: 'ac',
+        code_snapshot_id: 888,
+      }),
+    )
+  })
+
   it('keeps AC recorded when summary generation fails', async () => {
     practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
       id: 905,
