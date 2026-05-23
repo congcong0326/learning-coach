@@ -321,6 +321,42 @@ async def test_code_snapshot_hash_is_sha256(
 
 
 @pytest.mark.asyncio
+async def test_session_payload_includes_code_attempts(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.practice_session_service import get_session_payload
+
+    snapshot_id = await save_python_snapshot(db_session, user, practice_session)
+    result = await db_session.execute(
+        select(PracticeEvent).where(
+            PracticeEvent.session_id == practice_session.id,
+            PracticeEvent.event_type == "code_saved",
+        )
+    )
+    event = result.scalar_one()
+    event.payload_json = {
+        **event.payload_json,
+        "snapshot_id": snapshot_id,
+        "quality_status": "ready_to_submit",
+        "quality_comment": "哈希表维护正确，可以去 LeetCode 尝试提交。",
+    }
+    await db_session.commit()
+
+    payload = await get_session_payload(db_session, user, practice_session.id)
+
+    assert len(payload.code_attempts) == 1
+    attempt = payload.code_attempts[0]
+    assert attempt.snapshot_id == snapshot_id
+    assert attempt.language == "python3"
+    assert attempt.source == "manual_save"
+    assert attempt.quality_status == "ready_to_submit"
+    assert attempt.quality_comment == "哈希表维护正确，可以去 LeetCode 尝试提交。"
+    assert attempt.code_preview == "class Solution:\n    pass"
+
+
+@pytest.mark.asyncio
 async def test_submission_feedback_updates_session_phase(
     db_session: AsyncSession,
     user: AppUser,
@@ -379,6 +415,30 @@ async def test_submission_feedback_without_explicit_snapshot_uses_latest_snapsho
     saved_feedback = await db_session.get(SubmissionFeedback, result.id)
     assert saved_feedback is not None
     assert saved_feedback.code_snapshot_id == snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_ac_submission_feedback_without_code_snapshot_is_allowed(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.schemas.practice import SubmissionFeedbackCreate
+    from backend.app.services.practice_session_service import record_submission_feedback
+
+    result = await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(result="ac"),
+    )
+
+    await db_session.refresh(practice_session)
+    assert result.result == "ac"
+    assert result.code_snapshot_id is None
+    assert practice_session.final_result == "ac"
+    assert practice_session.phase == "summarize"
+    assert practice_session.status == "summarizing"
 
 
 @pytest.mark.asyncio

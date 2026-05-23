@@ -47,7 +47,15 @@ UserIntent = Literal[
     "unknown",
 ]
 SubmissionResult = Literal["ac", "wa", "tle", "re", "mle", "ce", "unknown"]
-CodeSnapshotSource = Literal["paste", "manual_save", "before_review", "before_submit", "final"]
+CodeSnapshotSource = Literal[
+    "paste",
+    "manual_save",
+    "before_review",
+    "chat_review",
+    "before_submit",
+    "final",
+]
+CodeAttemptQuality = Literal["pending", "needs_fix", "ready_to_submit"]
 ProfileConfidence = Literal["low", "medium", "high"]
 ProfileSource = Literal[
     "initial_goal_plan",
@@ -108,6 +116,19 @@ class PracticeEventResponse(BaseModel):
     created_at: datetime
 
 
+class CodeAttemptResponse(BaseModel):
+    snapshot_id: int
+    event_id: int | None
+    language: str
+    source: str
+    client_revision: int
+    code_hash: str
+    code_preview: str
+    quality_status: CodeAttemptQuality
+    quality_comment: str
+    created_at: datetime
+
+
 class PracticeSessionResponse(BaseModel):
     id: int
     study_plan_id: int
@@ -125,6 +146,7 @@ class PracticeSessionResponse(BaseModel):
     final_result: SubmissionResult | None
     profile_snapshot: ProfileSnapshotPayload
     events: list[PracticeEventResponse] = Field(default_factory=list)
+    code_attempts: list[CodeAttemptResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

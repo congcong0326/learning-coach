@@ -18,6 +18,7 @@ from backend.app.models.practice import (
 )
 from backend.app.models.problem import Problem
 from backend.app.schemas.practice import (
+    CodeAttemptResponse,
     CodeSnapshotCreate,
     CodeSnapshotResponse,
     PracticeEventResponse,
@@ -153,7 +154,12 @@ async def get_session_payload(
 ) -> PracticeSessionResponse:
     practice_session = await _load_session(db, user, session_id)
     events = await list_session_events(db, user, session_id)
-    return _session_response(practice_session, events=events)
+    code_attempts = await _list_code_attempts(db, user, session_id)
+    return _session_response(
+        practice_session,
+        events=events,
+        code_attempts=code_attempts,
+    )
 
 
 async def list_session_events(
@@ -259,6 +265,12 @@ async def save_code_snapshot(
     )
     db.add(snapshot)
     await db.flush()
+    event.payload_json = {
+        **event.payload_json,
+        "snapshot_id": snapshot.id,
+        "quality_status": "pending",
+        "quality_comment": "",
+    }
     practice_session.latest_code_snapshot_id = snapshot.id
     _touch_session(practice_session, now=now)
     await db.commit()
@@ -290,7 +302,7 @@ async def record_submission_feedback(
 ) -> SubmissionFeedbackResponse:
     practice_session = await _load_session_for_update(db, user, session_id)
     code_snapshot_id = payload.code_snapshot_id or practice_session.latest_code_snapshot_id
-    if code_snapshot_id is None:
+    if code_snapshot_id is None and payload.result != "ac":
         logger.warning(
             "practice_submission_feedback_rejected user_id=%s session_id=%s "
             "reason=code_snapshot_required_for_submission_feedback",
@@ -298,7 +310,8 @@ async def record_submission_feedback(
             session_id,
         )
         raise PracticeSessionError("code_snapshot_required_for_submission_feedback")
-    await _load_code_snapshot(db, user, practice_session.id, code_snapshot_id)
+    if code_snapshot_id is not None:
+        await _load_code_snapshot(db, user, practice_session.id, code_snapshot_id)
     now = datetime.now(UTC)
     phase_before = practice_session.phase
     next_phase = _phase_after_submission(payload.result, phase_before)
@@ -565,10 +578,62 @@ def _event_response(event: PracticeEvent) -> PracticeEventResponse:
     )
 
 
+async def _list_code_attempts(
+    db: AsyncSession,
+    user: AppUser,
+    session_id: int,
+) -> list[CodeAttemptResponse]:
+    result = await db.execute(
+        select(CodeSnapshot, PracticeEvent)
+        .join(
+            PracticeEvent,
+            PracticeEvent.id == CodeSnapshot.event_id,
+        )
+        .where(
+            CodeSnapshot.session_id == session_id,
+            CodeSnapshot.user_id == user.id,
+        )
+        .order_by(CodeSnapshot.created_at, CodeSnapshot.id)
+    )
+    return [_code_attempt_response(snapshot, event) for snapshot, event in result.all()]
+
+
+def _code_attempt_response(
+    snapshot: CodeSnapshot,
+    event: PracticeEvent,
+) -> CodeAttemptResponse:
+    payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+    quality_status = payload.get("quality_status")
+    if quality_status not in {"pending", "needs_fix", "ready_to_submit"}:
+        quality_status = "pending"
+    quality_comment = payload.get("quality_comment")
+    if not isinstance(quality_comment, str):
+        quality_comment = ""
+    return CodeAttemptResponse.model_validate(
+        {
+            "snapshot_id": snapshot.id,
+            "event_id": event.id,
+            "language": snapshot.language,
+            "source": snapshot.source,
+            "client_revision": snapshot.client_revision,
+            "code_hash": snapshot.code_hash,
+            "code_preview": _code_preview(snapshot.code_text),
+            "quality_status": quality_status,
+            "quality_comment": quality_comment,
+            "created_at": snapshot.created_at,
+        }
+    )
+
+
+def _code_preview(code_text: str) -> str:
+    return code_text.strip()[:400]
+
+
 def _session_response(
     practice_session: PracticeSession,
     *,
     events: list[PracticeEventResponse] | None = None,
+    code_attempts: list[CodeAttemptResponse] | None = None,
 ) -> PracticeSessionResponse:
     return PracticeSessionResponse.model_validate(
         {
@@ -588,6 +653,7 @@ def _session_response(
             "final_result": practice_session.final_result or None,
             "profile_snapshot": practice_session.profile_snapshot_json,
             "events": events or [],
+            "code_attempts": code_attempts or [],
             "created_at": practice_session.created_at,
             "updated_at": practice_session.updated_at,
         }
