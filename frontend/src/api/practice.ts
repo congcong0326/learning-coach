@@ -14,8 +14,24 @@ export type CodeSnapshotSource =
   | 'paste'
   | 'manual_save'
   | 'before_review'
+  | 'chat_review'
   | 'before_submit'
   | 'final'
+
+export type CodeAttemptQuality = 'pending' | 'needs_fix' | 'ready_to_submit'
+
+export type CodeAttempt = {
+  snapshot_id: number
+  event_id: number | null
+  language: string
+  source: string
+  client_revision: number
+  code_hash: string
+  code_preview: string
+  quality_status: CodeAttemptQuality
+  quality_comment: string
+  created_at: string
+}
 
 export type PracticeEvent = {
   id: number
@@ -61,6 +77,7 @@ export type PracticeSession = {
     evidence: Array<Record<string, unknown>>
   }
   events: PracticeEvent[]
+  code_attempts: CodeAttempt[]
   created_at: string
   updated_at: string
 }
