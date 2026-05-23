@@ -19,7 +19,11 @@ type CoachPanelProps = {
 
 const REQUEST_HINT_MESSAGE = '我需要一个提示。'
 
-export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
+export function CoachPanel({
+  session,
+  codeSnapshotId = null,
+  onSessionRefresh,
+}: CoachPanelProps) {
   const [content, setContent] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [attemptDrawerOpen, setAttemptDrawerOpen] = useState(false)
@@ -31,6 +35,7 @@ export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
     codeAttempts.length > 0
       ? codeAttempts[codeAttempts.length - 1].snapshot_id
       : null
+  const acceptedCodeSnapshotId = codeSnapshotId ?? latestAttemptSnapshotId
 
   async function sendCoachMessage(messageIntent: UserIntent, messageContent: string) {
     const trimmedContent = messageContent.trim()
@@ -68,17 +73,25 @@ export function CoachPanel({ session, onSessionRefresh }: CoachPanelProps) {
   async function handleAccepted() {
     setIsMarkingAccepted(true)
     try {
-      await submitLeetCodeFeedback(session.id, {
-        result: 'ac',
-        code_snapshot_id: latestAttemptSnapshotId,
-      })
+      try {
+        await submitLeetCodeFeedback(session.id, {
+          result: 'ac',
+          code_snapshot_id: acceptedCodeSnapshotId,
+        })
+      } catch {
+        toast.error('AC 状态记录失败，请稍后重试')
+        return
+      }
+
       onSessionRefresh()
-      await llmRun.startRun('coach_summary', {
-        session_id: session.id,
-        trigger: 'request_summary',
-      })
-    } catch {
-      toast.error('AC 状态记录失败，请稍后重试')
+      try {
+        await llmRun.startRun('coach_summary', {
+          session_id: session.id,
+          trigger: 'request_summary',
+        })
+      } catch {
+        toast.error('AC 已记录，复盘生成失败，请稍后重试')
+      }
     } finally {
       setIsMarkingAccepted(false)
     }

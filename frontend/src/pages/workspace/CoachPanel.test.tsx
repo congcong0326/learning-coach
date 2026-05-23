@@ -22,6 +22,21 @@ const practiceApiMock = vi.hoisted(() => ({
   submitLeetCodeFeedback: vi.fn(),
 }))
 
+const toastMock = vi.hoisted(() => ({
+  error: vi.fn(),
+}))
+
+vi.mock('antd', async (importActual) => {
+  const actual = await importActual<typeof import('antd')>()
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      error: toastMock.error,
+    },
+  }
+})
+
 vi.mock('../../hooks/useLlmRun', () => ({
   useLlmRun: () => ({
     startRun: llmRunMock.startRun,
@@ -50,6 +65,7 @@ describe('CoachPanel', () => {
     llmRunState.result = null
     practiceApiMock.sendPracticeMessage.mockReset()
     practiceApiMock.submitLeetCodeFeedback.mockReset()
+    toastMock.error.mockReset()
   })
 
   it('shows chat-first controls and code attempt entry', () => {
@@ -153,6 +169,62 @@ describe('CoachPanel', () => {
     expect(refresh).toHaveBeenCalled()
   })
 
+  it('uses the transitional saved code snapshot id before older code attempts', async () => {
+    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
+      id: 903,
+      result: 'ac',
+      event_id: 904,
+      code_snapshot_id: 777,
+      created_at: '2026-05-23T00:00:00Z',
+    })
+    llmRunMock.startRun.mockResolvedValue({ run_id: 1002 })
+
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          code_attempts: [stubCodeAttempt(111)],
+        }}
+        codeSnapshotId={777}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'LeetCode 已 AC' }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledWith(100, {
+        result: 'ac',
+        code_snapshot_id: 777,
+      }),
+    )
+  })
+
+  it('keeps AC recorded when summary generation fails', async () => {
+    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
+      id: 905,
+      result: 'ac',
+      event_id: 906,
+      code_snapshot_id: null,
+      created_at: '2026-05-23T00:00:00Z',
+    })
+    llmRunMock.startRun.mockRejectedValue(new Error('run creation failed'))
+    const refresh = vi.fn()
+
+    render(<CoachPanel session={stubSession()} onSessionRefresh={refresh} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'LeetCode 已 AC' }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledTimes(1),
+    )
+    expect(refresh).toHaveBeenCalled()
+    expect(toastMock.error).toHaveBeenCalledWith(
+      'AC 已记录，复盘生成失败，请稍后重试',
+    )
+    expect(toastMock.error).not.toHaveBeenCalledWith('AC 状态记录失败，请稍后重试')
+  })
+
   it('shows streaming output only while a coach run is active', () => {
     llmRunState.displayText = '正在生成新的教练回复'
     llmRunState.stage = '正在生成教练回复'
@@ -223,5 +295,20 @@ function stubSession(): WorkspacePracticeSession {
     code_attempts: [],
     created_at: '2026-05-22T00:00:00Z',
     updated_at: '2026-05-22T00:00:00Z',
+  }
+}
+
+function stubCodeAttempt(snapshotId: number): WorkspacePracticeSession['code_attempts'][number] {
+  return {
+    snapshot_id: snapshotId,
+    event_id: 600,
+    language: 'python3',
+    source: 'manual_save',
+    client_revision: 1,
+    code_hash: 'abc123',
+    code_preview: 'class Solution:\n    pass',
+    quality_status: 'pending',
+    quality_comment: '',
+    created_at: '2026-05-22T00:00:00Z',
   }
 }
