@@ -515,11 +515,13 @@ def _parse_coach_json(final_text: str) -> dict[str, Any]:
         raise LearningFlowError("coach_output_invalid")
     if not isinstance(should_reveal_solution, bool):
         raise LearningFlowError("coach_output_invalid")
-    if (
-        code_quality_status is not None
-        and code_quality_status not in {"pending", "needs_fix", "ready_to_submit"}
-    ):
-        raise LearningFlowError("coach_output_invalid")
+    if code_quality_status is not None:
+        if not isinstance(code_quality_status, str) or code_quality_status not in {
+            "pending",
+            "needs_fix",
+            "ready_to_submit",
+        }:
+            raise LearningFlowError("coach_output_invalid")
     if code_quality_comment is not None and not isinstance(code_quality_comment, str):
         raise LearningFlowError("coach_output_invalid")
     return {

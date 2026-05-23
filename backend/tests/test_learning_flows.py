@@ -30,7 +30,10 @@ from backend.app.services.learning_flows.goal_plan import (
     PROMPT_VERSION,
     run_goal_plan_generate,
 )
-from backend.app.services.learning_flows.coach_turn import run_coach_turn
+from backend.app.services.learning_flows.coach_turn import (
+    _parse_coach_json,
+    run_coach_turn,
+)
 from backend.app.services.learning_flows.coach_summary import run_coach_summary
 from backend.app.services.learning_flows.goal_calibration import run_goal_followup
 from backend.app.services.llm_providers.base import ProviderChunk
@@ -691,6 +694,25 @@ async def test_coach_turn_does_not_extract_code_attempt_outside_review_code(
             select(CodeSnapshot).where(CodeSnapshot.session_id == practice_session.id)
         )
         assert result.scalars().all() == []
+
+
+def test_parse_coach_json_rejects_non_string_code_quality_status() -> None:
+    with pytest.raises(LearningFlowError) as exc_info:
+        _parse_coach_json(
+            json.dumps(
+                {
+                    "phase_after": "review_code",
+                    "diagnosed_stuck_point": "implementation_bug",
+                    "next_action": "review_code",
+                    "reply_md": "这版代码需要修改。",
+                    "should_reveal_solution": False,
+                    "code_quality_status": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    assert exc_info.value.code == "coach_output_invalid"
 
 
 @pytest.mark.asyncio
