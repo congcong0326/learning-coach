@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -13,10 +12,6 @@ from backend.app.models.practice import CodeSnapshot, PracticeEvent, PracticeSes
 
 
 QUALITY_STATUSES = {"pending", "needs_fix", "ready_to_submit"}
-_FENCED_CODE_RE = re.compile(
-    r"```(?P<language>[A-Za-z0-9_+#.-]*)\s*\n(?P<code>.*?)```",
-    re.DOTALL,
-)
 _LANGUAGE_ALIASES = {
     "py": "python3",
     "python": "python3",
@@ -40,11 +35,10 @@ class ExtractedCode:
 
 def extract_code_from_message(content_md: str) -> ExtractedCode | None:
     has_fence_token = "```" in content_md
-    for match in _FENCED_CODE_RE.finditer(content_md):
-        code_text = match.group("code").strip()
+    for language, code_text in _iter_fenced_blocks(content_md):
         if _looks_like_code(code_text):
             return ExtractedCode(
-                language=_normalize_language(match.group("language")),
+                language=_normalize_language(language),
                 code_text=code_text,
             )
     if has_fence_token:
@@ -134,6 +128,38 @@ async def persist_review_code_attempt(
 def _normalize_language(language: str) -> str:
     key = language.strip().lower()
     return _LANGUAGE_ALIASES.get(key, "python3")
+
+
+def _iter_fenced_blocks(content_md: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    current_language = ""
+    current_lines: list[str] = []
+    in_block = False
+    block_malformed = False
+
+    # 只接受独占一行的 closing fence；块内再次出现 fence token 视为 malformed，
+    # 避免把说明文字和后续 fence 拼进代码快照。
+    for line in content_md.splitlines():
+        stripped = line.strip()
+        if not in_block:
+            if stripped.startswith("```"):
+                in_block = True
+                current_language = stripped[3:].strip()
+                current_lines = []
+                block_malformed = False
+            continue
+        if stripped == "```":
+            if not block_malformed:
+                blocks.append((current_language, "\n".join(current_lines).strip()))
+            in_block = False
+            current_language = ""
+            current_lines = []
+            block_malformed = False
+            continue
+        if stripped.startswith("```"):
+            block_malformed = True
+        current_lines.append(line)
+    return blocks
 
 
 def _looks_like_code(text: str) -> bool:

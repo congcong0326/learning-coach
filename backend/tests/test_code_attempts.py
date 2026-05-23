@@ -49,3 +49,19 @@ def test_extract_code_from_message_returns_none_for_incomplete_fenced_block() ->
     )
 
     assert extracted is None
+
+
+def test_extract_code_from_message_returns_none_for_malformed_mixed_fences() -> None:
+    extracted = extract_code_from_message(
+        "请 review：\n"
+        "```python\n"
+        "class Solution:\n"
+        "    def solve(self):\n"
+        "        return 1\n"
+        "这中间是说明文字\n"
+        "```text\n"
+        "不是代码\n"
+        "```\n"
+    )
+
+    assert extracted is None
