@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.models.auth import AppUser
@@ -116,6 +117,28 @@ class FakeFollowupProvider:
         yield ProviderChunk(final_text=self.final_text)
 
 
+class FakeCoachProvider:
+    def __init__(self, final_payload: dict[str, Any]) -> None:
+        self.calls: list[dict[str, str]] = []
+        self.final_payload = final_payload
+
+    async def stream_text(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+    ) -> AsyncGenerator[ProviderChunk, None]:
+        self.calls.append(
+            {"model": model, "instructions": instructions, "input_text": input_text}
+        )
+        final_text = json.dumps(self.final_payload, ensure_ascii=False)
+        midpoint = max(1, len(final_text) // 2)
+        yield ProviderChunk(text_delta=final_text[:midpoint])
+        yield ProviderChunk(text_delta=final_text[midpoint:])
+        yield ProviderChunk(final_text=final_text)
+
+
 class FailingProvider:
     async def stream_text(
         self,
@@ -212,6 +235,7 @@ async def create_practice_session_with_user_event(
     *,
     phase: str = "write_code",
     user_intent: str = "code_review",
+    content_md: str = "请帮我看一下代码。",
     with_code: bool = False,
 ) -> tuple[PracticeSession, PracticeEvent, CodeSnapshot | None]:
     now = datetime.now(UTC)
@@ -243,8 +267,8 @@ async def create_practice_session_with_user_event(
         role="user",
         phase=phase,
         intent=user_intent,
-        content_md="请帮我看一下代码。",
-        payload_json={"content_length": 9},
+        content_md=content_md,
+        payload_json={"content_length": len(content_md)},
         hint_level="questioning",
         visible_hint_gear=0,
         created_at=now,
@@ -480,6 +504,193 @@ async def test_coach_turn_persists_serializable_assistant_event_without_result_e
         )
         assert response.intent is None
         assert [event.name for event in events] == ["progress", "delta"]
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_uses_model_reply_when_user_already_described_hash_idea(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        idea = (
+            "这道题很简单，用 hash 表第一次遍历保存数据，第二次遍历用 "
+            "target 减去当前值看 hash 表里面有没有。"
+        )
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="understand_problem",
+            user_intent="describe_idea",
+            content_md=idea,
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="describe_idea",
+        )
+        reply = (
+            "你已经给出了哈希表方向，不需要回到暴力解法。下一步说清楚哈希表里存的是值还是下标，"
+            "以及遍历到当前数时先查还是先写。"
+        )
+        provider = FakeCoachProvider(
+            {
+                "phase_after": "define_invariant",
+                "diagnosed_stuck_point": "hash_state_needs_precision",
+                "next_action": "ask_hash_invariant",
+                "reply_md": reply,
+                "should_reveal_solution": False,
+            }
+        )
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        result = await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assistant = await session.get(PracticeEvent, result["assistant_event_id"])
+        coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
+        assert assistant is not None
+        assert coach_turn is not None
+        assert provider.calls[0]["model"] == "gpt-test"
+        assert "单题 AI 教练" in provider.calls[0]["instructions"]
+        input_context = json.loads(provider.calls[0]["input_text"])
+        assert input_context["user_message"]["content_md"] == idea
+        assert assistant.content_md == reply
+        assert coach_turn.response_json["content_md"] == reply
+        assert coach_turn.phase_after == "define_invariant"
+        assert coach_turn.diagnosed_stuck_point == "hash_state_needs_precision"
+        assert coach_turn.next_action == "ask_hash_invariant"
+        assert run.display_text_md == reply
+        assert events[-1].data["text"] == reply
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_extracts_code_attempt_when_review_code_is_accepted(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from backend.app.models.practice import CodeSnapshot, PracticeEvent
+
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="write_code",
+            user_intent="code_review",
+            content_md=(
+                "请 review：\n"
+                "```python\n"
+                "class Solution:\n"
+                "    def twoSum(self, nums, target):\n"
+                "        return []\n"
+                "```"
+            ),
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="code_review",
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        result = await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakeCoachProvider(
+                {
+                    "phase_after": "review_code",
+                    "diagnosed_stuck_point": "implementation_bug",
+                    "next_action": "review_code",
+                    "reply_md": "这版代码还没有实现哈希表查找。",
+                    "should_reveal_solution": False,
+                    "code_quality_status": "needs_fix",
+                    "code_quality_comment": "当前代码直接返回空列表，不建议提交。",
+                }
+            ),
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assert result["code_attempt_snapshot_id"] is not None
+        snapshot = await session.get(CodeSnapshot, result["code_attempt_snapshot_id"])
+        assert snapshot is not None
+        assert snapshot.source == "chat_review"
+        assert snapshot.language == "python3"
+        assert "def twoSum" in snapshot.code_text
+
+        event_result = await session.execute(
+            select(PracticeEvent).where(
+                PracticeEvent.session_id == practice_session.id,
+                PracticeEvent.event_type == "code_saved",
+            )
+        )
+        code_event = event_result.scalar_one()
+        assert code_event.payload_json["quality_status"] == "needs_fix"
+        assert code_event.payload_json["quality_comment"] == "当前代码直接返回空列表，不建议提交。"
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_does_not_extract_code_attempt_outside_review_code(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from backend.app.models.practice import CodeSnapshot
+
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="understand_problem",
+            user_intent="unknown",
+            content_md="我可能会写 for i in range(len(nums))，先讨论思路。",
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="unknown",
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakeCoachProvider(
+                {
+                    "phase_after": "understand_problem",
+                    "diagnosed_stuck_point": "intent_unclear",
+                    "next_action": "ask_clarifying_question",
+                    "reply_md": "先说输入输出。",
+                    "should_reveal_solution": False,
+                }
+            ),
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        result = await session.execute(
+            select(CodeSnapshot).where(CodeSnapshot.session_id == practice_session.id)
+        )
+        assert result.scalars().all() == []
 
 
 @pytest.mark.asyncio
