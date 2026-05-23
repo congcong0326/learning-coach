@@ -37,3 +37,15 @@ def test_extract_code_from_message_returns_none_for_fenced_non_code_only() -> No
     )
 
     assert extracted is None
+
+
+def test_extract_code_from_message_returns_none_for_incomplete_fenced_block() -> None:
+    extracted = extract_code_from_message(
+        "请 review：\n"
+        "```python\n"
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        return []\n"
+    )
+
+    assert extracted is None

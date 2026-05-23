@@ -1,10 +1,10 @@
 from backend.app.services.coach_guard import guard_transition
 
 
-def test_allows_adjacent_phase_progress() -> None:
+def test_allows_fast_forward_within_early_reasoning_phases() -> None:
     result = guard_transition(
         phase_before="understand_problem",
-        proposed_phase_after="propose_bruteforce",
+        proposed_phase_after="define_invariant",
         has_code=False,
         has_submission_feedback=False,
         hint_level="questioning",
@@ -12,7 +12,7 @@ def test_allows_adjacent_phase_progress() -> None:
     )
 
     assert result.accepted is True
-    assert result.phase_after == "propose_bruteforce"
+    assert result.phase_after == "define_invariant"
 
 
 def test_rejects_feedback_analysis_without_submission_feedback() -> None:
@@ -41,6 +41,49 @@ def test_code_review_with_code_can_enter_review_phase() -> None:
 
     assert result.accepted is True
     assert result.phase_after == "review_code"
+
+
+def test_review_phase_can_fall_back_to_early_reasoning_phase() -> None:
+    result = guard_transition(
+        phase_before="review_code",
+        proposed_phase_after="optimize_solution",
+        has_code=True,
+        has_submission_feedback=False,
+        hint_level="questioning",
+        should_reveal_solution=False,
+    )
+
+    assert result.accepted is True
+    assert result.phase_after == "optimize_solution"
+
+
+def test_submit_to_leetcode_requires_code_and_review_context() -> None:
+    result = guard_transition(
+        phase_before="review_code",
+        proposed_phase_after="submit_to_leetcode",
+        has_code=True,
+        has_submission_feedback=False,
+        hint_level="questioning",
+        should_reveal_solution=False,
+    )
+
+    assert result.accepted is True
+    assert result.phase_after == "submit_to_leetcode"
+
+
+def test_submit_to_leetcode_rejects_early_phase_even_with_code() -> None:
+    result = guard_transition(
+        phase_before="understand_problem",
+        proposed_phase_after="submit_to_leetcode",
+        has_code=True,
+        has_submission_feedback=False,
+        hint_level="questioning",
+        should_reveal_solution=False,
+    )
+
+    assert result.accepted is False
+    assert result.phase_after == "understand_problem"
+    assert result.reason == "phase_transition_not_allowed"
 
 
 def test_feedback_with_submission_feedback_can_enter_analysis() -> None:

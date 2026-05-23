@@ -2,18 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-COACH_PHASE_ORDER = (
+EARLY_REASONING_PHASES = {
     "understand_problem",
     "propose_bruteforce",
     "optimize_solution",
     "define_invariant",
     "write_code",
-    "review_code",
-    "submit_to_leetcode",
-    "analyze_feedback",
-    "summarize",
-)
-_PHASE_INDEX = {phase: index for index, phase in enumerate(COACH_PHASE_ORDER)}
+}
 
 
 @dataclass(frozen=True)
@@ -40,6 +35,13 @@ def guard_transition(
             hint_level_after=hint_level,
             reason="hint_level_prevents_solution_reveal",
         )
+    if proposed_phase_after == phase_before:
+        return GuardDecision(
+            accepted=True,
+            phase_after=proposed_phase_after,
+            hint_level_after=hint_level,
+            reason="accepted",
+        )
     if proposed_phase_after == "review_code" and not has_code:
         return GuardDecision(
             accepted=False,
@@ -47,12 +49,53 @@ def guard_transition(
             hint_level_after=hint_level,
             reason="code_required_for_review",
         )
-    if proposed_phase_after == "analyze_feedback" and not has_submission_feedback:
+    if (
+        phase_before in EARLY_REASONING_PHASES
+        and proposed_phase_after in EARLY_REASONING_PHASES
+    ) or (
+        phase_before == "review_code"
+        and proposed_phase_after in EARLY_REASONING_PHASES
+    ):
         return GuardDecision(
-            accepted=False,
-            phase_after=phase_before,
+            accepted=True,
+            phase_after=proposed_phase_after,
             hint_level_after=hint_level,
-            reason="submission_feedback_required",
+            reason="accepted",
+        )
+    if proposed_phase_after == "review_code":
+        return GuardDecision(
+            accepted=True,
+            phase_after=proposed_phase_after,
+            hint_level_after=hint_level,
+            reason="accepted",
+        )
+    if proposed_phase_after == "submit_to_leetcode":
+        if phase_before not in {"review_code", "submit_to_leetcode"} or not has_code:
+            return GuardDecision(
+                accepted=False,
+                phase_after=phase_before,
+                hint_level_after=hint_level,
+                reason="phase_transition_not_allowed",
+            )
+        return GuardDecision(
+            accepted=True,
+            phase_after=proposed_phase_after,
+            hint_level_after=hint_level,
+            reason="accepted",
+        )
+    if proposed_phase_after == "analyze_feedback":
+        if not has_submission_feedback:
+            return GuardDecision(
+                accepted=False,
+                phase_after=phase_before,
+                hint_level_after=hint_level,
+                reason="submission_feedback_required",
+            )
+        return GuardDecision(
+            accepted=True,
+            phase_after=proposed_phase_after,
+            hint_level_after=hint_level,
+            reason="accepted",
         )
     if proposed_phase_after == "summarize":
         if phase_before == "summarize":
@@ -76,38 +119,15 @@ def guard_transition(
                 hint_level_after=hint_level,
                 reason="phase_transition_not_allowed",
             )
-    if proposed_phase_after == "review_code":
         return GuardDecision(
             accepted=True,
             phase_after=proposed_phase_after,
             hint_level_after=hint_level,
             reason="accepted",
-        )
-    if proposed_phase_after == "analyze_feedback":
-        return GuardDecision(
-            accepted=True,
-            phase_after=proposed_phase_after,
-            hint_level_after=hint_level,
-            reason="accepted",
-        )
-    if not _is_same_or_adjacent_forward(phase_before, proposed_phase_after):
-        return GuardDecision(
-            accepted=False,
-            phase_after=phase_before,
-            hint_level_after=hint_level,
-            reason="phase_transition_not_allowed",
         )
     return GuardDecision(
-        accepted=True,
-        phase_after=proposed_phase_after,
+        accepted=False,
+        phase_after=phase_before,
         hint_level_after=hint_level,
-        reason="accepted",
+        reason="phase_transition_not_allowed",
     )
-
-
-def _is_same_or_adjacent_forward(phase_before: str, phase_after: str) -> bool:
-    before_index = _PHASE_INDEX.get(phase_before)
-    after_index = _PHASE_INDEX.get(phase_after)
-    if before_index is None or after_index is None:
-        return phase_before == phase_after
-    return after_index == before_index or after_index == before_index + 1

@@ -39,16 +39,15 @@ class ExtractedCode:
 
 
 def extract_code_from_message(content_md: str) -> ExtractedCode | None:
-    has_fenced_block = False
+    has_fence_token = "```" in content_md
     for match in _FENCED_CODE_RE.finditer(content_md):
-        has_fenced_block = True
         code_text = match.group("code").strip()
         if _looks_like_code(code_text):
             return ExtractedCode(
                 language=_normalize_language(match.group("language")),
                 code_text=code_text,
             )
-    if has_fenced_block:
+    if has_fence_token:
         return None
     stripped = content_md.strip()
     if _looks_like_code(stripped):

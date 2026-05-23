@@ -571,12 +571,12 @@ async def test_coach_turn_uses_model_reply_when_user_already_described_hash_idea
         assert input_context["user_message"]["content_md"] == idea
         assert assistant.content_md == reply
         assert coach_turn.response_json["content_md"] == reply
-        assert coach_turn.phase_after == "understand_problem"
+        assert coach_turn.phase_after == "define_invariant"
         assert coach_turn.diagnosed_stuck_point == "hash_state_needs_precision"
         assert coach_turn.next_action == "ask_hash_invariant"
         assert run.display_text_md == reply
-        assert result["guard"]["accepted"] is False
-        assert result["guard"]["reason"] == "phase_transition_not_allowed"
+        assert result["guard"]["accepted"] is True
+        assert result["guard"]["reason"] == "accepted"
         assert events[-1].data["text"] == reply
 
 
