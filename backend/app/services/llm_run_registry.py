@@ -82,7 +82,7 @@ RUN_KIND_SPECS: dict[str, RunKindSpec] = {
         handler=CoachTurnHandler(),
         related_type="practice_session",
         related_id_key="session_id",
-        requires_model=False,
+        requires_model=True,
     ),
     # practice_session：单题训练复盘入口，第一版复用安全确定性回复，完整 summary/profile delta 后续接入。
     "coach_summary": RunKindSpec(

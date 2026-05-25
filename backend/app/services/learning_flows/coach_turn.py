@@ -34,6 +34,10 @@ from backend.app.services.llm_run_service import (
 
 PROMPT_VERSION = "coach-turn-v2-structured"
 SAFE_REPLY = "我已经记录你的输入。先说明你的暴力解法、你准备维护的关键状态，以及你认为必须覆盖的边界用例。"
+SUMMARY_SAFE_REPLY = (
+    "LeetCode AC 已记录。下面进入单题复盘：我会围绕本题最终结果、"
+    "关键思路、主要卡点、提示使用和下一步训练建议做沉淀。"
+)
 DIAGNOSED_STUCK_POINT_MAX_LENGTH = 120
 NEXT_ACTION_MAX_LENGTH = 60
 COACH_REPLY_INSTRUCTIONS = (
@@ -128,6 +132,12 @@ async def run_coach_turn(
         has_submission_feedback=has_feedback,
         force_summary=run.kind == "coach_summary",
     )
+    await _publish_progress(
+        publish,
+        run_id=run.id,
+        stage="loading_context",
+        message="正在准备训练上下文",
+    )
 
     logger.info(
         "coach turn flow started run_id=%s user_id=%s session_id=%s phase=%s "
@@ -142,8 +152,8 @@ async def run_coach_turn(
     await _publish_progress(
         publish,
         run_id=run.id,
-        stage="coach_turn",
-        message="正在生成教练回复",
+        stage="calling_model",
+        message="正在调用大模型",
     )
     coach_decision = await _coach_decision(
         session,
@@ -157,6 +167,12 @@ async def run_coach_turn(
         has_feedback=has_feedback,
         trigger_context=trigger_context,
     )
+    await _publish_progress(
+        publish,
+        run_id=run.id,
+        stage="guarding_transition",
+        message="正在校验教练阶段",
+    )
     decision = guard_transition(
         phase_before=practice_session.phase,
         proposed_phase_after=coach_decision["phase_after"],
@@ -168,6 +184,12 @@ async def run_coach_turn(
     )
     reply_md = _reply_after_guard(coach_decision, decision_reason=decision.reason)
     await publish(LlmRunEvent("delta", {"run_id": run.id, "text": reply_md}))
+    await _publish_progress(
+        publish,
+        run_id=run.id,
+        stage="saving_reply",
+        message="正在保存教练回复",
+    )
 
     now = datetime.now(UTC)
     phase_before = practice_session.phase
@@ -557,11 +579,19 @@ def _strip_json_fence(final_text: str) -> str:
 
 
 def _fallback_coach_decision(trigger_context: dict[str, str]) -> dict[str, Any]:
+    # 复盘 run 允许不依赖模型资产执行，兜底文案必须保持复盘语境，
+    # 不能复用普通教练回合的前置追问。
+    reply_md = (
+        SUMMARY_SAFE_REPLY
+        if trigger_context["trigger"] == "request_summary"
+        or trigger_context["next_action"] == "summarize_session"
+        else SAFE_REPLY
+    )
     return {
         "phase_after": trigger_context["proposed_phase"],
         "diagnosed_stuck_point": trigger_context["diagnosed_stuck_point"],
         "next_action": trigger_context["next_action"],
-        "reply_md": SAFE_REPLY,
+        "reply_md": reply_md,
         "should_reveal_solution": False,
         "generation_mode": "fallback",
     }

@@ -1,5 +1,9 @@
-import { Alert, Button, Input, Space, Tag, Typography, message as toast } from 'antd'
+import { Alert, Button, Input, Space, Typography, message as toast } from 'antd'
 import { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize from 'rehype-sanitize'
+import remarkGfm from 'remark-gfm'
 
 import {
   sendPracticeMessage,
@@ -8,7 +12,6 @@ import {
 } from '../../api/practice'
 import { useLlmRun } from '../../hooks/useLlmRun'
 import { CodeAttemptDrawer } from './CodeAttemptDrawer'
-import { hintLevelLabel, phaseLabel } from './coachDisplay'
 import type { WorkspacePracticeSession } from './types'
 
 type CoachPanelProps = {
@@ -18,42 +21,127 @@ type CoachPanelProps = {
 
 const REQUEST_HINT_MESSAGE = '我需要一个提示。'
 
+type PendingUserMessage = {
+  clientId: string
+  eventId: number | null
+  contentMd: string
+}
+
+type TimelineMessage = {
+  key: string
+  role: 'assistant' | 'user'
+  contentMd: string
+}
+
+function CoachMarkdown({ markdown }: { markdown: string }) {
+  return (
+    <div className="coach-chat-content coach-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw, rehypeSanitize]}
+        components={{
+          a: ({ href, title, children }) => (
+            <a href={href} title={title} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {markdown}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
 export function CoachPanel({
   session,
   onSessionRefresh,
 }: CoachPanelProps) {
   const [content, setContent] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [pendingUserMessages, setPendingUserMessages] = useState<PendingUserMessage[]>([])
   const [attemptDrawerOpen, setAttemptDrawerOpen] = useState(false)
   const [isMarkingAccepted, setIsMarkingAccepted] = useState(false)
   const llmRun = useLlmRun({ onResult: onSessionRefresh })
-  const shouldShowRunOutput = llmRun.isRunning && Boolean(llmRun.displayText.trim())
+  const runStatusText = llmRun.isRunning && llmRun.stage ? llmRun.stage : ''
   const codeAttempts = session.code_attempts ?? []
   const latestAttemptSnapshotId =
     codeAttempts.length > 0
       ? codeAttempts[codeAttempts.length - 1].snapshot_id
       : null
   const acceptedCodeSnapshotId = latestAttemptSnapshotId
+  const chatEvents = session.events.filter((event) => {
+    if (!event.content_md.trim()) {
+      return false
+    }
+    return event.event_type === 'user_message' || event.event_type === 'assistant_message'
+  })
+  const persistedEventIds = new Set(chatEvents.map((event) => event.id))
+  const runningCoachText = llmRun.isRunning
+    ? llmRun.displayText.trim() || (runStatusText === 'queued' ? '教练正在处理' : runStatusText)
+    : ''
+  const timelineMessages: TimelineMessage[] = [
+    ...chatEvents.map((event) => ({
+      key: `event-${event.id}`,
+      role: event.role === 'user' ? 'user' : 'assistant',
+      contentMd: event.content_md,
+    })),
+    ...pendingUserMessages
+      .filter((message) => message.eventId === null || !persistedEventIds.has(message.eventId))
+      .map((message) => ({
+        key: message.clientId,
+        role: 'user' as const,
+        contentMd: message.contentMd,
+      })),
+  ]
+  if (runningCoachText) {
+    timelineMessages.push({
+      key: `assistant-running-${llmRun.runId ?? 'pending'}`,
+      role: 'assistant',
+      contentMd: runningCoachText,
+    })
+  }
 
   async function sendCoachMessage(messageIntent: UserIntent, messageContent: string) {
     const trimmedContent = messageContent.trim()
     if (!trimmedContent) {
       return
     }
+    const pendingMessage: PendingUserMessage = {
+      clientId: `pending-user-${Date.now()}`,
+      eventId: null,
+      contentMd: trimmedContent,
+    }
+    setPendingUserMessages((current) => [...current, pendingMessage])
+    setContent('')
     setIsSending(true)
+    let messageSaved = false
     try {
       const createdMessage = await sendPracticeMessage(session.id, {
         intent: messageIntent,
         content_md: trimmedContent,
         requested_hint_level: null,
       })
-      setContent('')
+      messageSaved = true
+      setPendingUserMessages((current) =>
+        current.map((message) =>
+          message.clientId === pendingMessage.clientId
+            ? { ...message, eventId: createdMessage.event_id }
+            : message,
+        ),
+      )
       await llmRun.startRun('coach_turn', {
         session_id: session.id,
         user_event_id: createdMessage.event_id,
         trigger: messageIntent,
       })
     } catch {
+      if (!messageSaved) {
+        setPendingUserMessages((current) =>
+          current.filter((message) => message.clientId !== pendingMessage.clientId),
+        )
+        setContent(trimmedContent)
+      }
       toast.error('消息发送失败，请稍后重试')
     } finally {
       setIsSending(false)
@@ -111,47 +199,19 @@ export function CoachPanel({
         </Space>
       </div>
 
-      <div className="coach-state-bar">
-        <Tag color="processing">{phaseLabel(session.phase)}</Tag>
-        <Tag>{session.status}</Tag>
-        <Tag>{hintLevelLabel(session.visible_hint_gear)}</Tag>
-      </div>
-
       <section className="coach-chat-timeline" aria-label="教练聊天记录">
-        {session.events.length === 0 ? (
+        {timelineMessages.length === 0 ? (
           <Typography.Text type="secondary">暂无训练消息</Typography.Text>
         ) : (
-          session.events.map((event) => (
+          timelineMessages.map((message) => (
             <div
-              className={`coach-chat-message coach-chat-message-${event.role}`}
-              key={event.id}
+              className={`coach-chat-message coach-chat-message-${message.role}`}
+              key={message.key}
             >
-              <Space wrap size={6}>
-                <Tag>
-                  {event.role === 'assistant'
-                    ? '教练'
-                    : event.role === 'user'
-                      ? '我'
-                      : '系统'}
-                </Tag>
-                <Tag>{phaseLabel(event.phase)}</Tag>
-                {event.visible_hint_gear ? (
-                  <Tag>{hintLevelLabel(event.visible_hint_gear)}</Tag>
-                ) : null}
-              </Space>
-              {event.content_md ? (
-                <Typography.Paragraph className="coach-chat-content">
-                  {event.content_md}
-                </Typography.Paragraph>
-              ) : (
-                <Typography.Text type="secondary">
-                  {event.event_type === 'code_saved'
-                    ? '已记录一次代码尝试'
-                    : event.event_type === 'submission_feedback'
-                      ? '已记录 LeetCode 结果'
-                      : event.event_type}
-                </Typography.Text>
-              )}
+              <Typography.Text className="coach-message-role">
+                {message.role === 'assistant' ? '教练' : '我'}
+              </Typography.Text>
+              <CoachMarkdown markdown={message.contentMd} />
             </div>
           ))
         )}
@@ -178,16 +238,19 @@ export function CoachPanel({
             <Button onClick={handleRequestHint} disabled={isSending || llmRun.isRunning}>
               请求提示
             </Button>
-            {llmRun.isRunning ? <Button onClick={llmRun.cancelRun}>取消</Button> : null}
-            {llmRun.isRunning && llmRun.stage ? (
-              <Typography.Text type="secondary">状态 {llmRun.stage}</Typography.Text>
+            {llmRun.isRunning ? (
+              <Button aria-label="取消" onClick={llmRun.cancelRun}>
+                取消
+              </Button>
+            ) : null}
+            {runStatusText ? (
+              <Typography.Text type="secondary" className="coach-run-status-text">
+                {runStatusText}
+              </Typography.Text>
             ) : null}
           </Space>
           {llmRun.error ? (
             <Alert showIcon type="error" message={llmRun.error.message} />
-          ) : null}
-          {shouldShowRunOutput ? (
-            <div className="coach-run-output">{llmRun.displayText}</div>
           ) : null}
         </div>
       </section>

@@ -117,7 +117,7 @@ describe('WorkspacePage', () => {
     expect(container.querySelector('.markdown-statement img')).toBe(image)
   })
 
-  it('loads planned item workspace as problem and chat coach columns', async () => {
+  it('loads planned item workspace with problem above the chat coach', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString()
       if (url === '/api/study-plan/items/40/practice-session') {
@@ -141,7 +141,11 @@ describe('WorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '保存快照' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '提交回填' })).not.toBeInTheDocument()
     expect(screen.queryByText('画像来源')).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.workspace-content-column')).toHaveLength(2)
+    expect(container.querySelectorAll('.workspace-content-column')).toHaveLength(0)
+    const panes = container.querySelectorAll('.workspace-vertical-flow > .workspace-pane')
+    expect(panes).toHaveLength(2)
+    expect(panes[0]).toHaveTextContent('题面')
+    expect(panes[1]).toHaveTextContent('教练')
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/study-plan/items/40/practice-session',
       expect.objectContaining({ method: 'POST' }),
@@ -257,7 +261,7 @@ function stubPracticeSession() {
     events: [
       {
         id: 501,
-        event_type: 'message',
+        event_type: 'assistant_message',
         role: 'assistant',
         phase: 'understand_problem',
         intent: null,

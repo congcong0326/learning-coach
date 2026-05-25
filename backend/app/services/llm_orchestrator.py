@@ -67,7 +67,7 @@ class _UnavailableLlmProvider:
         del model, instructions, input_text
 
         async def _raise() -> AsyncIterator[ProviderChunk]:
-            # 当前确定性 handler 不会调用 provider；如果未来误用，失败点要清晰，
+            # requires_model=False 的 handler 不应调用 provider；如果误用，失败点要清晰，
             # 避免在没有模型资产的路径里静默产生伪 LLM 输出。
             raise RuntimeError("llm_provider_unavailable_for_run_kind")
             yield ProviderChunk()

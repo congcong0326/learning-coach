@@ -58,7 +58,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
-计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用左侧题面、右侧 Chat-first 教练区的两栏布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传，右侧教练区提供代码尝试记录抽屉和“LeetCode 已 AC”动作。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型。
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传，教练区提供代码尝试记录抽屉和“LeetCode 已 AC”动作。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
 
 ## 后端选型
 
@@ -223,7 +223,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 持久化 assistant event 和 `coach_turn` 记录，`coach_summary` run 在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`。第一版教练回复仍使用确定性安全回复和后端有限状态编排，因此当前 `coach_turn` 和 `coach_summary` 不要求先选择或解密模型资产；LangGraph、RAG 和更完整的模型结构化输出后续可以在相同 run kind 边界内替换，并在切换到真实模型调用时重新打开模型资产依赖。
+训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，调用大模型生成结构化教练决策，再经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、低档位泄题拦截、缺代码 review 和缺提交反馈分析仍由后端守卫控制。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；LangGraph、RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
 
 ## Docker Compose 角色
 

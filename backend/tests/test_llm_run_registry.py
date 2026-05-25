@@ -117,10 +117,10 @@ def test_handler_for_kind_returns_registered_handler() -> None:
     assert handler_for_kind("study_plan_adjustment") is None
 
 
-def test_current_deterministic_coach_runs_do_not_require_model_asset() -> None:
+def test_current_coach_turn_requires_model_asset() -> None:
     assert requires_model_for_kind("goal_followup") is True
     assert requires_model_for_kind("goal_plan_generate") is True
-    assert requires_model_for_kind("coach_turn") is False
+    assert requires_model_for_kind("coach_turn") is True
     assert requires_model_for_kind("coach_summary") is False
     assert requires_model_for_kind("study_plan_adjustment") is False
 

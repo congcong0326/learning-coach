@@ -287,6 +287,16 @@ body {
   gap: 2px;
 }
 
+.workspace-vertical-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-vertical-flow > .workspace-pane {
+  width: 100%;
+}
+
 .workspace-content-row {
   align-items: stretch;
 }
@@ -398,6 +408,13 @@ body {
   white-space: pre-wrap;
 }
 
+.coach-run-status-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: #586158;
+}
+
 .coach-chat-timeline {
   display: flex;
   flex: 1;
@@ -428,7 +445,76 @@ body {
 
 .coach-chat-content {
   margin: 8px 0 0;
-  white-space: pre-wrap;
+}
+
+.coach-message-role {
+  color: #687068;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.coach-markdown {
+  overflow-wrap: anywhere;
+}
+
+.coach-markdown > :first-child {
+  margin-top: 0;
+}
+
+.coach-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.coach-markdown h1,
+.coach-markdown h2,
+.coach-markdown h3 {
+  margin: 10px 0 6px;
+  color: #243024;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.coach-markdown h1 {
+  font-size: 18px;
+}
+
+.coach-markdown h2 {
+  font-size: 16px;
+}
+
+.coach-markdown h3 {
+  font-size: 14px;
+}
+
+.coach-markdown p,
+.coach-markdown ul,
+.coach-markdown ol {
+  margin: 6px 0;
+}
+
+.coach-markdown ul,
+.coach-markdown ol {
+  padding-left: 20px;
+}
+
+.coach-markdown code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #eef0ea;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+}
+
+.coach-markdown pre {
+  overflow-x: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f4f5f2;
+}
+
+.coach-markdown pre code {
+  padding: 0;
+  background: transparent;
 }
 
 .settings-table-wrap {

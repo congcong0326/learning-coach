@@ -42,6 +42,14 @@ from backend.app.services.llm_run_events import LlmRunEvent
 from backend.app.services.llm_run_service import cancel_llm_run
 
 
+def progress_messages(events: list[LlmRunEvent]) -> list[str]:
+    return [
+        str(event.data.get("message", ""))
+        for event in events
+        if event.name == "progress"
+    ]
+
+
 class FakePlanProvider:
     def __init__(self, final_payload: dict[str, Any] | None = None) -> None:
         self.calls: list[dict[str, str]] = []
@@ -507,7 +515,19 @@ async def test_coach_turn_persists_serializable_assistant_event_without_result_e
             }
         )
         assert response.intent is None
-        assert [event.name for event in events] == ["progress", "delta"]
+        assert [event.name for event in events] == [
+            "progress",
+            "progress",
+            "progress",
+            "delta",
+            "progress",
+        ]
+        assert progress_messages(events) == [
+            "正在准备训练上下文",
+            "正在调用大模型",
+            "正在校验教练阶段",
+            "正在保存教练回复",
+        ]
 
 
 @pytest.mark.asyncio
@@ -577,7 +597,20 @@ async def test_coach_turn_uses_model_reply_when_user_already_described_hash_idea
         assert run.display_text_md == reply
         assert result["guard"]["accepted"] is True
         assert result["guard"]["reason"] == "accepted"
-        assert events[-1].data["text"] == reply
+        assert [event.name for event in events] == [
+            "progress",
+            "progress",
+            "progress",
+            "delta",
+            "progress",
+        ]
+        assert progress_messages(events) == [
+            "正在准备训练上下文",
+            "正在调用大模型",
+            "正在校验教练阶段",
+            "正在保存教练回复",
+        ]
+        assert events[-2].data["text"] == reply
 
 
 @pytest.mark.asyncio
@@ -951,6 +984,9 @@ async def test_coach_summary_does_not_require_user_event_id(
             phase="analyze_feedback",
             user_intent="request_summary",
         )
+        practice_session.final_result = "ac"
+        practice_session.attempt_count = 1
+        practice_session.status = "summarizing"
         session.add(
             SubmissionFeedback(
                 session_id=practice_session.id,
@@ -993,17 +1029,39 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert coach_turn.user_event_id is None
         assert coach_turn.phase_after == "summarize"
         assert coach_turn.next_action == "summarize_session"
+        assert "AC" in result["reply_md"]
+        assert "复盘" in result["reply_md"]
+        assert "先说明你的暴力解法" not in result["reply_md"]
         assert result["summary_status"] == "completed"
         summary = await session.get(SessionSummary, result["summary_id"])
+        assistant = await session.get(PracticeEvent, result["assistant_event_id"])
         delta = await session.get(ProfileDelta, result["profile_delta_id"])
         snapshot = await session.get(UserProfileSnapshot, result["profile_snapshot_id"])
         assert summary is not None
+        assert assistant is not None
         assert delta is not None
         assert snapshot is not None
+        assert assistant.content_md.startswith("## 单题复盘")
+        assert assistant.content_md == result["reply_md"]
+        assert "**本题最终结果**：AC" in assistant.content_md
+        assert "**使用过的最高提示档位**" in assistant.content_md
+        assert "### 下一步训练建议" in assistant.content_md
         assert delta.status == "accepted"
         assert delta.summary_id == summary.id
         assert snapshot.created_from_summary_id == summary.id
-        assert [event.name for event in events] == ["progress", "delta"]
+        assert [event.name for event in events] == [
+            "progress",
+            "progress",
+            "progress",
+            "delta",
+            "progress",
+        ]
+        assert progress_messages(events) == [
+            "正在准备训练上下文",
+            "正在调用大模型",
+            "正在校验教练阶段",
+            "正在保存教练回复",
+        ]
 
 
 @pytest.mark.asyncio

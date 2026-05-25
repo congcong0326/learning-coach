@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CoachPanel } from './CoachPanel'
@@ -54,6 +54,16 @@ vi.mock('../../api/practice', () => ({
   submitLeetCodeFeedback: practiceApiMock.submitLeetCodeFeedback,
 }))
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve
+    reject = innerReject
+  })
+  return { promise, resolve, reject }
+}
+
 describe('CoachPanel', () => {
   beforeEach(() => {
     llmRunMock.startRun.mockReset()
@@ -76,6 +86,130 @@ describe('CoachPanel', () => {
     expect(screen.getByLabelText('发送给教练')).toBeInTheDocument()
     expect(screen.queryByText('画像来源')).not.toBeInTheDocument()
     expect(screen.queryByText('事件时间线')).not.toBeInTheDocument()
+  })
+
+  it('keeps internal status and structured events out of the chat surface', () => {
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          phase: 'summarize',
+          status: 'summarizing',
+          visible_hint_gear: 'questioning',
+          events: [
+            {
+              id: 701,
+              event_type: 'session_started',
+              role: 'system',
+              phase: 'understand_problem',
+              intent: null,
+              content_md: '',
+              payload: {},
+              hint_level: 'questioning',
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:00:00Z',
+            },
+            {
+              id: 702,
+              event_type: 'user_message',
+              role: 'user',
+              phase: 'understand_problem',
+              intent: 'unknown',
+              content_md: '我用哈希表记录已经看过的数字。',
+              payload: {},
+              hint_level: null,
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:01:00Z',
+            },
+            {
+              id: 703,
+              event_type: 'assistant_message',
+              role: 'assistant',
+              phase: 'define_invariant',
+              intent: null,
+              content_md: '继续说一下 key 和 value 分别是什么。',
+              payload: {},
+              hint_level: null,
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:02:00Z',
+            },
+            {
+              id: 704,
+              event_type: 'submission_feedback',
+              role: 'user',
+              phase: 'summarize',
+              intent: 'submit_feedback',
+              content_md: '',
+              payload: { result: 'ac' },
+              hint_level: 'questioning',
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:03:00Z',
+            },
+            {
+              id: 705,
+              event_type: 'phase_changed',
+              role: 'system',
+              phase: 'summarize',
+              intent: null,
+              content_md: '',
+              payload: {},
+              hint_level: 'questioning',
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:04:00Z',
+            },
+          ],
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('我用哈希表记录已经看过的数字。')).toBeInTheDocument()
+    expect(screen.getByText('继续说一下 key 和 value 分别是什么。')).toBeInTheDocument()
+    expect(screen.queryByText('单题复盘')).not.toBeInTheDocument()
+    expect(screen.queryByText('summarizing')).not.toBeInTheDocument()
+    expect(screen.queryByText('追问档')).not.toBeInTheDocument()
+    expect(screen.queryByText('系统')).not.toBeInTheDocument()
+    expect(screen.queryByText('理解题意')).not.toBeInTheDocument()
+    expect(screen.queryByText('session_started')).not.toBeInTheDocument()
+    expect(screen.queryByText('已记录 LeetCode 结果')).not.toBeInTheDocument()
+  })
+
+  it('renders markdown for coach chat messages', () => {
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          events: [
+            {
+              id: 706,
+              event_type: 'assistant_message',
+              role: 'assistant',
+              phase: 'summarize',
+              intent: null,
+              content_md: '## 单题复盘\n\n- **本题最终结果**：AC\n- 下一步：复述复杂度',
+              payload: {},
+              hint_level: null,
+              visible_hint_gear: 'reflection',
+              created_at: '2026-05-22T00:05:00Z',
+            },
+          ],
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: '单题复盘' })).toBeInTheDocument()
+    expect(screen.getByText('本题最终结果')).toBeInTheDocument()
+  })
+
+  it('renders markdown for streaming coach output', () => {
+    llmRunState.isRunning = true
+    llmRunState.displayText = '## 正在复盘\n\n- **本题最终结果**：AC'
+
+    render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
+
+    expect(screen.getByRole('heading', { name: '正在复盘' })).toBeInTheDocument()
+    expect(screen.getByText('本题最终结果')).toBeInTheDocument()
   })
 
   it('keeps the message composer conversational without intent or hint selects', () => {
@@ -113,6 +247,34 @@ describe('CoachPanel', () => {
       user_event_id: 601,
       trigger: 'unknown',
     })
+  })
+
+  it('adds my message to the chat immediately while the send request is in flight', async () => {
+    const messageCreate = deferred<{ event_id: number; run_id: number; session_id: number }>()
+    practiceApiMock.sendPracticeMessage.mockReturnValue(messageCreate.promise)
+    llmRunMock.startRun.mockResolvedValue({ run_id: 99 })
+
+    render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('发送给教练'), {
+      target: { value: '我先用哈希表记录已经访问过的数字。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /发\s*送/ }))
+
+    const timeline = screen.getByLabelText('教练聊天记录')
+    expect(
+      await within(timeline).findByText('我先用哈希表记录已经访问过的数字。'),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('发送给教练')).toHaveValue('')
+
+    messageCreate.resolve({ event_id: 607, run_id: 0, session_id: 100 })
+    await waitFor(() =>
+      expect(llmRunMock.startRun).toHaveBeenCalledWith('coach_turn', {
+        session_id: 100,
+        user_event_id: 607,
+        trigger: 'unknown',
+      }),
+    )
   })
 
   it('sends request hint as an explicit action without exposing a dropdown', async () => {
@@ -224,25 +386,44 @@ describe('CoachPanel', () => {
     expect(toastMock.error).not.toHaveBeenCalledWith('AC 状态记录失败，请稍后重试')
   })
 
-  it('shows streaming output only while a coach run is active', () => {
+  it('shows one lightweight backend status line while a coach run is active', () => {
     llmRunState.displayText = '正在生成新的教练回复'
-    llmRunState.stage = '正在生成教练回复'
+    llmRunState.stage = '正在调用大模型'
     llmRunState.isRunning = true
 
     const { container, rerender } = render(
       <CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />,
     )
 
-    expect(container.querySelector('.coach-run-output')).toHaveTextContent(
+    expect(screen.getByText('正在调用大模型')).toHaveClass('coach-run-status-text')
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument()
+    expect(within(screen.getByLabelText('教练聊天记录')).getByText(
       '正在生成新的教练回复',
-    )
-    expect(screen.getByText('状态 正在生成教练回复')).toBeInTheDocument()
+    )).toBeInTheDocument()
+    expect(container.querySelector('.coach-run-output')).toBeNull()
+    expect(screen.queryByText('状态 正在调用大模型')).not.toBeInTheDocument()
 
     llmRunState.isRunning = false
     rerender(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
 
+    expect(screen.queryByText('正在调用大模型')).not.toBeInTheDocument()
     expect(container.querySelector('.coach-run-output')).toBeNull()
-    expect(screen.queryByText('状态 正在生成教练回复')).not.toBeInTheDocument()
+  })
+
+  it('renders running coach output as an assistant chat bubble', () => {
+    llmRunState.displayText = '你这个方向可以，下一步说清楚哈希表里存什么。'
+    llmRunState.stage = '正在调用大模型'
+    llmRunState.isRunning = true
+
+    const { container } = render(
+      <CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />,
+    )
+
+    const timeline = screen.getByLabelText('教练聊天记录')
+    expect(
+      within(timeline).getByText('你这个方向可以，下一步说清楚哈希表里存什么。'),
+    ).toBeInTheDocument()
+    expect(container.querySelector('.coach-run-output')).toBeNull()
   })
 })
 
@@ -280,7 +461,7 @@ function stubSession(): WorkspacePracticeSession {
     events: [
       {
         id: 501,
-        event_type: 'message',
+        event_type: 'assistant_message',
         role: 'assistant',
         phase: 'understand_problem',
         intent: null,

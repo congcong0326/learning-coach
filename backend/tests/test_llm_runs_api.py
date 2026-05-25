@@ -532,7 +532,7 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(monkeypatch) -> None:
+async def test_orchestrator_model_backed_coach_run_selects_model_asset(monkeypatch) -> None:
     from backend.app.services import llm_orchestrator
 
     calls: list[str] = []
@@ -549,6 +549,16 @@ async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(
         },
     )()
     user = fake_user()
+    credential = type(
+        "Credential",
+        (),
+        {
+            "id": 77,
+            "api_key_ciphertext": "ciphertext",
+            "base_url": "https://example.test/v1",
+            "model_name": "gpt-test",
+        },
+    )()
 
     class FakeSession:
         async def rollback(self) -> None:
@@ -567,11 +577,21 @@ async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(
             calls.append(f"publish:{event.name}")
             events.append(event)
 
-    async def fail_select(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("coach_turn should not select model credentials")
+    class FakeProvider:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            assert api_key == "plain-key"
+            assert base_url == credential.base_url
+            calls.append("provider")
 
-    def fail_decrypt(*_args: Any, **_kwargs: Any) -> str:
-        raise AssertionError("coach_turn should not decrypt model credentials")
+    async def fake_select(session: Any, selected_user: AppUser):
+        assert selected_user.id == user.id
+        calls.append("select")
+        return credential
+
+    def fake_decrypt(ciphertext: str, encryption_key: str) -> str:
+        assert ciphertext == "ciphertext"
+        calls.append("decrypt")
+        return "plain-key"
 
     async def fake_mark_running(
         session: Any,
@@ -582,9 +602,9 @@ async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(
         model_name: str = "",
     ):
         assert selected_run is run
-        assert stage == "running_handler"
-        assert llm_credential_id is None
-        assert model_name == ""
+        assert stage == "selecting_credential"
+        assert llm_credential_id == credential.id
+        assert model_name == credential.model_name
         calls.append("mark_running")
         run.status = "running"
         return run
@@ -593,7 +613,8 @@ async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(
         async def execute(self, context: Any) -> dict[str, Any]:
             assert context.user_id == 42
             assert context.run is run
-            assert context.model_name == ""
+            assert isinstance(context.provider, FakeProvider)
+            assert context.model_name == credential.model_name
             calls.append("coach_flow")
             run.display_text_md = "coach text"
             return {"session_id": 9, "assistant_event_id": 20}
@@ -618,20 +639,24 @@ async def test_orchestrator_deterministic_coach_run_skips_model_asset_selection(
 
     monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
     monkeypatch.setattr(llm_orchestrator, "_load_run_and_user", lambda session, run_id, user_id: _async_value((run, user)))
-    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fail_select)
-    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fail_decrypt)
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fake_select)
+    monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fake_decrypt)
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
+    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
     monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 13, 42)
 
     assert [event.name for event in events] == ["started", "progress", "result", "done"]
-    assert events[1].data["stage"] == "running_handler"
+    assert events[1].data["stage"] == "selecting_credential"
     assert calls == [
         "publish:started",
         "publish:progress",
+        "select",
+        "decrypt",
         "mark_running",
+        "provider",
         "coach_flow",
         "succeed",
         "publish:result",

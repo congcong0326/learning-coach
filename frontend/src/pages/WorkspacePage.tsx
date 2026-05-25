@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Button, Col, Row, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Space, Tag, Typography } from 'antd'
 import { useParams } from 'react-router-dom'
 
 import { createPracticeSessionForItem } from '../api/practice'
@@ -92,26 +92,22 @@ export function WorkspacePage() {
         />
       ) : null}
 
-      <Row className="workspace-content-row" gutter={[16, 16]}>
-        <Col className="workspace-content-column" xs={24} lg={12}>
-          <ProblemPane markdown={problem?.statement_md} isLoading={isLoading} />
-        </Col>
-        <Col className="workspace-content-column" xs={24} lg={12}>
-          {sessionQuery.data ? (
-            <CoachPanel
-              session={sessionQuery.data}
-              onSessionRefresh={() => {
-                void sessionQuery.refetch()
-              }}
-            />
-          ) : (
-            <div className="workspace-pane">
-              <h3>教练</h3>
-              <Typography.Text type="secondary">从学习计划进入后启用 AI 教练。</Typography.Text>
-            </div>
-          )}
-        </Col>
-      </Row>
+      <div className="workspace-vertical-flow">
+        <ProblemPane markdown={problem?.statement_md} isLoading={isLoading} />
+        {sessionQuery.data ? (
+          <CoachPanel
+            session={sessionQuery.data}
+            onSessionRefresh={() => {
+              void sessionQuery.refetch()
+            }}
+          />
+        ) : (
+          <div className="workspace-pane">
+            <h3>教练</h3>
+            <Typography.Text type="secondary">从学习计划进入后启用 AI 教练。</Typography.Text>
+          </div>
+        )}
+      </div>
     </section>
   )
 }
