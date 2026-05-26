@@ -10,6 +10,7 @@ from backend.app.services.llm_run_registry import (
     CoachTurnHandler,
     GoalFollowupHandler,
     GoalPlanGenerateHandler,
+    ProfilePlanEnrichmentHandler,
     handler_for_kind,
     related_from_payload,
     requires_model_for_kind,
@@ -23,6 +24,7 @@ def test_supported_run_kinds_contains_current_streaming_flows() -> None:
         "coach_turn",
         "goal_followup",
         "goal_plan_generate",
+        "profile_plan_enrichment",
     }
 
 
@@ -79,6 +81,16 @@ def test_related_from_payload_maps_study_plan_adjustment_to_plan() -> None:
     assert related_id == 9
 
 
+def test_related_from_payload_maps_profile_enrichment_to_plan() -> None:
+    related_type, related_id = related_from_payload(
+        "profile_plan_enrichment",
+        {"plan_id": 9},
+    )
+
+    assert related_type == "study_plan"
+    assert related_id == 9
+
+
 def test_related_from_payload_maps_coach_turn_to_practice_session() -> None:
     related_type, related_id = related_from_payload(
         "coach_turn",
@@ -114,6 +126,10 @@ def test_handler_for_kind_returns_registered_handler() -> None:
     assert isinstance(handler_for_kind("goal_plan_generate"), GoalPlanGenerateHandler)
     assert isinstance(handler_for_kind("coach_turn"), CoachTurnHandler)
     assert isinstance(handler_for_kind("coach_summary"), CoachSummaryHandler)
+    assert isinstance(
+        handler_for_kind("profile_plan_enrichment"),
+        ProfilePlanEnrichmentHandler,
+    )
     assert handler_for_kind("study_plan_adjustment") is None
 
 
@@ -122,6 +138,7 @@ def test_current_model_backed_run_kinds_require_model_asset() -> None:
     assert requires_model_for_kind("goal_plan_generate") is True
     assert requires_model_for_kind("coach_turn") is True
     assert requires_model_for_kind("coach_summary") is True
+    assert requires_model_for_kind("profile_plan_enrichment") is True
     assert requires_model_for_kind("study_plan_adjustment") is False
 
 
