@@ -532,7 +532,11 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_model_backed_coach_run_selects_model_asset(monkeypatch) -> None:
+@pytest.mark.parametrize("kind", ["coach_turn", "coach_summary"])
+async def test_orchestrator_model_backed_coach_run_selects_model_asset(
+    monkeypatch,
+    kind: str,
+) -> None:
     from backend.app.services import llm_orchestrator
 
     calls: list[str] = []
@@ -543,7 +547,7 @@ async def test_orchestrator_model_backed_coach_run_selects_model_asset(monkeypat
         {
             "id": 13,
             "user_id": 42,
-            "kind": "coach_turn",
+            "kind": kind,
             "status": "pending",
             "display_text_md": "",
         },
@@ -619,8 +623,8 @@ async def test_orchestrator_model_backed_coach_run_selects_model_asset(monkeypat
             run.display_text_md = "coach text"
             return {"session_id": 9, "assistant_event_id": 20}
 
-    def fake_handler_for_kind(kind: str) -> Any:
-        assert kind == "coach_turn"
+    def fake_handler_for_kind(selected_kind: str) -> Any:
+        assert selected_kind == kind
         return FakeHandler()
 
     async def fake_succeed(
@@ -660,6 +664,95 @@ async def test_orchestrator_model_backed_coach_run_selects_model_asset(monkeypat
         "coach_flow",
         "succeed",
         "publish:result",
+        "publish:done",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_coach_summary_requires_model_asset(monkeypatch) -> None:
+    from backend.app.services import llm_orchestrator
+    from backend.app.services.llm_credential_service import LlmCredentialError
+
+    calls: list[str] = []
+    events: list[LlmRunEvent] = []
+    failed: list[tuple[str, str]] = []
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 14,
+            "user_id": 42,
+            "kind": "coach_summary",
+            "status": "pending",
+            "display_text_md": "",
+        },
+    )()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            calls.append("rollback")
+
+        async def get(self, model: Any, run_id: int) -> Any:
+            assert model is LlmRun
+            assert run_id == 14
+            return run
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> FakeSession:
+            return FakeSession()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class FakeEventHub:
+        async def publish(self, run_id: int, event: LlmRunEvent) -> None:
+            assert run_id == 14
+            calls.append(f"publish:{event.name}")
+            events.append(event)
+
+    class FakeHandler:
+        async def execute(self, context: Any) -> dict[str, Any]:
+            raise AssertionError("coach_summary handler must not run without a model asset")
+
+    async def fake_select(session: Any, selected_user: AppUser):
+        assert selected_user.id == 42
+        calls.append("select")
+        raise LlmCredentialError("llm_credential_unavailable")
+
+    async def fake_fail(
+        session: Any,
+        selected_run: Any,
+        *,
+        error_code: str,
+        error_message: str,
+    ):
+        assert selected_run is run
+        failed.append((error_code, error_message))
+        run.status = "failed"
+        return run
+
+    monkeypatch.setattr(llm_orchestrator, "event_hub", FakeEventHub())
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "_load_run_and_user",
+        lambda session, run_id, user_id: _async_value((run, fake_user())),
+    )
+    monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fake_select)
+    monkeypatch.setattr(llm_orchestrator, "handler_for_kind", lambda kind: FakeHandler())
+    monkeypatch.setattr(llm_orchestrator, "fail_llm_run", fake_fail)
+
+    await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 14, 42)
+
+    assert failed == [("llm_credential_unavailable", "没有可用的模型资产，请检查 API 设置")]
+    assert [event.name for event in events] == ["started", "progress", "error", "done"]
+    assert events[1].data["stage"] == "selecting_credential"
+    assert events[2].data["error_code"] == "llm_credential_unavailable"
+    assert calls == [
+        "publish:started",
+        "publish:progress",
+        "select",
+        "rollback",
+        "publish:error",
         "publish:done",
     ]
 

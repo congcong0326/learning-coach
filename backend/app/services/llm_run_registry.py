@@ -84,12 +84,13 @@ RUN_KIND_SPECS: dict[str, RunKindSpec] = {
         related_id_key="session_id",
         requires_model=True,
     ),
-    # practice_session：单题训练复盘入口，第一版复用安全确定性回复，完整 summary/profile delta 后续接入。
+    # practice_session：单题训练复盘入口，当前已经升级为模型驱动复盘，
+    # 必须走真实模型资产选择路径，缺资产时由 orchestrator 统一拒绝执行。
     "coach_summary": RunKindSpec(
         handler=CoachSummaryHandler(),
         related_type="practice_session",
         related_id_key="session_id",
-        requires_model=False,
+        requires_model=True,
     ),
     # study_plan：正式学习计划。当前只保留创建 run 时的关联元数据，执行 handler 尚未接入。
     "study_plan_adjustment": RunKindSpec(
