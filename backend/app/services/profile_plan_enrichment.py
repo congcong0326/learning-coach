@@ -395,11 +395,18 @@ async def confirm_enrichment_draft(
             await db.refresh(stage, attribute_names=["items"])
 
         output_items = _dict_value(draft.model_output_json).get("items")
-        if not isinstance(output_items, list):
+        if not isinstance(output_items, list) or not output_items:
             raise StudyPlanError("profile_plan_enrichment_not_confirmable")
 
         current_stage = _current_stage(version)
         existing_slugs = {str(item.problem_slug) for item in version.items}
+        candidate_problem_ids = {
+            _int_value(candidate_id, 0)
+            for candidate_id in draft.candidate_problem_ids_json
+            if _int_value(candidate_id, 0) > 0
+        }
+        if not candidate_problem_ids:
+            raise StudyPlanError("profile_plan_enrichment_not_confirmable")
         problem_items: list[tuple[dict[str, Any], Problem]] = []
         draft_slugs: set[str] = set()
         for raw_item in output_items:
@@ -409,6 +416,8 @@ async def confirm_enrichment_draft(
             if not slug or slug in existing_slugs or slug in draft_slugs:
                 raise StudyPlanError("profile_plan_enrichment_not_confirmable")
             problem = await _problem_by_slug(db, slug)
+            if problem.id not in candidate_problem_ids:
+                raise StudyPlanError("profile_plan_enrichment_not_confirmable")
             problem_items.append((raw_item, problem))
             draft_slugs.add(slug)
 
@@ -638,15 +647,44 @@ def _current_stage(version: StudyPlanVersion) -> StudyPlanStage:
     if not sorted_stages:
         raise StudyPlanError("study_plan_stage_not_found")
 
-    # 补强题追加到最接近当前训练状态的阶段；只读计划状态，不在生成上下文时改动正式计划。
-    for item_status in ("in_progress", "completed"):
-        for stage in sorted_stages:
-            if any(item.status == item_status for item in stage.items):
-                return stage
+    # 补强题追加到最接近当前训练状态的阶段；最近完成题用 updated_at 判定，
+    # 避免用户已经推进到后续阶段时仍把补强题插回旧阶段。
+    stage_by_id = {stage.id: stage for stage in sorted_stages}
+    in_progress_items = [
+        item
+        for stage in sorted_stages
+        for item in stage.items
+        if item.status == "in_progress"
+    ]
+    if in_progress_items:
+        return stage_by_id[max(in_progress_items, key=_item_recency_key).stage_id]
+
+    completed_items = [
+        item
+        for stage in sorted_stages
+        for item in stage.items
+        if item.status in {"completed", "locked_completed"}
+    ]
+    if completed_items:
+        return stage_by_id[max(completed_items, key=_item_recency_key).stage_id]
+
     for stage in sorted_stages:
-        if any(item.status in {"pending", "in_progress"} for item in stage.items):
+        if stage.status not in {"completed", "locked_completed"} and (
+            not stage.items
+            or any(
+                item.status not in {"completed", "locked_completed"}
+                for item in stage.items
+            )
+        ):
             return stage
     return sorted_stages[0]
+
+
+def _item_recency_key(item: StudyPlanItem) -> tuple[float, int]:
+    value = item.updated_at or item.created_at or datetime.min
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return (value.timestamp(), int(item.id or 0))
 
 
 async def _recent_session_summaries(
@@ -779,12 +817,13 @@ async def _candidate_problems(
     problems = list(result.scalars().all())
     weak_terms = _weak_terms(profile_snapshot, current_stage, payload)
 
-    # 先按画像和当前阶段做弱项命中排序，再用难度和题库 id 保持稳定输出。
+    # 先按画像和当前阶段做弱项命中排序；同等弱项命中下，让用户选择的难度倾向
+    # 真正影响候选池顺序，而不是只交给提示词处理。
     ranked = sorted(
         problems,
         key=lambda problem: (
             -_candidate_score(problem, weak_terms=weak_terms),
-            DIFFICULTY_RANK.get(problem.difficulty, 99),
+            _difficulty_preference_key(problem, current_stage, payload),
             problem.id,
         ),
     )
@@ -792,6 +831,26 @@ async def _candidate_problems(
         _candidate_payload(problem, weak_terms=weak_terms)
         for problem in ranked[:MAX_CANDIDATES]
     ]
+
+
+def _difficulty_preference_key(
+    problem: Problem,
+    current_stage: StudyPlanStage,
+    payload: ProfilePlanEnrichmentRequest,
+) -> tuple[int, int]:
+    rank = DIFFICULTY_RANK.get(problem.difficulty, 99)
+    if payload.difficulty_preference == "stretch":
+        return (-rank, rank)
+    if payload.difficulty_preference == "foundational":
+        return (rank, rank)
+
+    current_ranks = [
+        DIFFICULTY_RANK.get(item.difficulty, 99)
+        for item in current_stage.items
+        if item.difficulty in DIFFICULTY_RANK
+    ]
+    target_rank = round(sum(current_ranks) / len(current_ranks)) if current_ranks else 2
+    return (abs(rank - target_rank), rank)
 
 
 def _candidate_payload(problem: Problem, *, weak_terms: set[str]) -> dict[str, Any]:

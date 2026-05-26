@@ -360,6 +360,134 @@ async def test_build_candidate_pool_excludes_existing_and_paid_only(
     assert context["user_request"]["user_intent_md"] == "我想补哈希表边界，保持当前难度。"
 
 
+@pytest.mark.asyncio
+async def test_build_candidate_pool_respects_stretch_difficulty_preference(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import build_enrichment_context
+
+    user, plan, _version = await create_user_plan(db_session)
+    db_session.add_all(
+        [
+            make_problem("medium-hash-drill", difficulty="Medium", tags=["hash-table"]),
+            make_problem("hard-hash-drill", difficulty="Hard", tags=["hash-table"]),
+        ]
+    )
+    await db_session.commit()
+    request = ProfilePlanEnrichmentRequest(
+        user_intent_md="我希望稍微加难，继续补 hash-table。",
+        item_count=3,
+        difficulty_preference="stretch",
+    )
+
+    context = await build_enrichment_context(db_session, user, plan.id, request)
+
+    slugs = [item["slug"] for item in context["candidate_problems"]]
+    assert slugs.index("hard-hash-drill") < slugs.index("valid-anagram")
+    assert slugs.index("medium-hash-drill") < slugs.index("valid-anagram")
+
+
+@pytest.mark.asyncio
+async def test_current_stage_uses_most_recent_completed_item_without_in_progress(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import _current_stage
+
+    _user, _plan, version = await create_user_plan(db_session)
+    first_stage = (
+        await db_session.execute(
+            select(StudyPlanStage).where(
+                StudyPlanStage.version_id == version.id,
+                StudyPlanStage.stage_index == 0,
+            )
+        )
+    ).scalar_one()
+    first_item = (
+        await db_session.execute(
+            select(StudyPlanItem).where(StudyPlanItem.stage_id == first_stage.id)
+        )
+    ).scalar_one()
+    first_item.status = "completed"
+    first_item.updated_at = datetime(2024, 1, 1, tzinfo=UTC)
+    valid_anagram = (
+        await db_session.execute(
+            select(Problem).where(Problem.slug == "valid-anagram")
+        )
+    ).scalar_one()
+    binary_search = (
+        await db_session.execute(
+            select(Problem).where(Problem.slug == "binary-search")
+        )
+    ).scalar_one()
+
+    recent_stage = StudyPlanStage(
+        version_id=version.id,
+        stage_index=1,
+        title="最近完成阶段",
+        objective_md="最近完成题所在阶段",
+        focus_tags_json=["hash-table"],
+        assessment_criteria_json=[],
+        status="in_progress",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    pending_stage = StudyPlanStage(
+        version_id=version.id,
+        stage_index=2,
+        title="待开始阶段",
+        objective_md="尚未训练",
+        focus_tags_json=["binary-search"],
+        assessment_criteria_json=[],
+        status="not_started",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db_session.add_all([recent_stage, pending_stage])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            StudyPlanItem(
+                version_id=version.id,
+                stage_id=recent_stage.id,
+                problem_id=valid_anagram.id,
+                problem_slug=valid_anagram.slug,
+                skill_tags_json=["hash-table"],
+                difficulty=valid_anagram.difficulty,
+                suggested_mode="independent",
+                recommendation_reason="最近完成题",
+                status="completed",
+                order_index=0,
+                locked=False,
+                created_at=datetime(2024, 2, 1, tzinfo=UTC),
+                updated_at=datetime(2024, 2, 1, tzinfo=UTC),
+            ),
+            StudyPlanItem(
+                version_id=version.id,
+                stage_id=pending_stage.id,
+                problem_id=binary_search.id,
+                problem_slug=binary_search.slug,
+                skill_tags_json=["binary-search"],
+                difficulty=binary_search.difficulty,
+                suggested_mode="independent",
+                recommendation_reason="待开始题",
+                status="pending",
+                order_index=0,
+                locked=False,
+                created_at=datetime(2024, 3, 1, tzinfo=UTC),
+                updated_at=datetime(2024, 3, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    await db_session.commit()
+    await db_session.refresh(version, attribute_names=["stages", "items"])
+    for stage in version.stages:
+        await db_session.refresh(stage, attribute_names=["items"])
+
+    current_stage = _current_stage(version)
+
+    assert current_stage.id == recent_stage.id
+
+
 def test_validate_model_output_rejects_slug_outside_candidate_pool() -> None:
     from backend.app.services.profile_plan_enrichment import validate_model_output
 
@@ -804,6 +932,38 @@ async def test_confirm_enrichment_draft_rejects_paid_only_problem(
         await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
 
     assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_problem_outside_original_candidates(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    outsider = make_problem("outside-candidate", tags=["array"])
+    db_session.add(outsider)
+    await db_session.flush()
+    draft_id = draft.id
+    draft.model_output_json = {
+        **draft.model_output_json,
+        "items": [
+            {
+                **draft.model_output_json["items"][0],
+                "problem_slug": outsider.slug,
+            }
+        ],
+    }
+    await db_session.commit()
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft_id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+    refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
+    assert refreshed is not None
+    assert refreshed.status == "generated"
 
 
 @pytest.mark.asyncio

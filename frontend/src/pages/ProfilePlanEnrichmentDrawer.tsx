@@ -466,7 +466,11 @@ export function ProfilePlanEnrichmentDrawer({
         {draft ? <DraftPreview draft={draft} /> : null}
 
         <Space>
-          <Button onClick={handleConfirm} loading={confirming} disabled={!draft || llmRun.isRunning}>
+          <Button
+            onClick={handleConfirm}
+            loading={confirming}
+            disabled={!draft || draft.items.length === 0 || llmRun.isRunning}
+          >
             确认加入当前计划
           </Button>
           <Button onClick={handleClose}>关闭</Button>
