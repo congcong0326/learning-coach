@@ -25,6 +25,7 @@ def guard_transition(
     proposed_phase_after: str,
     has_code: bool,
     has_submission_feedback: bool,
+    has_terminal_result: bool = False,
     hint_level: str,
     should_reveal_solution: bool,
 ) -> GuardDecision:
@@ -118,6 +119,13 @@ def guard_transition(
                 phase_after=phase_before,
                 hint_level_after=hint_level,
                 reason="phase_transition_not_allowed",
+            )
+        if not has_terminal_result:
+            return GuardDecision(
+                accepted=False,
+                phase_after=phase_before,
+                hint_level_after=hint_level,
+                reason="terminal_result_required_for_summary",
             )
         return GuardDecision(
             accepted=True,

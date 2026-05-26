@@ -68,6 +68,62 @@ describe('StudyPlanPage', () => {
                     order_index: 1,
                     locked: false,
                   },
+                  {
+                    id: 41,
+                    problem_slug: 'valid-parentheses',
+                    frontend_id: '20',
+                    title: 'Valid Parentheses',
+                    translated_title: '有效的括号',
+                    difficulty: 'Easy',
+                    skill_tags: ['stack'],
+                    suggested_mode: 'independent',
+                    recommendation_reason: '练栈匹配。',
+                    status: 'in_progress',
+                    order_index: 2,
+                    locked: false,
+                  },
+                  {
+                    id: 42,
+                    problem_slug: 'binary-search',
+                    frontend_id: '704',
+                    title: 'Binary Search',
+                    translated_title: '二分查找',
+                    difficulty: 'Easy',
+                    skill_tags: ['binary-search'],
+                    suggested_mode: 'independent',
+                    recommendation_reason: '练边界。',
+                    status: 'completed',
+                    order_index: 3,
+                    locked: false,
+                  },
+                  {
+                    id: 43,
+                    problem_slug: 'merge-intervals',
+                    frontend_id: '56',
+                    title: 'Merge Intervals',
+                    translated_title: '合并区间',
+                    difficulty: 'Medium',
+                    skill_tags: ['interval'],
+                    suggested_mode: 'guided',
+                    recommendation_reason: '练排序合并。',
+                    status: 'skipped',
+                    order_index: 4,
+                    locked: false,
+                  },
+                  {
+                    id: 44,
+                    problem_slug: 'climbing-stairs',
+                    frontend_id: '70',
+                    title: 'Climbing Stairs',
+                    translated_title: '爬楼梯',
+                    difficulty: 'Easy',
+                    skill_tags: ['dynamic-programming'],
+                    suggested_mode: 'independent',
+                    recommendation_reason: '练状态转移。',
+                    status: 'locked_completed',
+                    order_index: 5,
+                    locked: true,
+                  },
                 ],
               },
             ],
@@ -86,5 +142,11 @@ describe('StudyPlanPage', () => {
       '/workspace/items/40',
     )
     expect(screen.getByText('练 complement 查找。')).toBeInTheDocument()
+    expect(screen.getByText('未开始')).toHaveClass('ant-tag-default')
+    expect(screen.getByText('编码中')).toHaveClass('ant-tag-blue')
+    const acTags = screen.getAllByText('已AC')
+    expect(acTags).toHaveLength(2)
+    acTags.forEach((tag) => expect(tag).toHaveClass('ant-tag-green'))
+    expect(screen.getByText('已跳过')).toHaveClass('ant-tag-orange')
   })
 })

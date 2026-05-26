@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -14,6 +15,8 @@ from backend.app.models.practice import (
     CodeSnapshot,
     PracticeEvent,
     PracticeSession,
+    ProfileDelta,
+    SessionSummary,
     SubmissionFeedback,
 )
 from backend.app.models.problem import Problem
@@ -21,15 +24,19 @@ from backend.app.schemas.practice import (
     CodeAttemptResponse,
     CodeSnapshotCreate,
     CodeSnapshotResponse,
+    PracticeDashboardResponse,
     PracticeEventResponse,
     PracticeMessageCreate,
     PracticeMessageResponse,
     PracticeSessionResponse,
+    PracticeSessionReviewResponse,
     SubmissionFeedbackCreate,
+    SubmissionFeedbackHistoryResponse,
     SubmissionFeedbackResponse,
 )
 from backend.app.services.profile_service import (
     ensure_initial_profile_snapshot,
+    latest_profile_snapshot,
     snapshot_payload,
 )
 
@@ -44,6 +51,7 @@ _HINT_GEAR_LABELS = {
     2: "key_hint",
     3: "reflection",
 }
+_HINT_LEVEL_GEARS = {value: key for key, value in _HINT_GEAR_LABELS.items()}
 _CONCRETE_SUBMISSION_RESULTS = {"ac", "wa", "tle", "re", "mle", "ce"}
 
 
@@ -99,6 +107,7 @@ async def get_or_create_session_for_plan_item(
         )
         db.add(practice_session)
         await db.flush()
+        practice_session.thread_id = f"practice-session-{practice_session.id}"
         created = True
         db.add(
             PracticeEvent(
@@ -155,10 +164,110 @@ async def get_session_payload(
     practice_session = await _load_session(db, user, session_id)
     events = await list_session_events(db, user, session_id)
     code_attempts = await _list_code_attempts(db, user, session_id)
+    submission_feedbacks = await _list_submission_feedbacks(db, user, session_id)
     return _session_response(
         practice_session,
         events=events,
         code_attempts=code_attempts,
+        submission_feedbacks=submission_feedbacks,
+    )
+
+
+async def get_session_review(
+    db: AsyncSession,
+    user: AppUser,
+    session_id: int,
+) -> PracticeSessionReviewResponse:
+    practice_session = await _load_session(db, user, session_id)
+    result = await db.execute(
+        select(SessionSummary)
+        .where(
+            SessionSummary.session_id == practice_session.id,
+            SessionSummary.user_id == user.id,
+        )
+        .order_by(SessionSummary.updated_at.desc(), SessionSummary.id.desc())
+        .limit(1)
+    )
+    summary = result.scalar_one_or_none()
+    if summary is None:
+        logger.warning(
+            "practice_session_review_rejected user_id=%s session_id=%s reason=summary_not_found",
+            user.id,
+            session_id,
+        )
+        raise PracticeSessionError("summary_not_found")
+    delta_result = await db.execute(
+        select(ProfileDelta)
+        .where(
+            ProfileDelta.session_id == practice_session.id,
+            ProfileDelta.user_id == user.id,
+            ProfileDelta.summary_id == summary.id,
+        )
+        .order_by(ProfileDelta.created_at.desc(), ProfileDelta.id.desc())
+        .limit(1)
+    )
+    delta = delta_result.scalar_one_or_none()
+    return _session_review_response(practice_session, summary=summary, delta=delta)
+
+
+async def get_practice_dashboard(
+    db: AsyncSession,
+    user: AppUser,
+) -> PracticeDashboardResponse:
+    session_result = await db.execute(
+        select(PracticeSession)
+        .where(PracticeSession.user_id == user.id)
+        .order_by(PracticeSession.updated_at.desc(), PracticeSession.id.desc())
+    )
+    practice_sessions = list(session_result.scalars().all())
+    summary_result = await db.execute(
+        select(SessionSummary)
+        .where(SessionSummary.user_id == user.id)
+        .order_by(SessionSummary.updated_at.desc(), SessionSummary.id.desc())
+    )
+    summaries = list(summary_result.scalars().all())
+    profile_snapshot = await latest_profile_snapshot(db, user.id)
+
+    completed_problem_ids = {
+        practice_session.problem_id
+        for practice_session in practice_sessions
+        if practice_session.final_result == "ac"
+    }
+    stuck_counter: Counter[str] = Counter()
+    hint_gears: list[int] = []
+    highest_gear: int | None = None
+    for summary in summaries:
+        stuck_counter.update(
+            point
+            for point in summary.main_stuck_points_json
+            if isinstance(point, str) and point.strip()
+        )
+        gear = _HINT_LEVEL_GEARS.get(summary.max_hint_level_used)
+        if gear is not None:
+            hint_gears.append(gear)
+            highest_gear = gear if highest_gear is None else max(highest_gear, gear)
+
+    average_hint_gear = (
+        round(sum(hint_gears) / len(hint_gears), 1) if hint_gears else None
+    )
+    return PracticeDashboardResponse.model_validate(
+        {
+            "completed_problem_count": len(completed_problem_ids),
+            "common_stuck_points": [
+                {"stuck_point": stuck_point, "count": count}
+                for stuck_point, count in stuck_counter.most_common(5)
+            ],
+            "average_hint_gear": average_hint_gear,
+            "highest_hint_level": (
+                _hint_gear_label(highest_gear) if highest_gear is not None else None
+            ),
+            "recent_profile_summary": (
+                profile_snapshot.recent_summary_md if profile_snapshot is not None else ""
+            ),
+            "profile_snapshot_id": (
+                profile_snapshot.id if profile_snapshot is not None else None
+            ),
+        }
     )
 
 
@@ -205,6 +314,12 @@ async def append_user_message(
     )
     db.add(event)
     _touch_session(practice_session, now=now)
+    await _sync_latest_plan_item_status(
+        db,
+        practice_session,
+        status="in_progress",
+        now=now,
+    )
     await db.flush()
     await db.commit()
     logger.info(
@@ -273,6 +388,12 @@ async def save_code_snapshot(
     }
     practice_session.latest_code_snapshot_id = snapshot.id
     _touch_session(practice_session, now=now)
+    await _sync_latest_plan_item_status(
+        db,
+        practice_session,
+        status="in_progress",
+        now=now,
+    )
     await db.commit()
     logger.info(
         "practice_code_snapshot_saved user_id=%s session_id=%s snapshot_id=%s "
@@ -323,6 +444,19 @@ async def record_submission_feedback(
         practice_session.final_result = payload.result
     if payload.result == "ac":
         practice_session.status = "summarizing"
+        await _sync_latest_plan_item_status(
+            db,
+            practice_session,
+            status="completed",
+            now=now,
+        )
+    elif payload.result in _CONCRETE_SUBMISSION_RESULTS:
+        await _sync_latest_plan_item_status(
+            db,
+            practice_session,
+            status="in_progress",
+            now=now,
+        )
     event = PracticeEvent(
         session_id=practice_session.id,
         user_id=user.id,
@@ -338,6 +472,7 @@ async def record_submission_feedback(
             "memory_kb": payload.memory_kb,
             "has_failed_case": bool(payload.failed_case_text),
             "has_error_message": bool(payload.error_message),
+            "has_note": bool(payload.note_md),
         },
         hint_level=practice_session.current_hint_level,
         visible_hint_gear=practice_session.visible_hint_gear,
@@ -355,7 +490,7 @@ async def record_submission_feedback(
         memory_kb=payload.memory_kb,
         failed_case_text=payload.failed_case_text,
         error_message=payload.error_message,
-        raw_feedback_json={},
+        raw_feedback_json={"note_md": payload.note_md},
         submitted_at=now,
         created_at=now,
     )
@@ -400,6 +535,7 @@ async def record_submission_feedback(
         result=cast(Any, feedback.result),
         event_id=event.id,
         code_snapshot_id=feedback.code_snapshot_id,
+        note_md=payload.note_md,
         created_at=feedback.created_at,
     )
 
@@ -553,6 +689,81 @@ def _touch_session(practice_session: PracticeSession, *, now: datetime) -> None:
     practice_session.updated_at = now
 
 
+async def _sync_latest_plan_item_status(
+    db: AsyncSession,
+    practice_session: PracticeSession,
+    *,
+    status: str,
+    now: datetime,
+) -> None:
+    if status not in {"in_progress", "completed"}:
+        return
+    if practice_session.latest_plan_item_id is None:
+        logger.warning(
+            "practice_plan_item_status_sync_skipped user_id=%s session_id=%s "
+            "reason=missing_latest_plan_item status=%s",
+            practice_session.user_id,
+            practice_session.id,
+            status,
+        )
+        return
+    result = await db.execute(
+        select(StudyPlanItem, StudyPlan)
+        .join(StudyPlanVersion, StudyPlanVersion.id == StudyPlanItem.version_id)
+        .join(StudyPlan, StudyPlan.id == StudyPlanVersion.plan_id)
+        .where(
+            StudyPlanItem.id == practice_session.latest_plan_item_id,
+            StudyPlan.id == practice_session.study_plan_id,
+            StudyPlan.user_id == practice_session.user_id,
+        )
+        .with_for_update()
+    )
+    row = result.one_or_none()
+    if row is None:
+        logger.warning(
+            "practice_plan_item_status_sync_skipped user_id=%s session_id=%s "
+            "item_id=%s status=%s reason=plan_item_not_found",
+            practice_session.user_id,
+            practice_session.id,
+            practice_session.latest_plan_item_id,
+            status,
+        )
+        return
+    item, plan = row
+    old_status = item.status
+    if status == "in_progress":
+        if old_status in {"in_progress", "completed", "locked_completed"}:
+            return
+        if old_status not in {"pending", "skipped"}:
+            logger.warning(
+                "practice_plan_item_status_sync_skipped user_id=%s plan_id=%s "
+                "item_id=%s old_status=%s status=%s reason=unsupported_transition",
+                practice_session.user_id,
+                plan.id,
+                item.id,
+                old_status,
+                status,
+            )
+            return
+    if status == "completed" and old_status in {"completed", "locked_completed"}:
+        return
+
+    # 训练事实只允许把计划题推进到“编码中/已 AC”，不从已 AC 回退，避免复盘后的聊天覆盖完成结果。
+    item.status = status
+    item.updated_at = now
+    plan.updated_at = now
+    logger.info(
+        "practice_plan_item_status_synced user_id=%s plan_id=%s item_id=%s "
+        "session_id=%s old_status=%s status=%s",
+        practice_session.user_id,
+        plan.id,
+        item.id,
+        practice_session.id,
+        old_status,
+        status,
+    )
+
+
 def _phase_after_submission(result: str, current_phase: str) -> str:
     if result == "ac":
         return "summarize"
@@ -598,6 +809,22 @@ async def _list_code_attempts(
     return [_code_attempt_response(snapshot, event) for snapshot, event in result.all()]
 
 
+async def _list_submission_feedbacks(
+    db: AsyncSession,
+    user: AppUser,
+    session_id: int,
+) -> list[SubmissionFeedbackHistoryResponse]:
+    result = await db.execute(
+        select(SubmissionFeedback)
+        .where(
+            SubmissionFeedback.session_id == session_id,
+            SubmissionFeedback.user_id == user.id,
+        )
+        .order_by(SubmissionFeedback.created_at, SubmissionFeedback.id)
+    )
+    return [_submission_feedback_response(feedback) for feedback in result.scalars().all()]
+
+
 def _code_attempt_response(
     snapshot: CodeSnapshot,
     event: PracticeEvent,
@@ -618,9 +845,71 @@ def _code_attempt_response(
             "client_revision": snapshot.client_revision,
             "code_hash": snapshot.code_hash,
             "code_preview": _code_preview(snapshot.code_text),
+            "code_text": snapshot.code_text,
             "quality_status": quality_status,
             "quality_comment": quality_comment,
             "created_at": snapshot.created_at,
+        }
+    )
+
+
+def _submission_feedback_response(
+    feedback: SubmissionFeedback,
+) -> SubmissionFeedbackHistoryResponse:
+    raw_feedback = feedback.raw_feedback_json
+    note_md = ""
+    if isinstance(raw_feedback, dict) and isinstance(raw_feedback.get("note_md"), str):
+        note_md = raw_feedback["note_md"]
+    return SubmissionFeedbackHistoryResponse.model_validate(
+        {
+            "id": feedback.id,
+            "event_id": feedback.event_id,
+            "code_snapshot_id": feedback.code_snapshot_id,
+            "result": feedback.result,
+            "failed_case_text": feedback.failed_case_text,
+            "error_message": feedback.error_message,
+            "note_md": note_md,
+            "runtime_ms": feedback.runtime_ms,
+            "memory_kb": feedback.memory_kb,
+            "created_at": feedback.created_at,
+        }
+    )
+
+
+def _session_review_response(
+    practice_session: PracticeSession,
+    *,
+    summary: SessionSummary,
+    delta: ProfileDelta | None,
+) -> PracticeSessionReviewResponse:
+    profile_delta = {
+        "id": delta.id,
+        "status": delta.status,
+        "previous_snapshot_id": delta.previous_snapshot_id,
+        "next_snapshot_id": delta.next_snapshot_id,
+        "rejection_reason": delta.rejection_reason,
+    } if delta is not None else {}
+    return PracticeSessionReviewResponse.model_validate(
+        {
+            "session_id": practice_session.id,
+            "summary_id": summary.id,
+            "problem_id": practice_session.problem_id,
+            "problem_slug": practice_session.problem_slug,
+            "final_result": summary.final_submission_result,
+            "training_mode": summary.training_mode,
+            "phases_visited": summary.phases_visited_json,
+            "main_stuck_points": summary.main_stuck_points_json,
+            "error_types": summary.error_types_json,
+            "max_hint_level_used": summary.max_hint_level_used or None,
+            "attempt_count": summary.attempt_count,
+            "complexity_analysis": summary.complexity_analysis_json,
+            "core_idea_md": summary.invariant_summary_md,
+            "review_summary_md": summary.review_summary_md,
+            "profile_signals": summary.profile_signals_json,
+            "profile_update_suggestion": summary.profile_update_suggestion_json,
+            "profile_delta": profile_delta,
+            "next_recommendation": summary.next_recommendation_json,
+            "updated_at": summary.updated_at,
         }
     )
 
@@ -634,6 +923,7 @@ def _session_response(
     *,
     events: list[PracticeEventResponse] | None = None,
     code_attempts: list[CodeAttemptResponse] | None = None,
+    submission_feedbacks: list[SubmissionFeedbackHistoryResponse] | None = None,
 ) -> PracticeSessionResponse:
     return PracticeSessionResponse.model_validate(
         {
@@ -654,6 +944,7 @@ def _session_response(
             "profile_snapshot": practice_session.profile_snapshot_json,
             "events": events or [],
             "code_attempts": code_attempts or [],
+            "submission_feedbacks": submission_feedbacks or [],
             "created_at": practice_session.created_at,
             "updated_at": practice_session.updated_at,
         }

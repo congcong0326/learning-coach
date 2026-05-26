@@ -4,6 +4,7 @@ import { useState } from 'react'
 import {
   submitLeetCodeFeedback,
   type SubmissionFeedbackPayload,
+  type SubmissionFeedbackResponse,
   type SubmissionResult,
 } from '../../api/practice'
 
@@ -12,11 +13,10 @@ type SubmissionFeedbackModalProps = {
   sessionId: number
   codeSnapshotId?: number | null
   onClose: () => void
-  onSubmitted?: () => void
+  onSubmitted?: (feedback: SubmissionFeedbackResponse) => void | Promise<void>
 }
 
 const resultOptions: Array<{ label: string; value: SubmissionResult }> = [
-  { label: 'AC', value: 'ac' },
   { label: 'WA', value: 'wa' },
   { label: 'TLE', value: 'tle' },
   { label: 'RE', value: 're' },
@@ -39,7 +39,7 @@ export function SubmissionFeedbackModal({
     const values = await form.validateFields()
     setIsSubmitting(true)
     try {
-      await submitLeetCodeFeedback(sessionId, {
+      const feedback = await submitLeetCodeFeedback(sessionId, {
         ...values,
         code_snapshot_id: codeSnapshotId,
         runtime_ms: values.runtime_ms ?? null,
@@ -47,7 +47,7 @@ export function SubmissionFeedbackModal({
       })
       message.success('提交结果已回填')
       form.resetFields()
-      onSubmitted?.()
+      await onSubmitted?.(feedback)
       onClose()
     } catch {
       message.error('提交回填失败，请稍后重试')
@@ -58,7 +58,7 @@ export function SubmissionFeedbackModal({
 
   return (
     <Modal
-      title="提交回填"
+      title="未通过结果回填"
       open={open}
       okText="保存"
       cancelText="取消"
@@ -72,7 +72,7 @@ export function SubmissionFeedbackModal({
           ? `将关联代码快照 #${codeSnapshotId}`
           : '未选择代码快照，将尝试关联服务端最近保存的代码快照。'}
       </Typography.Paragraph>
-      <Form form={form} layout="vertical" initialValues={{ result: 'unknown' }}>
+      <Form form={form} layout="vertical" initialValues={{ result: 'wa' }}>
         <Form.Item
           name="result"
           label="LeetCode 结果"
@@ -85,6 +85,9 @@ export function SubmissionFeedbackModal({
         </Form.Item>
         <Form.Item name="error_message" label="错误信息">
           <Input.TextArea rows={3} placeholder="编译错误、运行错误或平台提示" />
+        </Form.Item>
+        <Form.Item name="note_md" label="备注">
+          <Input.TextArea rows={3} placeholder="你的初步判断或希望教练重点看的地方" />
         </Form.Item>
         <Form.Item name="runtime_ms" label="运行耗时 ms">
           <InputNumber min={0} precision={0} style={{ width: '100%' }} />

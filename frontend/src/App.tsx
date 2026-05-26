@@ -4,6 +4,7 @@ import {
   CodeOutlined,
   DatabaseOutlined,
   FileSearchOutlined,
+  FundProjectionScreenOutlined,
   KeyOutlined,
   ProfileOutlined,
 } from '@ant-design/icons'
@@ -24,6 +25,7 @@ const { Header, Sider, Content } = Layout
 const navItems = [
   { to: '/problems', label: '题库', icon: <DatabaseOutlined aria-hidden="true" /> },
   { to: '/study-plan', label: '学习计划', icon: <CalendarOutlined aria-hidden="true" /> },
+  { to: '/dashboard', label: '仪表盘', icon: <FundProjectionScreenOutlined aria-hidden="true" /> },
   { to: '/workspace', label: '工作台', icon: <CodeOutlined aria-hidden="true" /> },
   { to: '/settings/api-keys', label: 'API 设置', icon: <KeyOutlined aria-hidden="true" /> },
   { to: '/review', label: '复盘', icon: <ProfileOutlined aria-hidden="true" /> },

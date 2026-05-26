@@ -14,12 +14,12 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 当前阶段 | 阶段 2：学习入口与训练状态底座 |
-| 当前主线任务 | T3：基础 AI 教练闭环 |
-| 当前任务状态 | 进行中 |
-| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、计划题训练会话、Chat-first 工作台、自动代码尝试记录和 LeetCode 已 AC 入口 |
-| 下一步建议 | 继续完善 T3 / T5：补齐非 AC 提交反馈归因、复盘模型化和画像沉淀闭环 |
-| 第一版闭环状态 | 未闭环。当前已有训练会话、Chat-first AI 教练、代码 review 尝试记录和 AC 复盘入口，尚缺完整错因归因、复盘画像和下一题推荐 |
+| 当前阶段 | 阶段 7：第一版闭环集成 |
+| 当前主线任务 | T10：端到端收口和验证 |
+| 当前任务状态 | 已完成 |
+| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、计划题训练会话、Chat-first 工作台、自动代码尝试记录、LeetCode AC/非 AC 回填、复盘读取页、最小学习仪表盘、非 RAG `CoachGraph`、真实 Trace 页和规则化 Eval runner |
+| 下一步建议 | 保持 RAG/T6 延后；后续再评估持久化 checkpoint、RAG 教练知识库、更完整画像趋势图和 T8 面试模拟 |
+| 第一版闭环状态 | 非 RAG Agent 工程闭环已具备：计划题进入工作台、AI 教练结构化诊断、非 AC 反馈分析、AC 后复盘画像、下一题推荐、Trace 和 Eval 均有实现与测试；RAG/T6 明确 deferred |
 
 ## 总体阶段进度
 
@@ -27,49 +27,49 @@
 | --- | --- | --- | --- | --- | --- |
 | 阶段 0 | 工程与题库基座 | 已完成 | 100% | B0、B1 | 本地全栈可运行，题库数据可导入、查询和展示 |
 | 阶段 1 | 本地用户与模型资产基础 | 已完成 | 100% | T0 | 用户可注册登录，并配置自己的 OpenAI API 资产池 |
-| 阶段 2 | 学习入口与训练状态底座 | 进行中 | 75% | T1、T2.5、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
-| 阶段 3 | 基础反馈闭环 | 进行中 | 25% | T3、T5 | AI 可分层提示和 review，用户可回填 LeetCode 提交结果并获得错因归因 |
-| 阶段 4 | Agent 状态机与知识增强 | 未开始 | 0% | T4、T6 | LangGraph 可恢复状态机接入，RAG 教练知识库可检索并受 hint level 控制 |
-| 阶段 5 | 复盘画像与学习仪表盘 | 未开始 | 0% | T7 | 完成训练后生成复盘、画像增量、下一题推荐和仪表盘指标 |
-| 阶段 6 | 面试模拟与可观测性 | 未开始 | 0% | T8、T9 | 支持轻量面试模拟，Trace 和 Eval 能展示 Agent 行为质量 |
-| 阶段 7 | 第一版闭环集成 | 未开始 | 0% | T10 | PRD 第一版学习闭环可端到端跑通，构建和 smoke 验证通过 |
+| 阶段 2 | 学习入口与训练状态底座 | 已完成 | 100% | T1、T2.5、T2 | 用户可基于 LLM 草稿确认训练目标和计划，并在可恢复的训练会话中做题 |
+| 阶段 3 | 基础反馈闭环 | 已完成 | 100% | T3、T5 | AI 可分层提示和 review，用户可回填 LeetCode 提交结果并获得错因归因 |
+| 阶段 4 | Agent 状态机与知识增强 | 进行中 | 55% | T4、T6 | 非 RAG LangGraph 状态机已接入；RAG 教练知识库延后 |
+| 阶段 5 | 复盘画像与学习仪表盘 | 已完成 | 100% | T7 | 完成训练后生成复盘、画像增量、下一题推荐和最小仪表盘指标 |
+| 阶段 6 | 面试模拟与可观测性 | 进行中 | 50% | T8、T9 | T9 Trace/Eval 已完成；T8 轻量面试模拟未开始 |
+| 阶段 7 | 第一版闭环集成 | 已完成 | 100% | T10 | 非 RAG 第一版学习闭环可端到端跑通，验证命令已通过 |
 
-## 当前阶段：阶段 2
+## 当前阶段：阶段 7
 
-阶段 2 的目标是补齐学习入口和训练状态底座。T0 已完成，后续所有大模型调用都可以从“当前用户”和“当前用户首选/当前通讯 API 资产”读取上下文。
+阶段 7 的目标是收口非 RAG 第一版闭环：用户从目标校准和学习计划进入工作台，完成 AI 教练引导、LeetCode 非 AC/AC 回填、复盘、画像、下一题推荐，并用 Trace/Eval 证明 Agent 行为可追踪、可评估。T6/RAG 和 T8/面试模拟不计入本轮非 RAG 收口。
 
-### 当前任务 T2：训练会话与工作台状态持久化
+### 当前任务 T10：端到端收口和验证
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 进行中 |
-| 前置条件 | T1、T0、B1 已完成 |
-| 主要交付 | practice session、practice event、submission feedback、工作台状态恢复 |
-| 完成后解锁 | T3 基础 AI 教练闭环、T5 提交回填与错因归因 |
+| 状态 | 已完成 |
+| 前置条件 | T1、T2、T3、T4 非 RAG 部分、T5、T7、T9 已完成 |
+| 主要交付 | 端到端演示路径、文档回填、最终验证命令 |
+| 完成后解锁 | RAG/T6、持久化 checkpoint、画像趋势图和面试模拟增强 |
 
 **待办**
 
-- [x] 设计 `practice_session`、`practice_event`、`submission_feedback`。
-- [x] 实现 session 创建、读取、恢复和状态更新 API。
-- [x] 将 session 与 `study_plan`、`study_plan_version`、`study_plan_item` 关联。
-- [x] 工作台接入从 active 学习计划进入训练。
-- [x] 工作台展示题面、AI 教练对话区、代码尝试记录入口和 LeetCode 已 AC 入口。
-- [x] 增加测试。
-- [x] 完成文档影响评估。
+- [x] 编写端到端演示路径。
+- [x] 更新受影响的 PRD、架构、Makefile、dev-setup、索引和实施计划文档。
+- [x] 更新 T3、T4、T5、T7、T9、T10 状态，T6 明确 deferred。
+- [x] 运行最终后端、前端、类型检查和 eval 验证命令。
 
 **完成标准**
 
-- 用户从当前 active 学习计划项进入工作台时可以创建或恢复训练会话。
-- 训练事件、`review_code` 自动提取的代码尝试和 LeetCode AC 能关联到用户、题目、计划、计划版本和计划项。
-- 工作台刷新后能恢复当前训练上下文。
-- 验证命令至少包含后端测试、前端测试和必要的构建检查。
+- 非 RAG 第一版学习闭环可按端到端路径演示。
+- RAG/T6 未实现，所有相关节点、eval 和文档均标记为 `deferred`。
+- 验证命令至少包含后端测试、前端测试、前端类型检查和 eval。
 
 **最近验证命令**
 
-- `uv run pytest backend/tests/test_practice_session_service.py backend/tests/test_code_attempts.py backend/tests/test_coach_guard.py backend/tests/test_learning_flows.py -q`
-- `cd frontend && corepack pnpm exec vitest run src/pages/WorkspacePage.test.tsx src/pages/workspace/CoachPanel.test.tsx src/pages/workspace/CodeAttemptDrawer.test.tsx`
+- `uv run ruff check .`
+- `uv run mypy backend`
+- `uv run pytest backend/tests/test_practice_schema.py backend/tests/test_coach_guard.py backend/tests/test_practice_session_service.py backend/tests/test_learning_flows.py backend/tests/test_coach_graph.py backend/tests/test_agent_trace_service.py backend/tests/test_coach_eval_runner.py backend/tests/test_recommendation_service.py -q`
+- `cd frontend && corepack pnpm exec vitest run src/pages/workspace/CoachPanel.test.tsx src/pages/workspace/CodeAttemptDrawer.test.tsx src/pages/ReviewPage.test.tsx src/pages/TracePage.test.tsx src/pages/DashboardPage.test.tsx`
 - `cd frontend && corepack pnpm exec tsc -p tsconfig.app.json --noEmit --pretty false`
+- `uv run python -m backend.app.evals.coach_eval_runner`
+- `make eval`
 
 ## 任务进度清单
 
@@ -187,11 +187,11 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 进行中 |
+| 状态 | 已完成 |
 | 前置任务 | T1、T2.5 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | `practice_session`、`practice_event`、`submission_feedback`、工作台状态恢复 |
-| 完成日期 | 未完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
@@ -208,77 +208,77 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 进行中 |
+| 状态 | 已完成 |
 | 前置任务 | T2 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | LLM 调用、教练 prompt、结构化输出、hint level 控制、入门引导和独立训练模式 |
-| 完成日期 | 未完成，`coach_turn` 模型接入已部分完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
 - [x] 为 `coach_turn` 增加用户模型资产路由读取和模型名称传递。
 - [x] 定义 `coach_turn` 结构化 prompt 版本和教练原则。
-- [ ] 实现 `StuckPointDiagnosis`、`CoachAction`、`CodeReviewResult` schema。
-- [ ] 实现 hint level 到用户可见档位的映射。
-- [ ] 实现训练模式下的提示升级和降级规则。
-- [ ] 实现 coach API。
+- [x] 实现 `StuckPointDiagnosis`、`CoachAction`、`CodeReviewResult` schema。
+- [x] 实现 hint level 到用户可见档位的映射。
+- [x] 实现训练模式下的提示升级和降级规则。
+- [x] 实现 coach API。
 - [x] 前端工作台接入 Chat-first AI 教练对话。
 - [x] 增加 `coach_turn` 结构化输出和模型资产编排测试。
-- [ ] 增加低层级泄题测试。
+- [x] 增加低层级泄题测试。
 
 ### T4：LangGraph 状态机与会话恢复
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 进行中（非 RAG Agent 范围已完成，T6/RAG 延后） |
 | 前置任务 | T2、T3 |
 | 当前阶段 | 阶段 3 |
 | 主要交付 | Graph State、节点、checkpoint、interrupt、session 恢复 |
-| 完成日期 | 未完成 |
+| 完成日期 | 非 RAG 部分 2026-05-26；T6/RAG 未完成 |
 
 **待办**
 
-- [ ] 定义 Graph State。
-- [ ] 实现核心节点：题目上下文、目标计划上下文、卡点诊断、动作决策、回复生成。
-- [ ] 接入 checkpoint 和 `thread_id`。
-- [ ] 实现 `WaitUserInput` interrupt。
-- [ ] 把 coach API 切换为图执行入口。
-- [ ] 实现 session 恢复和状态重放。
-- [ ] 增加节点级测试和最小端到端测试。
+- [x] 定义 Graph State。
+- [x] 实现核心节点：题目上下文、目标计划上下文、输入分类、卡点诊断、动作决策、守卫摘要、回复生成、持久化摘要和复盘触发；`retrieve_supporting_context` 暂返回 `rag_deferred`。
+- [x] 接入 `thread_id` 并与 `practice_session.thread_id` 对齐；当前使用 LangGraph checkpointer 和 DB session 事实恢复，跨进程持久化 checkpoint 后续增强。
+- [x] 实现用户输入自然中断等价机制：用户消息和提交反馈作为下一轮图执行入口；未接独立 `WaitUserInput` 原语。
+- [x] 把 `coach_turn` run 接入 `CoachGraph` 执行入口，保持前端 SSE 体验不变。
+- [x] 实现 session 恢复和状态重放的等价路径：`practice_session.thread_id`、事件、代码尝试和提交反馈进入图 state。
+- [x] 增加节点级测试和 `coach_turn` 图入口测试，覆盖快进、回退、守卫拒绝、非 AC 反馈和复盘触发。
 
 ### T5：LeetCode 提交回填与错因归因
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 进行中 |
+| 状态 | 已完成 |
 | 前置任务 | T2 |
 | 当前阶段 | 阶段 2 |
 | 主要交付 | LeetCode 已 AC 入口、非 AC 提交反馈、结果状态管理、AI 错因归因、后续引导 |
-| 完成日期 | 未完成，AC 入口和复盘触发已部分完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
 - [x] 定义提交结果状态：AC、WA、TLE、RE、CE、UNKNOWN。
 - [x] 实现提交结果回填 API，并关联训练会话、题目和计划项。
 - [x] 前端工作台接入“LeetCode 已 AC”入口，AC 可不要求运行时间、内存或代码快照。
-- [ ] 允许用户补充 LeetCode 错误摘要、失败用例摘要或提交备注。
-- [ ] 实现基于用户思路、粘贴代码和提交结果的 AI 错因归因。
-- [ ] AI 根据回填结果决定继续追问、建议修改、要求再次提交或进入复盘。
-- [ ] 前端工作台接入非 AC 失败反馈入口和结果历史展示。
-- [ ] 增加提交回填、错因归因和状态流转测试。
+- [x] 允许用户补充 LeetCode 错误摘要、失败用例摘要或提交备注。
+- [x] 将用户思路、粘贴代码和最新提交结果写入 AI 教练上下文，支持错因归因。
+- [x] AI 根据结构化回填结果进入提交反馈分析；继续追问、建议修改、要求再次提交的动作集仍需扩大 eval 覆盖。
+- [x] 前端工作台接入非 AC 失败反馈入口和结果历史展示。
+- [x] 增加提交回填、错因归因和状态流转测试。
 
 ### T6：RAG 教练知识库
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 未开始（本轮非 RAG Agent 范围延后） |
 | 前置任务 | B0；接入教练上下文依赖 T3、T4 |
 | 当前阶段 | 阶段 3 |
 | 主要交付 | `knowledge_doc`、`knowledge_chunk`、语料导入、embedding、检索、hint 过滤、`retrieval_trace` |
-| 完成日期 | 未完成 |
+| 完成日期 | 未完成，RAG/T6 已明确 deferred |
 
 **待办**
 
@@ -297,22 +297,22 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 已完成 |
 | 前置任务 | T1、T2、T3、T5 |
 | 当前阶段 | 阶段 4 |
 | 主要交付 | `SessionSummary`、`profile_delta`、`user_skill_profile`、规则推荐、仪表盘 |
-| 完成日期 | 未完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
-- [ ] 设计 `user_skill_profile` 和必要的 summary 存储结构。
-- [ ] 实现 `SessionSummary` 生成与保存。
-- [ ] 实现 `profile_delta` 生成和合并规则。
-- [ ] 实现规则化下一题推荐工具。
-- [ ] 实现复盘页 API 和页面。
-- [ ] 实现学习仪表盘 API。
-- [ ] 实现仪表盘页面。
-- [ ] 增加推荐可解释性和画像更新测试。
+- [x] 设计 `user_profile_snapshot`、`profile_delta` 和 `SessionSummary` 等价存储结构。
+- [x] 实现 `SessionSummary` 生成与保存。
+- [x] 实现 `profile_delta` 生成和合并规则。
+- [x] 实现规则化下一题推荐工具。
+- [x] 实现复盘页 API 和页面。
+- [x] 实现学习仪表盘 API。
+- [x] 实现仪表盘页面。
+- [x] 增加推荐可解释性和画像更新测试。
 
 ### T8：轻量面试模拟模式
 
@@ -340,41 +340,54 @@
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P1 |
-| 状态 | 未开始 |
+| 状态 | 已完成（RAG Grounding 按 T6 延后标记 deferred） |
 | 前置任务 | T3；完整闭环依赖 T4、T6、T7 |
 | 当前阶段 | 阶段 5 |
 | 主要交付 | `agent_trace` 接入、Trace 页、Hint Leakage / Diagnosis / Review / RAG Grounding Eval |
-| 完成日期 | 未完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
-- [ ] 完善 `agent_trace` 写入。
-- [ ] 前端 Trace 页读取真实 trace 数据。
-- [ ] 实现 Hint Leakage Eval 样例和 runner。
-- [ ] 实现 Diagnosis Eval 样例和 runner。
-- [ ] 实现 Review Eval 样例和 runner。
-- [ ] 实现 RAG Grounding Eval 样例和 runner。
-- [ ] 将 eval 命令加入 Makefile 或独立脚本。
+- [x] 完善 `agent_trace` 写入。
+- [x] 前端 Trace 页读取真实 trace 数据。
+- [x] 实现 Hint Leakage Eval 样例和 runner。
+- [x] 实现 Diagnosis Eval 样例和 runner。
+- [x] 实现 Review Eval 样例和 runner。
+- [x] RAG Grounding Eval 按 RAG/T6 延后报告 `deferred`，不接真实检索。
+- [x] 将 eval 命令加入 Makefile 或独立脚本。
 
 ### T10：第一版闭环集成与发布校验
 
 | 字段 | 内容 |
 | --- | --- |
 | 优先级 | P0 |
-| 状态 | 未开始 |
+| 状态 | 已完成 |
 | 前置任务 | T1-T7；演示版可选 T8-T9 |
-| 当前阶段 | 阶段 6 |
+| 当前阶段 | 阶段 7 |
 | 主要交付 | 端到端场景、smoke/build 更新、文档回填 |
-| 完成日期 | 未完成 |
+| 完成日期 | 2026-05-26 |
 
 **待办**
 
-- [ ] 编写端到端演示路径：目标校准 -> 学习计划 -> 工作台 -> AI 教练 -> LeetCode 提交回填 -> 复盘 -> 画像 -> 下一题推荐。
-- [ ] 更新 smoke test 覆盖关键 API。
-- [ ] 更新 `make build` / `make smoke` / 必要的 eval 命令文档。
-- [ ] 回填 `docs/architecture/foundation.md` 的已实现模块边界。
-- [ ] 回填 `docs/dev-setup.md` 的新增环境变量和启动步骤。
-- [ ] 对照 PRD 成功标准逐项打勾。
+- [x] 编写端到端演示路径：目标校准 -> 学习计划 -> 工作台 -> AI 教练 -> LeetCode 提交回填 -> 复盘 -> 画像 -> 下一题推荐 -> Trace/Eval。
+- [x] 保持 smoke test 作为运行环境健康检查，关键 Agent API 由 pytest/vitest/eval 覆盖；未把需登录的训练 API 放入 shell smoke。
+- [x] 更新 `make build` / `make smoke` / 必要的 eval 命令文档。
+- [x] 回填 `docs/architecture/foundation.md` 的已实现模块边界。
+- [x] 回填 `docs/dev-setup.md` 的新增环境变量和启动步骤。
+- [x] 对照 PRD 成功标准逐项打勾。
+
+**端到端演示路径**
+
+1. 用户注册/登录并在 API 设置中配置首选 OpenAI API 资产。
+2. 进入目标校准页，填写目标、时间线、每周投入、默认语言和弱项，使用 LLM Run 生成并确认学习计划。
+3. 从学习计划页点击计划题进入 `/workspace/items/:itemId`，后端创建或恢复 `practice_session`，并绑定 `thread_id=practice-session-{id}`。
+4. 用户在工作台描述思路、卡点或粘贴代码，`coach_turn` 进入非 RAG `CoachGraph`，完成输入分类、卡点诊断、动作决策、守卫和回复持久化。
+5. 用户通过“回填未通过结果”记录 WA/TLE/RE/MLE/CE/Unknown，填写失败用例、错误摘要和备注；下一轮 AI 教练进入提交反馈分析。
+6. 用户通过“LeetCode 已 AC”记录 AC，触发 `coach_summary`，生成或更新 `session_summary`、`profile_delta` 和 `user_profile_snapshot`。
+7. 复盘页展示最终结果、阶段轨迹、主要卡点、最高提示档位、代码/提交错因、复杂度/核心思路、画像变化和下一题建议。
+8. 学习仪表盘展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要；下一题推荐的第一问和 review 重点写入画像策略。
+9. Trace 页通过 `/api/traces` 查看 LLM Run、Graph 节点、`rag_deferred`、守卫结果和最终回复摘要。
+10. 运行 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 验证 Hint Leakage、Diagnosis、Code Review；RAG Grounding 显示 `deferred`。
 
 ## 阶段推进顺序
 

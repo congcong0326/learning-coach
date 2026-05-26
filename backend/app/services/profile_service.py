@@ -14,12 +14,16 @@ from backend.app.models.practice import (
     PracticeSession,
     ProfileDelta,
     SessionSummary,
+    SubmissionFeedback,
     UserProfileSnapshot,
 )
 from backend.app.services.profile_provider import (
     ProfileConfidence,
     ProfileSnapshot,
     ProfileSource,
+)
+from backend.app.services.recommendation_service import (
+    recommend_next_plan_item_for_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,6 +216,11 @@ async def persist_session_summary_profile_update(
         session_id=session_id,
     )
     events = await _session_events(session, user_id=user_id, session_id=session_id)
+    feedbacks = await _session_feedbacks(
+        session,
+        user_id=user_id,
+        session_id=practice_session.id,
+    )
     previous_snapshot = await latest_profile_snapshot(session, user_id)
     now = datetime.now(UTC)
 
@@ -220,9 +229,21 @@ async def persist_session_summary_profile_update(
         user_id=user_id,
         session_id=practice_session.id,
     )
+    facts = _summary_facts(
+        practice_session,
+        events=events,
+        feedbacks=feedbacks,
+    )
+    recommendation = await recommend_next_plan_item_for_session(
+        session,
+        practice_session,
+        facts,
+    )
     patch_json = _profile_patch_from_summary_payload(
         practice_session,
         events=events,
+        facts=facts,
+        recommendation=recommendation,
         payload=payload,
     )
     if summary is None:
@@ -230,40 +251,43 @@ async def persist_session_summary_profile_update(
             session_id=practice_session.id,
             user_id=user_id,
             problem_id=practice_session.problem_id,
-            result=_summary_result(practice_session),
-            final_submission_result=practice_session.final_result or "unknown",
+            result=facts["result"],
+            final_submission_result=facts["final_submission_result"],
             training_mode=practice_session.training_mode,
-            phases_visited_json=_phases_visited(practice_session, events),
-            transitions_json=_phase_transitions(events),
-            main_stuck_points_json=_main_stuck_points(practice_session, events),
-            error_types_json=_error_types(practice_session),
+            phases_visited_json=facts["phases_visited"],
+            transitions_json=facts["transitions"],
+            main_stuck_points_json=facts["main_stuck_points"],
+            error_types_json=facts["error_types"],
             max_hint_level_used=practice_session.max_hint_level_used,
             avg_hint_level=None,
             attempt_count=practice_session.attempt_count,
             time_spent_seconds=None,
-            complexity_analysis_json={},
-            invariant_summary_md="",
-            review_summary_md="",
-            profile_signals_json=_profile_signals(practice_session),
+            complexity_analysis_json=facts["complexity_analysis"],
+            invariant_summary_md=facts["invariant_summary_md"],
+            review_summary_md=facts["review_summary_md"],
+            profile_signals_json=facts["profile_signals"],
             profile_update_suggestion_json=patch_json,
-            next_recommendation_json=_next_recommendation(practice_session),
+            next_recommendation_json=recommendation,
             created_at=now,
             updated_at=now,
         )
         session.add(summary)
     else:
-        summary.result = _summary_result(practice_session)
-        summary.final_submission_result = practice_session.final_result or "unknown"
+        summary.result = facts["result"]
+        summary.final_submission_result = facts["final_submission_result"]
         summary.training_mode = practice_session.training_mode
-        summary.phases_visited_json = _phases_visited(practice_session, events)
-        summary.transitions_json = _phase_transitions(events)
-        summary.main_stuck_points_json = _main_stuck_points(practice_session, events)
-        summary.error_types_json = _error_types(practice_session)
+        summary.phases_visited_json = facts["phases_visited"]
+        summary.transitions_json = facts["transitions"]
+        summary.main_stuck_points_json = facts["main_stuck_points"]
+        summary.error_types_json = facts["error_types"]
         summary.max_hint_level_used = practice_session.max_hint_level_used
         summary.attempt_count = practice_session.attempt_count
-        summary.profile_signals_json = _profile_signals(practice_session)
+        summary.complexity_analysis_json = facts["complexity_analysis"]
+        summary.invariant_summary_md = facts["invariant_summary_md"]
+        summary.review_summary_md = facts["review_summary_md"]
+        summary.profile_signals_json = facts["profile_signals"]
         summary.profile_update_suggestion_json = patch_json
-        summary.next_recommendation_json = _next_recommendation(practice_session)
+        summary.next_recommendation_json = recommendation
         summary.updated_at = now
     await session.flush()
 
@@ -520,10 +544,29 @@ async def _session_events(
     return list(result.scalars().all())
 
 
+async def _session_feedbacks(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+) -> list[SubmissionFeedback]:
+    result = await session.execute(
+        select(SubmissionFeedback)
+        .where(
+            SubmissionFeedback.session_id == session_id,
+            SubmissionFeedback.user_id == user_id,
+        )
+        .order_by(SubmissionFeedback.created_at, SubmissionFeedback.id)
+    )
+    return list(result.scalars().all())
+
+
 def _profile_patch_from_summary_payload(
     practice_session: PracticeSession,
     *,
     events: list[PracticeEvent],
+    facts: dict[str, Any],
+    recommendation: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     explicit_patch = payload.get("profile_update_suggestion_json")
@@ -539,13 +582,18 @@ def _profile_patch_from_summary_payload(
         "recent_summary": summary_text,
         "skill_profile_json": {
             "recent_problem_slugs": [practice_session.problem_slug],
+            "weak_skill_tags": facts["profile_signals"].get("weak_skill_tags", []),
         },
         "stuck_point_profile_json": {
-            "weak_stuck_points": _main_stuck_points(practice_session, events),
+            "weak_stuck_points": facts["main_stuck_points"],
         },
         "strategy_json": {
             "hint_policy_hint": _hint_policy_hint(practice_session),
             "last_summary_session_id": practice_session.id,
+            "recommended_next_item_id": recommendation.get("item_id"),
+            "next_first_question_hint": recommendation.get("first_question_hint", ""),
+            "next_review_focus": recommendation.get("review_focus", ""),
+            "preferred_hint_level": recommendation.get("preferred_hint_level", "questioning"),
         },
     }
 
@@ -628,36 +676,155 @@ def _phase_transitions(events: list[PracticeEvent]) -> list[dict[str, Any]]:
 def _main_stuck_points(
     practice_session: PracticeSession,
     events: list[PracticeEvent],
+    feedbacks: list[SubmissionFeedback],
 ) -> list[str]:
     points: list[str] = []
-    if practice_session.final_result and practice_session.final_result != "ac":
-        points.append(f"submission_{practice_session.final_result}")
+    for result in _error_types_from_feedbacks(feedbacks):
+        points.append(f"submission_{result}")
     for event in events:
         if event.intent == "stuck" and "user_reported_stuck" not in points:
             points.append("user_reported_stuck")
     return points[:_MAX_PROFILE_LIST_LENGTH]
 
 
-def _error_types(practice_session: PracticeSession) -> list[str]:
-    if practice_session.final_result and practice_session.final_result not in {"ac", "unknown"}:
-        return [practice_session.final_result]
-    return []
+def _error_types_from_feedbacks(feedbacks: list[SubmissionFeedback]) -> list[str]:
+    results: list[str] = []
+    for feedback in feedbacks:
+        result = feedback.result
+        if result in {"ac", "unknown"} or result in results:
+            continue
+        results.append(result)
+    return results[:_MAX_PROFILE_LIST_LENGTH]
 
 
-def _profile_signals(practice_session: PracticeSession) -> dict[str, Any]:
+def _summary_facts(
+    practice_session: PracticeSession,
+    *,
+    events: list[PracticeEvent],
+    feedbacks: list[SubmissionFeedback],
+) -> dict[str, Any]:
+    error_types = _error_types_from_feedbacks(feedbacks)
+    main_stuck_points = _main_stuck_points(practice_session, events, feedbacks)
+    profile_signals = _profile_signals(
+        practice_session,
+        feedbacks=feedbacks,
+        error_types=error_types,
+        main_stuck_points=main_stuck_points,
+    )
+    return {
+        "result": _summary_result(practice_session),
+        "final_submission_result": _final_submission_result(practice_session, feedbacks),
+        "phases_visited": _phases_visited(practice_session, events),
+        "transitions": _phase_transitions(events),
+        "main_stuck_points": main_stuck_points,
+        "error_types": error_types,
+        "complexity_analysis": _complexity_analysis(practice_session, error_types),
+        "invariant_summary_md": _invariant_summary(practice_session, error_types),
+        "review_summary_md": _review_summary(feedbacks),
+        "profile_signals": profile_signals,
+    }
+
+
+def _final_submission_result(
+    practice_session: PracticeSession,
+    feedbacks: list[SubmissionFeedback],
+) -> str:
+    if practice_session.final_result:
+        return practice_session.final_result
+    if feedbacks:
+        return feedbacks[-1].result
+    return "unknown"
+
+
+def _profile_signals(
+    practice_session: PracticeSession,
+    *,
+    feedbacks: list[SubmissionFeedback],
+    error_types: list[str],
+    main_stuck_points: list[str],
+) -> dict[str, Any]:
+    evidence = [
+        {
+            "source": "session_fact",
+            "session_id": practice_session.id,
+            "problem_id": practice_session.problem_id,
+            "summary": _bounded_summary_text(practice_session),
+        }
+    ]
+    if feedbacks:
+        evidence.append(
+            {
+                "source": "submission_feedback",
+                "session_id": practice_session.id,
+                "summary": "提交反馈结果序列=" + ",".join(feedback.result for feedback in feedbacks),
+            }
+        )
     return {
         "phase": practice_session.phase,
         "final_result": practice_session.final_result or "unknown",
         "attempt_count": practice_session.attempt_count,
         "max_hint_level_used": practice_session.max_hint_level_used,
+        "feedback_results": [feedback.result for feedback in feedbacks],
+        "weak_skill_tags": _weak_skill_tags(error_types, main_stuck_points),
+        "evidence": evidence,
     }
 
 
-def _next_recommendation(practice_session: PracticeSession) -> dict[str, Any]:
+def _weak_skill_tags(
+    error_types: list[str],
+    main_stuck_points: list[str],
+) -> list[str]:
+    tags: list[str] = []
+    if "wa" in error_types or any("edge" in point or "wa" in point for point in main_stuck_points):
+        tags.append("边界")
+    if "tle" in error_types:
+        tags.append("复杂度")
+    if "re" in error_types:
+        tags.append("运行错误")
+    if "ce" in error_types:
+        tags.append("语法")
+    if not tags and main_stuck_points:
+        tags.append("思路")
+    return tags[:_MAX_PROFILE_LIST_LENGTH]
+
+
+def _complexity_analysis(
+    practice_session: PracticeSession,
+    error_types: list[str],
+) -> dict[str, Any]:
     return {
-        "preferred_training_mode": practice_session.training_mode,
-        "review_focus": "复盘本题关键状态与边界用例",
+        "status": "needs_user_confirmation",
+        "time_complexity": "not_captured",
+        "space_complexity": "not_captured",
+        "note": "当前复盘来自训练事实，尚未保存用户亲口确认的复杂度口述。",
+        "needs_attention": "tle" in error_types,
+        "problem_slug": practice_session.problem_slug,
     }
+
+
+def _invariant_summary(
+    practice_session: PracticeSession,
+    error_types: list[str],
+) -> str:
+    focus = "复杂度瓶颈" if "tle" in error_types else "关键状态与边界用例"
+    return (
+        f"本题 {practice_session.problem_slug} 已根据提交结果进入复盘。"
+        f"当前稳定事实足以提示下一轮优先复述{focus}，但还没有保存完整题解或完整代码。"
+    )
+
+
+def _review_summary(feedbacks: list[SubmissionFeedback]) -> str:
+    non_ac = [feedback for feedback in feedbacks if feedback.result not in {"ac", "unknown"}]
+    if not non_ac:
+        return "本次没有记录非 AC 提交；代码 review 重点回到关键状态、边界用例和复杂度口述。"
+    parts: list[str] = []
+    for feedback in non_ac[:_MAX_PROFILE_LIST_LENGTH]:
+        raw_feedback = feedback.raw_feedback_json if isinstance(feedback.raw_feedback_json, dict) else {}
+        note_md = raw_feedback.get("note_md") if isinstance(raw_feedback.get("note_md"), str) else ""
+        detail = feedback.failed_case_text or feedback.error_message or note_md
+        detail = detail[:160] if detail else "未填写失败细节"
+        parts.append(f"{feedback.result.upper()}：{detail}")
+    return "；".join(parts)
 
 
 def _hint_policy_hint(practice_session: PracticeSession) -> str:

@@ -231,6 +231,51 @@ body {
   gap: 16px;
 }
 
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dashboard-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-metric {
+  min-height: 96px;
+  padding: 16px;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.dashboard-metric-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #586158;
+  font-size: 13px;
+}
+
+.dashboard-metric strong {
+  color: #1f2b23;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.dashboard-section {
+  padding: 16px;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.dashboard-section h3.ant-typography {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
 .plan-stage {
   padding: 16px;
   border: 1px solid #deded8;
@@ -398,6 +443,32 @@ body {
   flex-direction: column;
   gap: 8px;
   width: 100%;
+}
+
+.coach-feedback-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.coach-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.coach-feedback-item {
+  padding: 10px;
+  border: 1px solid #e4e5df;
+  border-radius: 6px;
+  background: #fafaf7;
+}
+
+.coach-feedback-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .coach-run-output {
@@ -716,6 +787,26 @@ body {
   }
 }
 
+.code-attempt-modal .ant-modal-body {
+  max-height: min(70vh, 720px);
+  overflow: auto;
+}
+
+.code-attempt-list {
+  display: grid;
+  gap: 14px;
+}
+
+.code-attempt-item {
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e2e3de;
+}
+
+.code-attempt-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .code-attempt-row {
   display: flex;
   width: 100%;
@@ -727,8 +818,13 @@ body {
   width: 100%;
 }
 
-.code-attempt-preview {
-  max-height: 180px;
+.code-attempt-toggle {
+  align-self: flex-start;
+  padding-inline: 0;
+}
+
+.code-attempt-code {
+  max-height: 420px;
   margin: 0;
   overflow: auto;
   padding: 10px;
@@ -738,7 +834,7 @@ body {
   color: #273029;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
-  white-space: pre-wrap;
+  white-space: pre;
 }
 
 .code-attempt-status-pending {

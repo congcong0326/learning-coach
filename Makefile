@@ -37,6 +37,10 @@ test: ## Run backend and frontend tests
 	uv run pytest -q
 	cd frontend && $(PNPM) test
 
+.PHONY: eval
+eval: ## Run local AI coach eval samples
+	uv run python -m backend.app.evals.coach_eval_runner
+
 .PHONY: build
 build: ## Run local verification and build frontend assets
 	uv run ruff check .

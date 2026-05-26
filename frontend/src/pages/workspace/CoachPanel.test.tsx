@@ -83,9 +83,89 @@ describe('CoachPanel', () => {
 
     expect(screen.getByRole('button', { name: '代码尝试记录' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'LeetCode 已 AC' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '回填未通过结果' })).toBeInTheDocument()
     expect(screen.getByLabelText('发送给教练')).toBeInTheDocument()
     expect(screen.queryByText('画像来源')).not.toBeInTheDocument()
     expect(screen.queryByText('事件时间线')).not.toBeInTheDocument()
+  })
+
+  it('opens non-AC feedback modal and renders feedback history', () => {
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          submission_feedbacks: [
+            {
+              id: 801,
+              event_id: 802,
+              code_snapshot_id: 777,
+              result: 'wa',
+              failed_case_text: 'nums=[3,3], target=6',
+              error_message: 'expected [0,1], got []',
+              note_md: '怀疑哈希表更新顺序',
+              runtime_ms: null,
+              memory_kb: null,
+              created_at: '2026-05-24T00:00:00Z',
+            },
+          ],
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '回填未通过结果' }))
+
+    expect(screen.getByRole('dialog', { name: '未通过结果回填' })).toBeInTheDocument()
+    expect(screen.getByLabelText('LeetCode 结果')).toBeInTheDocument()
+    expect(screen.getAllByText('WA').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('nums=[3,3], target=6')).toBeInTheDocument()
+    expect(screen.getByText('expected [0,1], got []')).toBeInTheDocument()
+    expect(screen.getByText('怀疑哈希表更新顺序')).toBeInTheDocument()
+  })
+
+  it('submits non-AC feedback and starts feedback analysis run', async () => {
+    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
+      id: 811,
+      result: 'wa',
+      event_id: 812,
+      code_snapshot_id: 777,
+      note_md: '',
+      created_at: '2026-05-24T00:00:00Z',
+    })
+    llmRunMock.startRun.mockResolvedValue({ run_id: 813 })
+    const refresh = vi.fn()
+
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          code_attempts: [stubCodeAttempt(777)],
+        }}
+        onSessionRefresh={refresh}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '回填未通过结果' }))
+    fireEvent.change(screen.getByLabelText('失败用例'), {
+      target: { value: 'nums=[3,3], target=6' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledWith(100, {
+        result: 'wa',
+        failed_case_text: 'nums=[3,3], target=6',
+        code_snapshot_id: 777,
+        runtime_ms: null,
+        memory_kb: null,
+      }),
+    )
+    expect(refresh).toHaveBeenCalled()
+    expect(llmRunMock.startRun).toHaveBeenCalledWith('coach_turn', {
+      session_id: 100,
+      user_event_id: 812,
+      trigger: 'submit_feedback',
+    })
   })
 
   it('keeps internal status and structured events out of the chat surface', () => {
@@ -473,6 +553,7 @@ function stubSession(): WorkspacePracticeSession {
       },
     ],
     code_attempts: [],
+    submission_feedbacks: [],
     created_at: '2026-05-22T00:00:00Z',
     updated_at: '2026-05-22T00:00:00Z',
   }
@@ -487,6 +568,7 @@ function stubCodeAttempt(snapshotId: number): WorkspacePracticeSession['code_att
     client_revision: 1,
     code_hash: 'abc123',
     code_preview: 'class Solution:\n    pass',
+    code_text: 'class Solution:\n    pass',
     quality_status: 'pending',
     quality_comment: '',
     created_at: '2026-05-22T00:00:00Z',

@@ -106,6 +106,7 @@ def test_ac_feedback_can_enter_summary() -> None:
         proposed_phase_after="summarize",
         has_code=True,
         has_submission_feedback=True,
+        has_terminal_result=True,
         hint_level="reflection",
         should_reveal_solution=False,
     )
@@ -127,6 +128,22 @@ def test_summary_requires_submission_feedback() -> None:
     assert result.accepted is False
     assert result.phase_after == "analyze_feedback"
     assert result.reason == "submission_feedback_required"
+
+
+def test_summary_requires_terminal_result() -> None:
+    result = guard_transition(
+        phase_before="analyze_feedback",
+        proposed_phase_after="summarize",
+        has_code=True,
+        has_submission_feedback=True,
+        has_terminal_result=False,
+        hint_level="reflection",
+        should_reveal_solution=False,
+    )
+
+    assert result.accepted is False
+    assert result.phase_after == "analyze_feedback"
+    assert result.reason == "terminal_result_required_for_summary"
 
 
 def test_rejects_early_submit_transition() -> None:

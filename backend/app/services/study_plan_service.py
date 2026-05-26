@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from backend.app.models.learning import (
     StudyPlanStage,
     StudyPlanVersion,
 )
+from backend.app.models.practice import PracticeEvent, PracticeSession, SubmissionFeedback
 from backend.app.models.problem import Problem
 from backend.app.schemas.learning import (
     FollowupAnswer,
@@ -36,6 +37,12 @@ from backend.app.services.llm_credential_service import LlmCredentialError
 # 调整计划时，已产生进度的题目会带入新版本，避免 LLM 新结构静默丢掉用户已投入的训练。
 PRESERVED_ITEM_STATUSES = {"completed", "in_progress", "skipped"}
 ACTIVE_VERSION_STATUSES = {"active", "draft"}
+PRACTICE_PROGRESS_EVENT_TYPES = {
+    "user_message",
+    "assistant_message",
+    "code_saved",
+    "submission_feedback",
+}
 GENERATABLE_DRAFT_STATUSES = {
     "collecting_input",
     "asking_followup",
@@ -1465,7 +1472,15 @@ async def _load_payload_version(
     return plan, version
 
 
-def _item_payload(item: StudyPlanItem) -> dict[str, Any]:
+def _item_payload(
+    item: StudyPlanItem,
+    *,
+    practice_status_by_problem_id: dict[int, str],
+) -> dict[str, Any]:
+    status = _effective_item_status(
+        item,
+        practice_status_by_problem_id=practice_status_by_problem_id,
+    )
     return {
         "id": item.id,
         "problem_id": item.problem_id,
@@ -1477,13 +1492,32 @@ def _item_payload(item: StudyPlanItem) -> dict[str, Any]:
         "skill_tags": item.skill_tags_json,
         "suggested_mode": normalise_suggested_mode(item.suggested_mode),
         "recommendation_reason": item.recommendation_reason,
-        "status": item.status,
+        "status": status,
         "order_index": item.order_index,
         "locked": item.locked,
     }
 
 
-def _stage_response(stage: StudyPlanStage) -> dict[str, Any]:
+def _effective_item_status(
+    item: StudyPlanItem,
+    *,
+    practice_status_by_problem_id: dict[int, str],
+) -> str:
+    practice_status = practice_status_by_problem_id.get(item.problem_id)
+    if practice_status == "completed":
+        return "completed"
+    if item.status in {"completed", "locked_completed"}:
+        return item.status
+    if practice_status == "in_progress":
+        return "in_progress"
+    return item.status
+
+
+def _stage_response(
+    stage: StudyPlanStage,
+    *,
+    practice_status_by_problem_id: dict[int, str],
+) -> dict[str, Any]:
     return {
         "id": stage.id,
         "stage_index": stage.stage_index,
@@ -1492,11 +1526,21 @@ def _stage_response(stage: StudyPlanStage) -> dict[str, Any]:
         "focus_tags": stage.focus_tags_json,
         "assessment_criteria": stage.assessment_criteria_json,
         "status": stage.status,
-        "items": [_item_payload(item) for item in _sort_items(stage.items)],
+        "items": [
+            _item_payload(
+                item,
+                practice_status_by_problem_id=practice_status_by_problem_id,
+            )
+            for item in _sort_items(stage.items)
+        ],
     }
 
 
-def _version_response(version: StudyPlanVersion) -> dict[str, Any]:
+def _version_response(
+    version: StudyPlanVersion,
+    *,
+    practice_status_by_problem_id: dict[int, str],
+) -> dict[str, Any]:
     return {
         "id": version.id,
         "version_number": version.version_number,
@@ -1506,10 +1550,77 @@ def _version_response(version: StudyPlanVersion) -> dict[str, Any]:
         "adjustment_summary_md": version.adjustment_summary_md,
         "validation_report": version.validation_report_json,
         "repair_log": version.repair_log_json,
-        "stages": [_stage_response(stage) for stage in _sort_stages(version.stages)],
+        "stages": [
+            _stage_response(
+                stage,
+                practice_status_by_problem_id=practice_status_by_problem_id,
+            )
+            for stage in _sort_stages(version.stages)
+        ],
         "created_at": version.created_at,
         "activated_at": version.activated_at,
     }
+
+
+async def _practice_item_statuses(
+    db: AsyncSession,
+    user: AppUser,
+    *,
+    plan: StudyPlan,
+    version: StudyPlanVersion,
+) -> dict[int, str]:
+    problem_ids = {item.problem_id for item in version.items}
+    if not problem_ids:
+        return {}
+    progress_rank = case(
+        (
+            (PracticeSession.final_result == "ac")
+            | (SubmissionFeedback.result == "ac"),
+            2,
+        ),
+        (PracticeEvent.event_type.in_(PRACTICE_PROGRESS_EVENT_TYPES), 1),
+        else_=0,
+    )
+    result = await db.execute(
+        select(PracticeSession.problem_id, func.max(progress_rank))
+        .outerjoin(
+            SubmissionFeedback,
+            (SubmissionFeedback.session_id == PracticeSession.id)
+            & (SubmissionFeedback.user_id == PracticeSession.user_id),
+        )
+        .outerjoin(
+            PracticeEvent,
+            (PracticeEvent.session_id == PracticeSession.id)
+            & (PracticeEvent.user_id == PracticeSession.user_id),
+        )
+        .where(
+            PracticeSession.user_id == user.id,
+            PracticeSession.study_plan_id == plan.id,
+            PracticeSession.problem_id.in_(problem_ids),
+        )
+        .group_by(PracticeSession.problem_id)
+    )
+    statuses: dict[int, str] = {}
+    for problem_id, rank in result.all():
+        if rank == 2:
+            statuses[int(problem_id)] = "completed"
+        elif rank == 1:
+            statuses[int(problem_id)] = "in_progress"
+    if statuses:
+        completed_count = sum(1 for status in statuses.values() if status == "completed")
+        in_progress_count = sum(
+            1 for status in statuses.values() if status == "in_progress"
+        )
+        logger.info(
+            "study plan item status projected from practice user_id=%s plan_id=%s "
+            "version_id=%s completed_count=%s in_progress_count=%s",
+            user.id,
+            plan.id,
+            version.id,
+            completed_count,
+            in_progress_count,
+        )
+    return statuses
 
 
 async def study_plan_payload(
@@ -1520,6 +1631,14 @@ async def study_plan_payload(
     version_id: int | None = None,
 ) -> dict[str, Any]:
     plan, version = await _load_payload_version(db, user, plan_id, version_id)
+    # 计划项自身只保存计划编辑状态；真实训练进度来自 practice 边界，读取 payload 时投影，
+    # 兼容历史上已记录 AC 但未同步 study_plan_item.status 的数据。
+    practice_status_by_problem_id = await _practice_item_statuses(
+        db,
+        user,
+        plan=plan,
+        version=version,
+    )
     return {
         "id": plan.id,
         "title": plan.title,
@@ -1527,7 +1646,10 @@ async def study_plan_payload(
         "active_version_number": plan.active_version_number,
         "created_at": plan.created_at,
         "updated_at": plan.updated_at,
-        "active_version": _version_response(version),
+        "active_version": _version_response(
+            version,
+            practice_status_by_problem_id=practice_status_by_problem_id,
+        ),
     }
 
 

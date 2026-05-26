@@ -77,10 +77,12 @@ make db-seed
 ```bash
 make lint
 make test
+make eval
 make build
 ```
 
 `make build` 会串行执行后端 lint、mypy、pytest、前端 lint、前端测试和前端生产构建。
+`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis 和 Code Review；RAG Grounding 因 RAG/T6 延后会显示为 `deferred`。
 
 ## 端口
 

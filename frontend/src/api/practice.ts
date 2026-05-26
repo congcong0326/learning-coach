@@ -28,8 +28,22 @@ export type CodeAttempt = {
   client_revision: number
   code_hash: string
   code_preview: string
+  code_text: string
   quality_status: CodeAttemptQuality
   quality_comment: string
+  created_at: string
+}
+
+export type SubmissionFeedbackHistory = {
+  id: number
+  event_id: number | null
+  code_snapshot_id: number | null
+  result: SubmissionResult
+  failed_case_text: string
+  error_message: string
+  note_md: string
+  runtime_ms: number | null
+  memory_kb: number | null
   created_at: string
 }
 
@@ -78,6 +92,7 @@ export type PracticeSession = {
   }
   events: PracticeEvent[]
   code_attempts: CodeAttempt[]
+  submission_feedbacks: SubmissionFeedbackHistory[]
   created_at: string
   updated_at: string
 }
@@ -115,6 +130,7 @@ export type SubmissionFeedbackPayload = {
   result: SubmissionResult
   failed_case_text?: string
   error_message?: string
+  note_md?: string
   runtime_ms?: number | null
   memory_kb?: number | null
 }
@@ -124,6 +140,7 @@ export type SubmissionFeedbackResponse = {
   result: SubmissionResult
   event_id: number
   code_snapshot_id: number | null
+  note_md: string
   created_at: string
 }
 

@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import backend.app.models.llm_run  # noqa: F401
 from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
     GoalCalibrationDraft,
@@ -22,6 +23,7 @@ from backend.app.models.learning import (
     StudyPlanStage,
     StudyPlanVersion,
 )
+from backend.app.models.practice import PracticeEvent, PracticeSession
 from backend.app.models.problem import Base, Problem
 from backend.app.schemas.learning import (
     FollowupAnswer,
@@ -945,6 +947,106 @@ async def test_plan_payload_normalizes_legacy_persisted_suggested_mode_alias(
         StudyPlanResponse.model_validate(payload)
         first_item = payload["active_version"]["stages"][0]["items"][0]
         assert first_item["suggested_mode"] == "mock_interview"
+
+
+@pytest.mark.asyncio
+async def test_plan_payload_projects_practice_progress_into_item_status(
+    learning_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with learning_session_factory() as session:
+        user = await create_learning_user(session)
+        draft = await create_ready_draft(session, user)
+        plan = await confirm_plan_draft(session, user, draft.id)
+        version = await get_active_plan_version(session, user, plan.id)
+        two_sum = item_by_slug(version, "two-sum")
+        valid_parentheses = item_by_slug(version, "valid-parentheses")
+        now = datetime.now(UTC)
+        ac_session = PracticeSession(
+            user_id=user.id,
+            study_plan_id=plan.id,
+            problem_id=two_sum.problem_id,
+            problem_slug=two_sum.problem_slug,
+            origin_plan_version_id=version.id,
+            latest_plan_version_id=version.id,
+            latest_plan_item_id=two_sum.id,
+            training_mode=two_sum.suggested_mode,
+            phase="summarize",
+            status="summarizing",
+            current_hint_level="questioning",
+            visible_hint_gear=0,
+            max_hint_level_used="questioning",
+            attempt_count=1,
+            final_result="ac",
+            profile_snapshot_json={
+                "version": "test",
+                "source": "mock_from_goal_and_plan",
+                "confidence": "low",
+                "overall_level": "new",
+                "preferred_training_mode": "guided",
+            },
+            started_at=now,
+            last_activity_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        coding_session = PracticeSession(
+            user_id=user.id,
+            study_plan_id=plan.id,
+            problem_id=valid_parentheses.problem_id,
+            problem_slug=valid_parentheses.problem_slug,
+            origin_plan_version_id=version.id,
+            latest_plan_version_id=version.id,
+            latest_plan_item_id=valid_parentheses.id,
+            training_mode=valid_parentheses.suggested_mode,
+            phase="review_code",
+            status="active",
+            current_hint_level="questioning",
+            visible_hint_gear=0,
+            max_hint_level_used="questioning",
+            attempt_count=0,
+            final_result="",
+            profile_snapshot_json={
+                "version": "test",
+                "source": "mock_from_goal_and_plan",
+                "confidence": "low",
+                "overall_level": "new",
+                "preferred_training_mode": "guided",
+            },
+            started_at=now,
+            last_activity_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add_all([ac_session, coding_session])
+        await session.flush()
+        session.add(
+            PracticeEvent(
+                session_id=coding_session.id,
+                user_id=user.id,
+                event_type="user_message",
+                role="user",
+                phase=coding_session.phase,
+                intent="describe_idea",
+                content_md="我先写一个栈。",
+                payload_json={},
+                hint_level="questioning",
+                visible_hint_gear=0,
+                created_at=now,
+            )
+        )
+        await session.commit()
+
+        payload = await study_plan_payload(session, user, plan.id)
+        items = {
+            item["problem_slug"]: item
+            for stage in payload["active_version"]["stages"]
+            for item in stage["items"]
+        }
+
+        assert two_sum.status == "pending"
+        assert valid_parentheses.status == "pending"
+        assert items["two-sum"]["status"] == "completed"
+        assert items["valid-parentheses"]["status"] == "in_progress"
 
 
 @pytest.mark.asyncio

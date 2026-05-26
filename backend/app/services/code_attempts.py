@@ -43,10 +43,7 @@ def extract_code_from_message(content_md: str) -> ExtractedCode | None:
             )
     if has_fence_token:
         return None
-    stripped = content_md.strip()
-    if _looks_like_code(stripped):
-        return ExtractedCode(language="python3", code_text=stripped)
-    return None
+    return _extract_unfenced_code_block(content_md)
 
 
 def quality_from_decision(coach_decision: dict[str, Any]) -> tuple[str, str]:
@@ -169,3 +166,67 @@ def _looks_like_code(text: str) -> bool:
     markers = ("class ", "def ", "return ", "for ", "while ", "{", "}", ";")
     marker_hits = sum(1 for line in lines if any(marker in line for marker in markers))
     return marker_hits >= 2
+
+
+def _extract_unfenced_code_block(content_md: str) -> ExtractedCode | None:
+    lines = content_md.strip().splitlines()
+    for start_index, line in enumerate(lines):
+        if not _line_starts_code_block(line):
+            continue
+        candidate_lines: list[str] = []
+        for candidate_line in lines[start_index:]:
+            if not candidate_line.strip():
+                candidate_lines.append(candidate_line)
+                continue
+            if not candidate_lines or _line_can_belong_to_code(candidate_line):
+                candidate_lines.append(candidate_line)
+                continue
+            break
+        code_text = "\n".join(candidate_lines).strip()
+        if _looks_like_code(code_text):
+            return ExtractedCode(language="python3", code_text=code_text)
+    return None
+
+
+def _line_starts_code_block(line: str) -> bool:
+    stripped = line.strip()
+    start_markers = (
+        "class ",
+        "def ",
+        "import ",
+        "from ",
+        "public ",
+        "private ",
+        "protected ",
+        "function ",
+        "const ",
+        "let ",
+        "var ",
+    )
+    return any(stripped.startswith(marker) for marker in start_markers)
+
+
+def _line_can_belong_to_code(line: str) -> bool:
+    stripped = line.strip()
+    if _line_starts_code_block(line):
+        return True
+    if line[:1].isspace():
+        return True
+    code_markers = (
+        "return ",
+        "for ",
+        "while ",
+        "if ",
+        "elif ",
+        "else:",
+        "try:",
+        "except ",
+        "with ",
+        "{",
+        "}",
+    )
+    if any(stripped.startswith(marker) for marker in code_markers):
+        return True
+    # 无围栏输入常混有前后说明，这里只保留连续代码块，
+    # 避免把“这是我的思路”“请帮我看看”等聊天文本写入代码快照。
+    return stripped.endswith(";") or stripped.endswith("{") or stripped.endswith("}")

@@ -56,9 +56,9 @@ PRD v0.3 第一版不再把本地代码运行纳入核心产品流程。用户�
 
 Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态优先交给 TanStack Query。只有当客户端全局状态明显变复杂时再考虑 Redux。
 
-当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
+当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、学习仪表盘、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
-计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传，教练区提供代码尝试记录抽屉和“LeetCode 已 AC”动作。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
 
 ## 后端选型
 
@@ -110,10 +110,13 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/study-plan/items/{item_id}/practice-session`
 - `GET /api/practice-sessions/{session_id}`
 - `GET /api/practice-sessions/{session_id}/events`
+- `GET /api/practice-dashboard`
 - `POST /api/practice-sessions/{session_id}/messages`
 - `POST /api/practice-sessions/{session_id}/code-snapshots`
 - `POST /api/practice-sessions/{session_id}/submission-feedback`
+- `GET /api/practice-sessions/{session_id}/review`
 - `POST /api/practice-sessions/{session_id}/summary`
+- `GET /api/traces`
 
 当前和后续产品功能会放在以下模块边界中：
 
@@ -138,12 +141,14 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.learning_plan_llm`：目标校准追问、学习计划草稿生成、OpenAI Responses client 和 LLM repair loop 编排。
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
-- `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、阶段状态和前端 payload 组装。
+- `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、复盘读取、最小仪表盘指标、阶段状态和前端 payload 组装。
 - `backend.app.services.code_attempts`：从 `review_code` 阶段聊天消息中提取代码、校验 AI 质量判断，并把代码尝试持久化为 `code_snapshot` 与 `practice_event`。
 - `backend.app.services.profile_provider`：面向 AI 教练的安全画像摘要 Provider，隔离长期画像表和 prompt 输入。
-- `backend.app.services.profile_service`：初始画像、画像增量校验、画像快照版本化、单题复盘到画像更新的合并逻辑。
+- `backend.app.services.profile_service`：初始画像、画像增量校验、画像快照版本化、基于训练事实生成单题复盘，并把复盘安全证据合并为画像增量。
+- `backend.app.services.recommendation_service`：基于计划顺序、当前阶段、难度和复盘弱项的规则化下一题推荐，输出推荐原因、下一题第一问和 review 重点。
 - `backend.app.services.coach_guard`：教练阶段跳转和提示档位守卫，防止低提示档位输出完整解法或无证据快进。
-- `backend.app.agents`：LangGraph 编排。
+- `backend.app.services.agent_trace_service`：写入和读取 `agent_trace`，对节点输入输出摘要、守卫原因和最终回复进行截断，避免完整用户输入和完整代码进入 trace。
+- `backend.app.agents`：LangGraph 编排，当前包含 `CoachGraph` 的非 RAG 状态机，记录 `load_training_context`、输入分类、卡点诊断、`retrieve_supporting_context=rag_deferred`、动作决策、守卫、回复生成、持久化和复盘触发节点，并通过 `practice_session.thread_id` 与图 checkpointer 对齐。
 - `backend.app.rag`：知识库导入、切块、检索。
 - `backend.app.tools`：后续工具能力目录。PRD v0.3 第一版优先做 LeetCode 提交结果归因；如后续重新引入本地代码运行，再在此边界内接入。
 
@@ -211,9 +216,11 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；第一版代码主要从 `review_code` 聊天流程自动提取，完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
 - 创建 `submission_feedback`，保存用户确认的 LeetCode 结果；AC 允许不携带运行时间、内存或代码快照，非 AC 反馈仍可关联失败样例摘要、错误信息和代码尝试。
 - 创建 `coach_turn`，保存一次 AI 教练回复的阶段判断、提示档位、守卫结果、上下文快照和 assistant event 关联。
-- 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、错因、画像信号和画像更新建议，且一个 session 只保留一个 summary。
+- 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、提交错因、复杂度/核心思路占位、画像信号和下一题建议，且一个 session 只保留一个 summary。
 - 创建 `user_profile_snapshot`，保存面向 AI 教练读取的长期画像版本，不原地覆盖旧版本。
 - 创建 `profile_delta`，保存一次复盘对长期画像的增量影响；无证据 delta 会被拒绝，接受后生成新的 `user_profile_snapshot`。
+
+学习计划题的展示状态由计划项基础状态和训练事实共同决定。`study_plan_item.status` 继续保存可持久化的计划进度；`practice_session`、`practice_event` 和 `submission_feedback` 是训练事实来源。学习计划 payload 会把已有用户/教练消息、代码尝试或提交反馈投影为 `in_progress`，把 AC 结果投影为 `completed`，以兼容早期只写训练会话但未同步计划项状态的数据。新产生的用户消息、代码尝试和 LeetCode 回填也会同步推进当前计划项状态，避免后续计划调整丢失训练进度。
 
 ### 统一 LLM Run 流式层
 
@@ -223,7 +230,11 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，调用大模型生成结构化教练决策，再经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、低档位泄题拦截、缺代码 review 和缺提交反馈分析仍由后端守卫控制。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；LangGraph、RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
+训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 回填会作为结构化提交反馈进入下一轮 `coach_turn` 上下文，前端也展示提交反馈历史。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；真实 RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
+
+当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
+
+最小 Eval runner 位于 `backend.app.evals.coach_eval_runner`，可通过 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 运行。当前固定样例覆盖 Hint Leakage、Diagnosis 和 Code Review；RAG Grounding 因 RAG/T6 延后而报告为 `deferred`，不接真实检索。
 
 ## Docker Compose 角色
 

@@ -25,6 +25,55 @@ def test_extract_code_from_message_uses_first_fenced_block_that_looks_like_code(
     )
 
 
+def test_extract_code_from_message_uses_direct_code_without_fence() -> None:
+    extracted = extract_code_from_message(
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        seen = {}\n"
+        "        return []"
+    )
+
+    assert extracted is not None
+    assert extracted.language == "python3"
+    assert extracted.code_text == (
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        seen = {}\n"
+        "        return []"
+    )
+
+
+def test_extract_code_from_message_omits_surrounding_chat_without_fence() -> None:
+    extracted = extract_code_from_message(
+        "这是我的解答思路：\n"
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        seen = {}\n"
+        "        for index, num in enumerate(nums):\n"
+        "            complement = target - num\n"
+        "            if complement in seen:\n"
+        "                return [seen[complement], index]\n"
+        "            seen[num] = index\n"
+        "        return []\n"
+        "请帮我看看这版代码还有没有问题。"
+    )
+
+    assert extracted is not None
+    assert extracted.code_text == (
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        seen = {}\n"
+        "        for index, num in enumerate(nums):\n"
+        "            complement = target - num\n"
+        "            if complement in seen:\n"
+        "                return [seen[complement], index]\n"
+        "            seen[num] = index\n"
+        "        return []"
+    )
+    assert "这是我的解答思路" not in extracted.code_text
+    assert "请帮我看看" not in extracted.code_text
+
+
 def test_extract_code_from_message_returns_none_for_fenced_non_code_only() -> None:
     extracted = extract_code_from_message(
         "请不要把整段消息当代码保存：\n"

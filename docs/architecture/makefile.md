@@ -18,7 +18,7 @@
 
 成功标准：
 
-- 输出包含 `bootstrap install lint test build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
+- 输出包含 `bootstrap install lint test eval build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
 
 ### `make bootstrap`
 
@@ -87,6 +87,24 @@ cd frontend && corepack pnpm test
 
 - 后端 pytest 通过。
 - 前端 Vitest 通过。
+
+### `make eval`
+
+执行本地 AI Coach 规则化评估样例。
+
+执行内容：
+
+```bash
+uv run python -m backend.app.evals.coach_eval_runner
+```
+
+成功标准：
+
+- Hint Leakage 样例通过。
+- Diagnosis 样例通过。
+- Code Review 样例通过。
+- RAG Grounding 输出 `deferred`，原因是 RAG/T6 已按当前范围延后。
+- 命令退出码为 0。
 
 ### `make build`
 

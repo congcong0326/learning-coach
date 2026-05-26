@@ -191,6 +191,7 @@ async def test_user_message_creates_practice_event(
     db_session: AsyncSession,
     user: AppUser,
     practice_session: PracticeSession,
+    study_plan_item: StudyPlanItem,
 ) -> None:
     from backend.app.schemas.practice import PracticeMessageCreate
     from backend.app.services.practice_session_service import append_user_message
@@ -205,6 +206,8 @@ async def test_user_message_creates_practice_event(
     assert result.event_id > 0
     assert result.session_id == practice_session.id
     assert result.run_id == 0
+    await db_session.refresh(study_plan_item)
+    assert study_plan_item.status == "in_progress"
 
 
 @pytest.mark.asyncio
@@ -357,6 +360,49 @@ async def test_session_payload_includes_code_attempts(
 
 
 @pytest.mark.asyncio
+async def test_session_payload_includes_full_code_attempt_text(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.schemas.practice import CodeSnapshotCreate
+    from backend.app.services.practice_session_service import (
+        get_session_payload,
+        save_code_snapshot,
+    )
+
+    long_code = (
+        "class Solution:\n"
+        "    def twoSum(self, nums, target):\n"
+        "        seen = {}\n"
+        + "\n".join(f"        # preserve full submitted code line {index}" for index in range(80))
+        + "\n        return []\n"
+    )
+    result = await save_code_snapshot(
+        db_session,
+        user,
+        practice_session.id,
+        CodeSnapshotCreate(
+            language="python3",
+            code_text=long_code,
+            source="manual_save",
+            client_revision=2,
+        ),
+    )
+
+    payload = await get_session_payload(db_session, user, practice_session.id)
+
+    attempt = next(
+        code_attempt
+        for code_attempt in payload.code_attempts
+        if code_attempt.snapshot_id == result.id
+    )
+    assert attempt.code_text == long_code
+    assert "preserve full submitted code line 79" in attempt.code_text
+    assert "preserve full submitted code line 79" not in attempt.code_preview
+
+
+@pytest.mark.asyncio
 async def test_submission_feedback_updates_session_phase(
     db_session: AsyncSession,
     user: AppUser,
@@ -418,10 +464,48 @@ async def test_submission_feedback_without_explicit_snapshot_uses_latest_snapsho
 
 
 @pytest.mark.asyncio
+async def test_session_payload_includes_submission_feedback_history(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.schemas.practice import SubmissionFeedbackCreate
+    from backend.app.services.practice_session_service import (
+        get_session_payload,
+        record_submission_feedback,
+    )
+
+    snapshot_id = await save_python_snapshot(db_session, user, practice_session)
+
+    await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(
+            code_snapshot_id=snapshot_id,
+            result="wa",
+            failed_case_text="nums = [3,3], target = 6",
+            error_message="expected [0,1], got []",
+            note_md="我怀疑是哈希表更新顺序。",
+        ),
+    )
+
+    payload = await get_session_payload(db_session, user, practice_session.id)
+
+    assert len(payload.submission_feedbacks) == 1
+    feedback = payload.submission_feedbacks[0]
+    assert feedback.result == "wa"
+    assert feedback.failed_case_text == "nums = [3,3], target = 6"
+    assert feedback.error_message == "expected [0,1], got []"
+    assert feedback.note_md == "我怀疑是哈希表更新顺序。"
+
+
+@pytest.mark.asyncio
 async def test_ac_submission_feedback_without_code_snapshot_is_allowed(
     db_session: AsyncSession,
     user: AppUser,
     practice_session: PracticeSession,
+    study_plan_item: StudyPlanItem,
 ) -> None:
     from backend.app.schemas.practice import SubmissionFeedbackCreate
     from backend.app.services.practice_session_service import record_submission_feedback
@@ -439,6 +523,8 @@ async def test_ac_submission_feedback_without_code_snapshot_is_allowed(
     assert practice_session.final_result == "ac"
     assert practice_session.phase == "summarize"
     assert practice_session.status == "summarizing"
+    await db_session.refresh(study_plan_item)
+    assert study_plan_item.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -587,6 +673,140 @@ async def test_session_summary_profile_update_creates_summary_delta_and_snapshot
     assert snapshot.created_from_summary_id == summary.id
     assert delta.evidence_json[0]["source"] == "session_summary"
     assert delta.evidence_json[0]["summary_id"] == summary.id
+
+
+@pytest.mark.asyncio
+async def test_session_summary_contains_required_training_facts(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.schemas.practice import SubmissionFeedbackCreate
+    from backend.app.services.practice_session_service import record_submission_feedback
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    snapshot_id = await save_python_snapshot(db_session, user, practice_session)
+    await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(
+            code_snapshot_id=snapshot_id,
+            result="wa",
+            failed_case_text="[3,3], target=6",
+            error_message="expected [0,1]",
+            note_md="怀疑重复元素边界没有处理好。",
+        ),
+    )
+    await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(
+            code_snapshot_id=snapshot_id,
+            result="ac",
+        ),
+    )
+
+    result = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+    summary = await db_session.get(SessionSummary, result.summary_id)
+
+    assert summary is not None
+    assert summary.final_submission_result == "ac"
+    assert "wa" in summary.error_types_json
+    assert summary.review_summary_md
+    assert summary.invariant_summary_md
+    assert summary.complexity_analysis_json["status"] == "needs_user_confirmation"
+    assert summary.profile_signals_json["evidence"]
+    assert summary.next_recommendation_json["reason"]
+    assert summary.next_recommendation_json["first_question_hint"]
+    assert "class Solution" not in str(summary.profile_signals_json)
+
+
+@pytest.mark.asyncio
+async def test_practice_dashboard_returns_completed_stuck_hint_and_profile(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.schemas.practice import SubmissionFeedbackCreate
+    from backend.app.services.practice_session_service import (
+        get_practice_dashboard,
+        record_submission_feedback,
+    )
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    snapshot_id = await save_python_snapshot(db_session, user, practice_session)
+    practice_session.max_hint_level_used = "key_hint"
+    await db_session.commit()
+    await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(
+            code_snapshot_id=snapshot_id,
+            result="wa",
+            failed_case_text="[3,3], target=6",
+        ),
+    )
+    await record_submission_feedback(
+        db_session,
+        user,
+        practice_session.id,
+        SubmissionFeedbackCreate(code_snapshot_id=snapshot_id, result="ac"),
+    )
+    await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+
+    dashboard = await get_practice_dashboard(db_session, user)
+
+    assert dashboard.completed_problem_count == 1
+    assert dashboard.common_stuck_points[0]["stuck_point"] == "submission_wa"
+    assert dashboard.highest_hint_level == "key_hint"
+    assert dashboard.average_hint_gear == 2
+    assert dashboard.recent_profile_summary
+
+
+@pytest.mark.asyncio
+async def test_session_review_returns_summary_profile_and_recommendation(
+    db_session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+) -> None:
+    from backend.app.services.practice_session_service import get_session_review
+    from backend.app.services.profile_service import (
+        persist_session_summary_profile_update,
+    )
+
+    practice_session.final_result = "ac"
+    practice_session.phase = "summarize"
+    practice_session.attempt_count = 2
+    await db_session.commit()
+    summary_result = await persist_session_summary_profile_update(
+        db_session,
+        user_id=user.id,
+        session_id=practice_session.id,
+    )
+
+    review = await get_session_review(db_session, user, practice_session.id)
+
+    assert review.session_id == practice_session.id
+    assert review.summary_id == summary_result.summary_id
+    assert review.final_result == "ac"
+    assert "summarize" in review.phases_visited
+    assert review.next_recommendation["review_focus"]
+    assert review.profile_delta["status"] == "accepted"
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,13 @@
 import {
   CheckCircleFilled,
   CloseCircleFilled,
+  DownOutlined,
   ExclamationCircleOutlined,
   MinusCircleFilled,
+  RightOutlined,
 } from '@ant-design/icons'
-import { Drawer, Empty, List, Space, Tag, Tooltip, Typography } from 'antd'
-import type { ReactElement } from 'react'
+import { Button, Empty, Modal, Space, Tag, Tooltip, Typography } from 'antd'
+import { useState, type ReactElement } from 'react'
 
 import type { CodeAttempt, CodeAttemptQuality } from '../../api/practice'
 
@@ -41,17 +43,56 @@ export function CodeAttemptDrawer({
   attempts,
   onClose,
 }: CodeAttemptDrawerProps) {
+  const [expandedSnapshotIds, setExpandedSnapshotIds] = useState<Set<number>>(new Set())
+
+  function toggleExpanded(snapshotId: number) {
+    setExpandedSnapshotIds((current) => {
+      const next = new Set(current)
+      if (next.has(snapshotId)) {
+        next.delete(snapshotId)
+      } else {
+        next.add(snapshotId)
+      }
+      return next
+    })
+  }
+
+  function resetExpanded() {
+    setExpandedSnapshotIds(new Set())
+  }
+
+  function handleClose() {
+    resetExpanded()
+    onClose()
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      resetExpanded()
+    }
+  }
+
   return (
-    <Drawer title="代码尝试记录" open={open} onClose={onClose} width={520}>
+    <Modal
+      centered
+      className="code-attempt-modal"
+      destroyOnHidden
+      footer={null}
+      afterOpenChange={handleOpenChange}
+      onCancel={handleClose}
+      open={open}
+      title="代码尝试记录"
+      width={760}
+    >
       {attempts.length === 0 ? (
         <Empty description="暂无代码尝试记录" />
       ) : (
-        <List
-          dataSource={attempts}
-          renderItem={(attempt, index) => {
+        <div className="code-attempt-list">
+          {attempts.map((attempt, index) => {
             const meta = statusMeta[attempt.quality_status]
+            const isExpanded = expandedSnapshotIds.has(attempt.snapshot_id)
             return (
-              <List.Item className="code-attempt-item">
+              <article className="code-attempt-item" key={attempt.snapshot_id}>
                 <div className="code-attempt-row">
                   <Space className="code-attempt-heading" wrap>
                     <Typography.Text strong>{`第 ${index + 1} 次尝试`}</Typography.Text>
@@ -71,13 +112,30 @@ export function CodeAttemptDrawer({
                       </Tooltip>
                     ) : null}
                   </Space>
-                  <pre className="code-attempt-preview">{attempt.code_preview}</pre>
+                  <Button
+                    aria-expanded={isExpanded}
+                    className="code-attempt-toggle"
+                    icon={
+                      isExpanded ? (
+                        <DownOutlined aria-hidden="true" />
+                      ) : (
+                        <RightOutlined aria-hidden="true" />
+                      )
+                    }
+                    onClick={() => toggleExpanded(attempt.snapshot_id)}
+                    type="text"
+                  >
+                    完整代码
+                  </Button>
+                  {isExpanded ? (
+                    <pre className="code-attempt-code">{attempt.code_text}</pre>
+                  ) : null}
                 </div>
-              </List.Item>
+              </article>
             )
-          }}
-        />
+          })}
+        </div>
       )}
-    </Drawer>
+    </Modal>
   )
 }

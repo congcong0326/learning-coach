@@ -13,9 +13,11 @@ from backend.app.schemas.llm_run import LlmRunCreateResponse
 from backend.app.schemas.practice import (
     CodeSnapshotCreate,
     CodeSnapshotResponse,
+    PracticeDashboardResponse,
     PracticeEventResponse,
     PracticeMessageCreate,
     PracticeMessageResponse,
+    PracticeSessionReviewResponse,
     PracticeSessionResponse,
     SubmissionFeedbackCreate,
     SubmissionFeedbackResponse,
@@ -23,7 +25,9 @@ from backend.app.schemas.practice import (
 from backend.app.services.practice_session_service import (
     PracticeSessionError,
     append_user_message,
+    get_practice_dashboard,
     get_or_create_session_for_plan_item,
+    get_session_review,
     get_session_payload,
     list_session_events,
     record_submission_feedback,
@@ -73,6 +77,17 @@ async def create_practice_session_from_plan_item_route(
 
 
 @router.get(
+    "/practice-dashboard",
+    response_model=PracticeDashboardResponse,
+)
+async def practice_dashboard_route(
+    user: AppUser = Depends(current_user_dependency),
+    session: AsyncSession = Depends(get_session),
+) -> PracticeDashboardResponse:
+    return await get_practice_dashboard(session, user)
+
+
+@router.get(
     "/practice-sessions/{session_id}",
     response_model=PracticeSessionResponse,
 )
@@ -98,6 +113,21 @@ async def practice_session_events_route(
 ) -> list[PracticeEventResponse]:
     try:
         return await list_session_events(session, user, session_id)
+    except PracticeSessionError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get(
+    "/practice-sessions/{session_id}/review",
+    response_model=PracticeSessionReviewResponse,
+)
+async def practice_session_review_route(
+    session_id: int,
+    user: AppUser = Depends(current_user_dependency),
+    session: AsyncSession = Depends(get_session),
+) -> PracticeSessionReviewResponse:
+    try:
+        return await get_session_review(session, user, session_id)
     except PracticeSessionError as exc:
         raise _http_error(exc) from exc
 

@@ -10,16 +10,20 @@ import {
 
 const studyPlanQueryKey = ['study-plan', 'current']
 
-function statusLabel(status: string) {
-  return (
-    {
-      pending: '未开始',
-      in_progress: '训练中',
-      completed: '已完成',
-      skipped: '已跳过',
-      locked_completed: '已完成',
-    }[status] ?? status
-  )
+const itemStatusMeta: Record<string, { label: string; color: string }> = {
+  pending: { label: '未开始', color: 'default' },
+  in_progress: { label: '编码中', color: 'blue' },
+  completed: { label: '已AC', color: 'green' },
+  skipped: { label: '已跳过', color: 'orange' },
+  locked_completed: { label: '已AC', color: 'green' },
+}
+
+function itemStatusLabel(status: string) {
+  return itemStatusMeta[status]?.label ?? status
+}
+
+function itemStatusColor(status: string) {
+  return itemStatusMeta[status]?.color
 }
 
 export function StudyPlanPage() {
@@ -105,7 +109,9 @@ export function StudyPlanPage() {
                 </div>
                 <Space wrap>
                   <Tag>{item.difficulty}</Tag>
-                  <Tag>{statusLabel(item.status)}</Tag>
+                  <Tag color={itemStatusColor(item.status)}>
+                    {itemStatusLabel(item.status)}
+                  </Tag>
                   {item.status === 'pending' ? (
                     <Button
                       onClick={() =>
