@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { StudyPlan } from '../api/learning'
@@ -33,11 +35,39 @@ vi.mock('../hooks/useLlmRun', () => ({
   },
 }))
 
+function renderDrawer(props: Partial<ComponentProps<typeof ProfilePlanEnrichmentDrawer>> = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ProfilePlanEnrichmentDrawer
+        open
+        plan={stubPlan()}
+        onClose={vi.fn()}
+        onPlanUpdated={vi.fn()}
+        {...props}
+      />
+    </QueryClientProvider>,
+  )
+}
+
 function okJson(payload: unknown) {
   return new Response(JSON.stringify(payload), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function dashboardPayload() {
+  return {
+    completed_problem_count: 4,
+    common_stuck_points: [{ stuck_point: '边界条件', count: 2 }],
+    average_hint_gear: 1.5,
+    highest_hint_level: 'key_hint',
+    recent_profile_summary: '最近 AC 但边界用例需要加强。',
+    profile_snapshot_id: 31,
+  }
 }
 
 describe('ProfilePlanEnrichmentDrawer', () => {
@@ -53,21 +83,21 @@ describe('ProfilePlanEnrichmentDrawer', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders profile summary and enrichment controls', () => {
-    render(
-      <ProfilePlanEnrichmentDrawer
-        open
-        plan={stubPlan()}
-        onClose={vi.fn()}
-        onPlanUpdated={vi.fn()}
-      />,
-    )
+  it('renders profile summary and enrichment controls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson(dashboardPayload())))
+
+    renderDrawer()
 
     expect(screen.getByText('画像与计划补强')).toBeInTheDocument()
     expect(screen.getByText('当前画像与计划基线')).toBeInTheDocument()
     expect(screen.getByText('Java')).toBeInTheDocument()
     expect(screen.getByText('面试冲刺')).toBeInTheDocument()
     expect(screen.getByText('边界条件')).toBeInTheDocument()
+    expect(await screen.findByText('最近画像摘要')).toBeInTheDocument()
+    expect(await screen.findByText('最近 AC 但边界用例需要加强。')).toBeInTheDocument()
+    expect(screen.getByText('完成题数')).toBeInTheDocument()
+    expect(screen.getByText('常见卡点')).toBeInTheDocument()
+    expect(await screen.findByText('边界条件 x2')).toBeInTheDocument()
     expect(screen.getByText('补强生成会调用大模型')).toBeInTheDocument()
     expect(screen.getByLabelText('这次你希望怎么补强？')).toBeInTheDocument()
     expect(screen.getByLabelText('2 题')).toBeInTheDocument()
@@ -79,21 +109,17 @@ describe('ProfilePlanEnrichmentDrawer', () => {
 
   it('generates a preview and confirms the draft', async () => {
     const onPlanUpdated = vi.fn()
-    const fetchMock = vi.fn(async () => okJson({ ...stubPlan(), title: '更新后的计划' }))
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(okJson(dashboardPayload()))
+      .mockResolvedValueOnce(okJson({ ...stubPlan(), title: '更新后的计划' }))
     vi.stubGlobal('fetch', fetchMock)
     llmRunMock.startRun.mockImplementation(async () => {
       llmRunState.onResult?.(stubDraft())
       return { run_id: 99 }
     })
 
-    render(
-      <ProfilePlanEnrichmentDrawer
-        open
-        plan={stubPlan()}
-        onClose={vi.fn()}
-        onPlanUpdated={onPlanUpdated}
-      />,
-    )
+    renderDrawer({ onPlanUpdated })
 
     fireEvent.change(screen.getByLabelText('这次你希望怎么补强？'), {
       target: { value: '想补动态规划和边界条件。' },

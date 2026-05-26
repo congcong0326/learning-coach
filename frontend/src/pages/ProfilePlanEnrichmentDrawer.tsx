@@ -11,8 +11,10 @@ import {
   Tag,
   Typography,
 } from 'antd'
+import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
+import { getPracticeDashboard, type PracticeDashboard } from '../api/dashboard'
 import {
   confirmProfilePlanEnrichment,
   type ProfilePlanEnrichmentDifficulty,
@@ -74,6 +76,13 @@ const gapLevelLabels: Record<string, string> = {
   insufficient_evidence: '证据不足',
 }
 
+const hintLabels: Record<string, string> = {
+  questioning: '追问档',
+  direction: '方向档',
+  key_hint: '关键档',
+  reflection: '复盘档',
+}
+
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : ''
 }
@@ -110,44 +119,110 @@ function draftFromResult(result: unknown): ProfilePlanEnrichmentDraft | null {
   return null
 }
 
-function ProfileBaseline({ plan }: { plan: StudyPlan }) {
+function ProfileBaseline({
+  dashboard,
+  dashboardError,
+  dashboardLoading,
+  plan,
+}: {
+  dashboard: PracticeDashboard | undefined
+  dashboardError: boolean
+  dashboardLoading: boolean
+  plan: StudyPlan
+}) {
   const snapshot = plan.active_version?.target_snapshot ?? {}
   const weaknesses = stringList(snapshot.self_reported_weaknesses)
   const weeklyDays = numberValue(snapshot.weekly_days)
   const sessionMinutes = numberValue(snapshot.session_minutes)
+  const profileSummary =
+    dashboard?.recent_profile_summary ||
+    stringValue(snapshot.recent_profile_summary) ||
+    '当前训练证据还不够，建议先完成 1-2 道计划题后再生成补强题。'
+  const stuckPoints = dashboard?.common_stuck_points ?? []
 
   return (
-    <section aria-label="当前画像与计划基线">
-      <Typography.Title level={4}>当前画像与计划基线</Typography.Title>
-      <Descriptions column={1} size="small" bordered>
-        <Descriptions.Item label="训练语言">
-          {labeledValue(snapshot.preferred_language, languageLabels)}
-        </Descriptions.Item>
-        <Descriptions.Item label="训练目标">
-          {labeledValue(snapshot.goal_type, goalLabels)}
-        </Descriptions.Item>
-        <Descriptions.Item label="当前水平">
-          {labeledValue(snapshot.current_level, levelLabels)}
-        </Descriptions.Item>
-        <Descriptions.Item label="训练方式">
-          {labeledValue(snapshot.training_preference, preferenceLabels)}
-        </Descriptions.Item>
-        <Descriptions.Item label="投入节奏">
-          {weeklyDays && sessionMinutes ? `每周 ${weeklyDays} 天，每次 ${sessionMinutes} 分钟` : '暂无'}
-        </Descriptions.Item>
-        <Descriptions.Item label="自评弱项">
-          {weaknesses.length ? (
-            <Space size={[4, 4]} wrap>
-              {weaknesses.map((weakness) => (
-                <Tag key={weakness}>{weakness}</Tag>
-              ))}
-            </Space>
-          ) : (
-            '暂无'
-          )}
-        </Descriptions.Item>
-      </Descriptions>
-    </section>
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <section aria-label="当前画像仪表盘">
+        <Typography.Title level={4}>当前画像仪表盘</Typography.Title>
+        {dashboardError ? (
+          <Alert showIcon type="warning" message="画像仪表盘加载失败，暂时只展示计划基线。" />
+        ) : null}
+        <div className="dashboard-metric-grid">
+          <div className="dashboard-metric">
+            <span className="dashboard-metric-label">完成题数</span>
+            <strong>
+              {dashboardLoading ? '-' : dashboard?.completed_problem_count ?? 0}
+            </strong>
+          </div>
+          <div className="dashboard-metric">
+            <span className="dashboard-metric-label">平均提示档位</span>
+            <strong>{dashboardLoading ? '-' : dashboard?.average_hint_gear ?? '-'}</strong>
+          </div>
+          <div className="dashboard-metric">
+            <span className="dashboard-metric-label">最高提示档位</span>
+            <strong>
+              {dashboardLoading
+                ? '-'
+                : dashboard?.highest_hint_level
+                  ? hintLabels[dashboard.highest_hint_level] ?? dashboard.highest_hint_level
+                  : '-'}
+            </strong>
+          </div>
+        </div>
+        <Descriptions column={1} size="small" bordered>
+          <Descriptions.Item label="最近画像摘要">
+            <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+              {profileSummary}
+            </Typography.Paragraph>
+          </Descriptions.Item>
+          <Descriptions.Item label="常见卡点">
+            {stuckPoints.length ? (
+              <Space size={[4, 4]} wrap>
+                {stuckPoints.map((item) => (
+                  <Tag key={item.stuck_point}>
+                    {item.stuck_point} x{item.count}
+                  </Tag>
+                ))}
+              </Space>
+            ) : (
+              '暂无'
+            )}
+          </Descriptions.Item>
+        </Descriptions>
+      </section>
+
+      <section aria-label="当前画像与计划基线">
+        <Typography.Title level={4}>当前画像与计划基线</Typography.Title>
+        <Descriptions column={1} size="small" bordered>
+          <Descriptions.Item label="训练语言">
+            {labeledValue(snapshot.preferred_language, languageLabels)}
+          </Descriptions.Item>
+          <Descriptions.Item label="训练目标">
+            {labeledValue(snapshot.goal_type, goalLabels)}
+          </Descriptions.Item>
+          <Descriptions.Item label="当前水平">
+            {labeledValue(snapshot.current_level, levelLabels)}
+          </Descriptions.Item>
+          <Descriptions.Item label="训练方式">
+            {labeledValue(snapshot.training_preference, preferenceLabels)}
+          </Descriptions.Item>
+          <Descriptions.Item label="投入节奏">
+            {weeklyDays && sessionMinutes ? `每周 ${weeklyDays} 天，每次 ${sessionMinutes} 分钟` : '暂无'}
+          </Descriptions.Item>
+          <Descriptions.Item label="自评弱项">
+            {weaknesses.length ? (
+              <Space size={[4, 4]} wrap>
+                {weaknesses.map((weakness) => (
+                  <Tag key={weakness}>{weakness}</Tag>
+                ))}
+              </Space>
+            ) : (
+              '暂无'
+            )}
+          </Descriptions.Item>
+        </Descriptions>
+      </section>
+    </Space>
   )
 }
 
@@ -243,6 +318,12 @@ export function ProfilePlanEnrichmentDrawer({
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState('')
   const [resultError, setResultError] = useState('')
+  const dashboardQuery = useQuery({
+    enabled: open,
+    queryKey: ['practice-dashboard'],
+    queryFn: getPracticeDashboard,
+    retry: false,
+  })
   const initialValues = useMemo<FormValues>(
     () => ({
       user_intent_md: '',
@@ -318,7 +399,12 @@ export function ProfilePlanEnrichmentDrawer({
       width={720}
     >
       <Space direction="vertical" size={18} style={{ width: '100%' }}>
-        <ProfileBaseline plan={plan} />
+        <ProfileBaseline
+          dashboard={dashboardQuery.data}
+          dashboardError={dashboardQuery.isError}
+          dashboardLoading={dashboardQuery.isLoading}
+          plan={plan}
+        />
 
         <Alert
           showIcon
