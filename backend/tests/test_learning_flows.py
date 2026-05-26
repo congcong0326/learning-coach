@@ -1785,11 +1785,14 @@ async def test_coach_summary_does_not_require_user_event_id(
         summary = await session.get(SessionSummary, result["summary_id"])
         assistant = await session.get(PracticeEvent, result["assistant_event_id"])
         delta = await session.get(ProfileDelta, result["profile_delta_id"])
-        snapshot = await session.get(UserProfileSnapshot, result["profile_snapshot_id"])
+        profile_snapshot = await session.get(
+            UserProfileSnapshot,
+            result["profile_snapshot_id"],
+        )
         assert summary is not None
         assert assistant is not None
         assert delta is not None
-        assert snapshot is not None
+        assert profile_snapshot is not None
         assert assistant.content_md == summary_markdown
         assert assistant.content_md == result["reply_md"]
         assert coach_turn.prompt_version == "coach-summary-v1-coaching-review"
@@ -1809,7 +1812,7 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert "当前记录已进入 AC 复盘" not in assistant.content_md
         assert delta.status == "accepted"
         assert delta.summary_id == summary.id
-        assert snapshot.created_from_summary_id == summary.id
+        assert profile_snapshot.created_from_summary_id == summary.id
         assert [event.name for event in events] == [
             "progress",
             "progress",

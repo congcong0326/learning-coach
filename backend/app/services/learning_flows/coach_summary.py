@@ -301,25 +301,31 @@ async def _summary_code_context(
         event_ids=[snapshot.event_id for snapshot in snapshots if snapshot.event_id is not None],
     )
     return [
-        {
-            "snapshot_id": snapshot.id,
-            "language": snapshot.language,
-            "source": snapshot.source,
-            "client_revision": snapshot.client_revision,
-            "code_length": len(snapshot.code_text or ""),
-            "code_hash": snapshot.code_hash,
-            "quality_status": quality_by_event_id.get(snapshot.event_id, {}).get(
-                "quality_status",
-                "",
-            ),
-            "quality_comment": quality_by_event_id.get(snapshot.event_id, {}).get(
-                "quality_comment",
-                "",
-            ),
-            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
-        }
+        _summary_code_snapshot_context(snapshot, quality_by_event_id)
         for snapshot in snapshots
     ]
+
+
+def _summary_code_snapshot_context(
+    snapshot: CodeSnapshot,
+    quality_by_event_id: dict[int, dict[str, str]],
+) -> dict[str, Any]:
+    quality = (
+        quality_by_event_id.get(snapshot.event_id, {})
+        if snapshot.event_id is not None
+        else {}
+    )
+    return {
+        "snapshot_id": snapshot.id,
+        "language": snapshot.language,
+        "source": snapshot.source,
+        "client_revision": snapshot.client_revision,
+        "code_length": len(snapshot.code_text or ""),
+        "code_hash": snapshot.code_hash,
+        "quality_status": quality.get("quality_status", ""),
+        "quality_comment": quality.get("quality_comment", ""),
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+    }
 
 
 async def _summary_feedback_context(
