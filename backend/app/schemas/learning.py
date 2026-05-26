@@ -184,3 +184,64 @@ class PlanAdjustmentRequest(BaseModel):
     ]
     notes: str = Field(default="", max_length=2000)
     preferred_language: PreferredLanguage | None = None
+
+
+ProfilePlanEnrichmentStatus = Literal[
+    "generating",
+    "generated",
+    "confirmed",
+    "rejected",
+    "failed",
+]
+ProfilePlanEnrichmentDifficulty = Literal[
+    "foundational",
+    "keep_current",
+    "stretch",
+]
+
+
+class ProfilePlanEnrichmentRequest(BaseModel):
+    user_intent_md: str = Field(default="", max_length=2000)
+    item_count: Literal[2, 3, 5] = 3
+    difficulty_preference: ProfilePlanEnrichmentDifficulty = "keep_current"
+
+
+class ProfilePlanGapAssessment(BaseModel):
+    gap_level: Literal["low", "medium", "high", "insufficient_evidence"]
+    summary_md: str = Field(default="", max_length=1600)
+
+
+class ProfilePlanEnrichmentItem(BaseModel):
+    problem_id: int
+    problem_slug: str
+    title: str
+    translated_title: str
+    difficulty: str
+    skill_tags: list[str] = Field(default_factory=list)
+    target_stage_id: int
+    target_stage_title: str
+    weakness_targets: list[str] = Field(default_factory=list)
+    recommendation_reason_md: str
+    first_question_hint: str
+    review_focus: str
+    suggested_mode: TrainingMode
+
+
+class ProfilePlanEnrichmentDraftResponse(BaseModel):
+    draft_id: int
+    status: ProfilePlanEnrichmentStatus
+    plan_id: int
+    plan_version_id: int
+    profile_snapshot_id: int | None
+    user_intent_md: str
+    item_count: int
+    difficulty_preference: ProfilePlanEnrichmentDifficulty
+    enrichment_theme: str = ""
+    plan_gap_assessment: ProfilePlanGapAssessment | None = None
+    overall_reason_md: str = ""
+    not_added_reason_md: str = ""
+    items: list[ProfilePlanEnrichmentItem] = Field(default_factory=list)
+    validation_report: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    confirmed_at: datetime | None = None

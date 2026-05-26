@@ -18,6 +18,7 @@ from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
     GoalCalibrationDraft,
     PlanChangeLog,
+    ProfilePlanEnrichmentDraft,
     StudyPlan,
     StudyPlanItem,
     StudyPlanStage,
@@ -59,6 +60,7 @@ def test_learning_tables_are_registered_in_metadata() -> None:
         StudyPlanStage.__tablename__,
         StudyPlanItem.__tablename__,
         PlanChangeLog.__tablename__,
+        ProfilePlanEnrichmentDraft.__tablename__,
     }
 
     assert table_names == {
@@ -68,7 +70,29 @@ def test_learning_tables_are_registered_in_metadata() -> None:
         "study_plan_stage",
         "study_plan_item",
         "plan_change_log",
+        "profile_plan_enrichment_draft",
     }
+
+
+def test_profile_plan_enrichment_draft_has_auditable_context_fields() -> None:
+    columns = ProfilePlanEnrichmentDraft.__table__.columns
+
+    assert "user_id" in columns
+    assert "study_plan_id" in columns
+    assert "study_plan_version_id" in columns
+    assert "profile_snapshot_id" in columns
+    assert "llm_run_id" in columns
+    assert "status" in columns
+    assert "user_intent_md" in columns
+    assert "item_count" in columns
+    assert "difficulty_preference" in columns
+    assert "context_summary_json" in columns
+    assert "candidate_problem_ids_json" in columns
+    assert "model_output_json" in columns
+    assert "validation_report_json" in columns
+    assert "confirmed_item_ids_json" in columns
+    assert "error_summary" in columns
+    assert "confirmed_at" in columns
 
 
 def test_confirmed_version_fk_is_named_and_deferred() -> None:
