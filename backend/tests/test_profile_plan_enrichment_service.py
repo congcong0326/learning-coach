@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -27,6 +27,14 @@ from backend.app.models.practice import (
 )
 from backend.app.models.problem import Base, Problem
 from backend.app.schemas.learning import ProfilePlanEnrichmentRequest
+
+
+def assert_datetime_after(left: datetime, right: datetime) -> None:
+    if left.tzinfo is not None:
+        left = left.replace(tzinfo=None)
+    if right.tzinfo is not None:
+        right = right.replace(tzinfo=None)
+    assert left > right
 
 
 @pytest_asyncio.fixture
@@ -629,10 +637,9 @@ async def test_confirm_enrichment_draft_appends_items_to_current_stage(
     from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
 
     user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
-    previous_plan_updated_at = plan.updated_at
-    assert previous_plan_updated_at is not None
-    if previous_plan_updated_at.tzinfo is not None:
-        previous_plan_updated_at = previous_plan_updated_at.replace(tzinfo=None)
+    previous_plan_updated_at = datetime(2020, 1, 1, tzinfo=UTC)
+    plan.updated_at = previous_plan_updated_at
+    await db_session.commit()
 
     response = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
 
@@ -654,9 +661,7 @@ async def test_confirm_enrichment_draft_appends_items_to_current_stage(
     assert refreshed_plan is not None
     refreshed_plan_updated_at = refreshed_plan.updated_at
     assert refreshed_plan_updated_at is not None
-    if refreshed_plan_updated_at.tzinfo is not None:
-        refreshed_plan_updated_at = refreshed_plan_updated_at.replace(tzinfo=None)
-    assert refreshed_plan_updated_at >= previous_plan_updated_at
+    assert_datetime_after(refreshed_plan_updated_at, previous_plan_updated_at)
 
     log_result = await db_session.execute(
         select(PlanChangeLog).where(
@@ -811,9 +816,10 @@ async def test_confirm_enrichment_draft_rolls_back_partial_item_write(
         confirm_enrichment_draft,
     )
 
-    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    user, plan, version, draft = await create_generated_enrichment_draft(db_session)
     user_id = user.id
     plan_id = plan.id
+    version_id = version.id
     draft_id = draft.id
 
     def fail_change_log(*args, **kwargs) -> None:
@@ -827,6 +833,29 @@ async def test_confirm_enrichment_draft_rolls_back_partial_item_write(
 
     with pytest.raises(RuntimeError):
         await confirm_enrichment_draft(db_session, user, plan_id, draft_id)
+
+    item_count = await db_session.scalar(
+        select(func.count())
+        .select_from(StudyPlanItem)
+        .where(
+            StudyPlanItem.version_id == version_id,
+            StudyPlanItem.problem_slug == "contains-duplicate",
+        )
+    )
+    log_count = await db_session.scalar(
+        select(func.count())
+        .select_from(PlanChangeLog)
+        .where(
+            PlanChangeLog.version_id == version_id,
+            PlanChangeLog.change_type == "profile_enrichment_added",
+        )
+    )
+    generated_draft = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
+    assert item_count == 0
+    assert log_count == 0
+    assert generated_draft is not None
+    assert generated_draft.status == "generated"
+    assert generated_draft.confirmed_item_ids_json == []
 
     # 恢复 helper 后确认同一 draft 仍可成功，证明前一次已经回滚了 item 写入和 draft 状态。
     monkeypatch.setattr(
@@ -861,14 +890,38 @@ async def test_confirm_enrichment_draft_rejects_integrity_conflict(
     from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
     from backend.app.services.study_plan_service import StudyPlanError
 
-    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    user, plan, version, draft = await create_generated_enrichment_draft(db_session)
+    version_id = version.id
+    draft_id = draft.id
 
-    async def fail_flush() -> None:
+    async def fail_commit() -> None:
         raise IntegrityError("insert", {}, Exception("unique conflict"))
 
-    monkeypatch.setattr(db_session, "flush", fail_flush)
+    monkeypatch.setattr(db_session, "commit", fail_commit)
 
     with pytest.raises(StudyPlanError) as exc_info:
         await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
 
     assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+    item_count = await db_session.scalar(
+        select(func.count())
+        .select_from(StudyPlanItem)
+        .where(
+            StudyPlanItem.version_id == version_id,
+            StudyPlanItem.problem_slug == "contains-duplicate",
+        )
+    )
+    log_count = await db_session.scalar(
+        select(func.count())
+        .select_from(PlanChangeLog)
+        .where(
+            PlanChangeLog.version_id == version_id,
+            PlanChangeLog.change_type == "profile_enrichment_added",
+        )
+    )
+    refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
+    assert item_count == 0
+    assert log_count == 0
+    assert refreshed is not None
+    assert refreshed.status == "generated"
+    assert refreshed.confirmed_item_ids_json == []
