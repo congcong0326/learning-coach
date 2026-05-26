@@ -1,4 +1,4 @@
-import { Alert, Button, Input, Space, Tag, Typography, message as toast } from 'antd'
+import { Alert, Button, Input, Space, Typography, message as toast } from 'antd'
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
@@ -8,13 +8,10 @@ import remarkGfm from 'remark-gfm'
 import {
   sendPracticeMessage,
   submitLeetCodeFeedback,
-  type SubmissionFeedbackResponse,
-  type SubmissionResult,
   type UserIntent,
 } from '../../api/practice'
 import { useLlmRun } from '../../hooks/useLlmRun'
 import { CodeAttemptDrawer } from './CodeAttemptDrawer'
-import { SubmissionFeedbackModal } from './SubmissionFeedbackModal'
 import type { WorkspacePracticeSession } from './types'
 
 type CoachPanelProps = {
@@ -23,15 +20,6 @@ type CoachPanelProps = {
 }
 
 const REQUEST_HINT_MESSAGE = '我需要一个提示。'
-const submissionResultLabels: Record<SubmissionResult, string> = {
-  ac: 'AC',
-  wa: 'WA',
-  tle: 'TLE',
-  re: 'RE',
-  mle: 'MLE',
-  ce: 'CE',
-  unknown: 'UNKNOWN',
-}
 
 type PendingUserMessage = {
   clientId: string
@@ -73,12 +61,10 @@ export function CoachPanel({
   const [isSending, setIsSending] = useState(false)
   const [pendingUserMessages, setPendingUserMessages] = useState<PendingUserMessage[]>([])
   const [attemptDrawerOpen, setAttemptDrawerOpen] = useState(false)
-  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
   const [isMarkingAccepted, setIsMarkingAccepted] = useState(false)
   const llmRun = useLlmRun({ onResult: onSessionRefresh })
   const runStatusText = llmRun.isRunning && llmRun.stage ? llmRun.stage : ''
   const codeAttempts = session.code_attempts ?? []
-  const submissionFeedbacks = session.submission_feedbacks ?? []
   const latestAttemptSnapshotId =
     codeAttempts.length > 0
       ? codeAttempts[codeAttempts.length - 1].snapshot_id
@@ -197,26 +183,12 @@ export function CoachPanel({
     }
   }
 
-  async function handleNonAcFeedbackSubmitted(feedback: SubmissionFeedbackResponse) {
-    onSessionRefresh()
-    try {
-      await llmRun.startRun('coach_turn', {
-        session_id: session.id,
-        user_event_id: feedback.event_id,
-        trigger: 'submit_feedback',
-      })
-    } catch {
-      toast.error('提交结果已保存，教练分析启动失败，请稍后重试')
-    }
-  }
-
   return (
     <div className="workspace-pane coach-panel">
       <div className="workspace-pane-heading">
         <h3>教练</h3>
         <Space wrap>
           <Button onClick={() => setAttemptDrawerOpen(true)}>代码尝试记录</Button>
-          <Button onClick={() => setFeedbackModalOpen(true)}>回填未通过结果</Button>
           <Button
             type="primary"
             onClick={handleAccepted}
@@ -246,46 +218,12 @@ export function CoachPanel({
       </section>
 
       <section className="coach-section">
-        {submissionFeedbacks.length > 0 ? (
-          <div className="coach-feedback-history">
-            <Typography.Text strong>提交反馈历史</Typography.Text>
-            <div className="coach-feedback-list">
-              {submissionFeedbacks.map((feedback) => (
-                <article className="coach-feedback-item" key={feedback.id}>
-                  <Space wrap>
-                    <Tag>{submissionResultLabels[feedback.result]}</Tag>
-                    {feedback.code_snapshot_id ? (
-                      <Typography.Text type="secondary">
-                        {`代码快照 #${feedback.code_snapshot_id}`}
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                  {feedback.failed_case_text ? (
-                    <Typography.Paragraph className="coach-feedback-text">
-                      {feedback.failed_case_text}
-                    </Typography.Paragraph>
-                  ) : null}
-                  {feedback.error_message ? (
-                    <Typography.Paragraph className="coach-feedback-text" type="secondary">
-                      {feedback.error_message}
-                    </Typography.Paragraph>
-                  ) : null}
-                  {feedback.note_md ? (
-                    <Typography.Paragraph className="coach-feedback-text">
-                      {feedback.note_md}
-                    </Typography.Paragraph>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          </div>
-        ) : null}
         <div className="coach-message-box">
           <Input.TextArea
             aria-label="发送给教练"
             value={content}
             onChange={(event) => setContent(event.target.value)}
-            placeholder="描述你的思路、卡点、代码问题或 LeetCode 结果"
+            placeholder="粘贴你的思路、代码、LeetCode 报错或失败用例，教练会判断下一步"
             rows={4}
           />
           <Space wrap>
@@ -321,13 +259,6 @@ export function CoachPanel({
         open={attemptDrawerOpen}
         attempts={codeAttempts}
         onClose={() => setAttemptDrawerOpen(false)}
-      />
-      <SubmissionFeedbackModal
-        codeSnapshotId={latestAttemptSnapshotId}
-        onClose={() => setFeedbackModalOpen(false)}
-        onSubmitted={handleNonAcFeedbackSubmitted}
-        open={feedbackModalOpen}
-        sessionId={session.id}
       />
     </div>
   )

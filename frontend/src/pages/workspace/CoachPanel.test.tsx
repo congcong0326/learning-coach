@@ -78,94 +78,19 @@ describe('CoachPanel', () => {
     toastMock.error.mockReset()
   })
 
-  it('shows chat-first controls and code attempt entry', () => {
+  it('shows natural chat controls without a non-AC feedback form', () => {
     render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
 
     expect(screen.getByRole('button', { name: '代码尝试记录' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'LeetCode 已 AC' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '回填未通过结果' })).toBeInTheDocument()
-    expect(screen.getByLabelText('发送给教练')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '回填未通过结果' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('发送给教练')).toHaveAttribute(
+      'placeholder',
+      '粘贴你的思路、代码、LeetCode 报错或失败用例，教练会判断下一步',
+    )
+    expect(screen.queryByText('提交反馈历史')).not.toBeInTheDocument()
     expect(screen.queryByText('画像来源')).not.toBeInTheDocument()
     expect(screen.queryByText('事件时间线')).not.toBeInTheDocument()
-  })
-
-  it('opens non-AC feedback modal and renders feedback history', () => {
-    render(
-      <CoachPanel
-        session={{
-          ...stubSession(),
-          submission_feedbacks: [
-            {
-              id: 801,
-              event_id: 802,
-              code_snapshot_id: 777,
-              result: 'wa',
-              failed_case_text: 'nums=[3,3], target=6',
-              error_message: 'expected [0,1], got []',
-              note_md: '怀疑哈希表更新顺序',
-              runtime_ms: null,
-              memory_kb: null,
-              created_at: '2026-05-24T00:00:00Z',
-            },
-          ],
-        }}
-        onSessionRefresh={vi.fn()}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: '回填未通过结果' }))
-
-    expect(screen.getByRole('dialog', { name: '未通过结果回填' })).toBeInTheDocument()
-    expect(screen.getByLabelText('LeetCode 结果')).toBeInTheDocument()
-    expect(screen.getAllByText('WA').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('nums=[3,3], target=6')).toBeInTheDocument()
-    expect(screen.getByText('expected [0,1], got []')).toBeInTheDocument()
-    expect(screen.getByText('怀疑哈希表更新顺序')).toBeInTheDocument()
-  })
-
-  it('submits non-AC feedback and starts feedback analysis run', async () => {
-    practiceApiMock.submitLeetCodeFeedback.mockResolvedValue({
-      id: 811,
-      result: 'wa',
-      event_id: 812,
-      code_snapshot_id: 777,
-      note_md: '',
-      created_at: '2026-05-24T00:00:00Z',
-    })
-    llmRunMock.startRun.mockResolvedValue({ run_id: 813 })
-    const refresh = vi.fn()
-
-    render(
-      <CoachPanel
-        session={{
-          ...stubSession(),
-          code_attempts: [stubCodeAttempt(777)],
-        }}
-        onSessionRefresh={refresh}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: '回填未通过结果' }))
-    fireEvent.change(screen.getByLabelText('失败用例'), {
-      target: { value: 'nums=[3,3], target=6' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }))
-
-    await waitFor(() =>
-      expect(practiceApiMock.submitLeetCodeFeedback).toHaveBeenCalledWith(100, {
-        result: 'wa',
-        failed_case_text: 'nums=[3,3], target=6',
-        code_snapshot_id: 777,
-        runtime_ms: null,
-        memory_kb: null,
-      }),
-    )
-    expect(refresh).toHaveBeenCalled()
-    expect(llmRunMock.startRun).toHaveBeenCalledWith('coach_turn', {
-      session_id: 100,
-      user_event_id: 812,
-      trigger: 'submit_feedback',
-    })
   })
 
   it('keeps internal status and structured events out of the chat surface', () => {
@@ -327,6 +252,36 @@ describe('CoachPanel', () => {
       user_event_id: 601,
       trigger: 'unknown',
     })
+  })
+
+  it('sends pasted LeetCode WA feedback through the normal chat path', async () => {
+    practiceApiMock.sendPracticeMessage.mockResolvedValue({
+      event_id: 614,
+      run_id: 0,
+      session_id: 100,
+    })
+    llmRunMock.startRun.mockResolvedValue({ run_id: 615 })
+
+    render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('发送给教练'), {
+      target: { value: '这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /发\s*送/ }))
+
+    await waitFor(() =>
+      expect(practiceApiMock.sendPracticeMessage).toHaveBeenCalledWith(100, {
+        intent: 'unknown',
+        content_md: '这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。',
+        requested_hint_level: null,
+      }),
+    )
+    expect(llmRunMock.startRun).toHaveBeenCalledWith('coach_turn', {
+      session_id: 100,
+      user_event_id: 614,
+      trigger: 'unknown',
+    })
+    expect(practiceApiMock.submitLeetCodeFeedback).not.toHaveBeenCalled()
   })
 
   it('adds my message to the chat immediately while the send request is in flight', async () => {
