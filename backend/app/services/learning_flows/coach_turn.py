@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -84,6 +85,7 @@ CHAT_FEEDBACK_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ce", ("ce", "compile error", "compilation error", "编译错误", "语法错误")),
     ("unknown", ("unknown", "未通过", "没通过", "not accepted")),
 )
+CHAT_FEEDBACK_STATUS_CODES = {"wa", "tle", "re", "mle", "ce"}
 
 logger = logging.getLogger(__name__)
 
@@ -853,9 +855,22 @@ def _chat_feedback_context(
 
 def _chat_feedback_result(normalized_content: str) -> str | None:
     for result, keywords in CHAT_FEEDBACK_RESULT_KEYWORDS:
-        if any(keyword in normalized_content for keyword in keywords):
-            return result
+        for keyword in keywords:
+            if _chat_feedback_keyword_matches(normalized_content, keyword):
+                return result
     return None
+
+
+def _chat_feedback_keyword_matches(normalized_content: str, keyword: str) -> bool:
+    if keyword in CHAT_FEEDBACK_STATUS_CODES:
+        return (
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])",
+                normalized_content,
+            )
+            is not None
+        )
+    return keyword in normalized_content
 
 
 def _submission_feedback_context(

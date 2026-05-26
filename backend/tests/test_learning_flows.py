@@ -34,6 +34,7 @@ from backend.app.services.learning_flows.goal_plan import (
     run_goal_plan_generate,
 )
 from backend.app.services.learning_flows.coach_turn import (
+    _chat_feedback_result,
     _parse_coach_json,
     run_coach_turn,
 )
@@ -50,6 +51,11 @@ def progress_messages(events: list[LlmRunEvent]) -> list[str]:
         for event in events
         if event.name == "progress"
     ]
+
+
+def test_chat_feedback_result_treats_not_accepted_as_unknown() -> None:
+    assert _chat_feedback_result("not accepted") == "unknown"
+    assert _chat_feedback_result("没通过") == "unknown"
 
 
 class FakePlanProvider:
