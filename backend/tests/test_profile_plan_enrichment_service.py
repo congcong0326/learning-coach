@@ -629,6 +629,10 @@ async def test_confirm_enrichment_draft_appends_items_to_current_stage(
     from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
 
     user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    previous_plan_updated_at = plan.updated_at
+    assert previous_plan_updated_at is not None
+    if previous_plan_updated_at.tzinfo is not None:
+        previous_plan_updated_at = previous_plan_updated_at.replace(tzinfo=None)
 
     response = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
 
@@ -645,6 +649,14 @@ async def test_confirm_enrichment_draft_appends_items_to_current_stage(
     assert refreshed is not None
     assert refreshed.status == "confirmed"
     assert len(refreshed.confirmed_item_ids_json) == 1
+
+    refreshed_plan = await db_session.get(StudyPlan, plan.id)
+    assert refreshed_plan is not None
+    refreshed_plan_updated_at = refreshed_plan.updated_at
+    assert refreshed_plan_updated_at is not None
+    if refreshed_plan_updated_at.tzinfo is not None:
+        refreshed_plan_updated_at = refreshed_plan_updated_at.replace(tzinfo=None)
+    assert refreshed_plan_updated_at >= previous_plan_updated_at
 
     log_result = await db_session.execute(
         select(PlanChangeLog).where(
@@ -741,6 +753,104 @@ async def test_confirm_enrichment_draft_rejects_duplicate_existing_slug(
     refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
     assert refreshed is not None
     assert refreshed.status == "generated"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_duplicate_draft_slug(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    item_payload = draft.model_output_json["items"][0]
+    draft.model_output_json = {
+        **draft.model_output_json,
+        "items": [item_payload, item_payload],
+    }
+    await db_session.commit()
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_paid_only_problem(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    draft.model_output_json = {
+        **draft.model_output_json,
+        "items": [
+            {
+                **draft.model_output_json["items"][0],
+                "problem_slug": "premium-only",
+            }
+        ],
+    }
+    await db_session.commit()
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rolls_back_partial_item_write(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import (
+        _add_enrichment_change_log,
+        confirm_enrichment_draft,
+    )
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    user_id = user.id
+    plan_id = plan.id
+    draft_id = draft.id
+
+    def fail_change_log(*args, **kwargs) -> None:
+        del args, kwargs
+        raise RuntimeError("change log failed")
+
+    monkeypatch.setattr(
+        "backend.app.services.profile_plan_enrichment._add_enrichment_change_log",
+        fail_change_log,
+    )
+
+    with pytest.raises(RuntimeError):
+        await confirm_enrichment_draft(db_session, user, plan_id, draft_id)
+
+    # 恢复 helper 后确认同一 draft 仍可成功，证明前一次已经回滚了 item 写入和 draft 状态。
+    monkeypatch.setattr(
+        "backend.app.services.profile_plan_enrichment._add_enrichment_change_log",
+        _add_enrichment_change_log,
+    )
+    refreshed_user = await db_session.get(AppUser, user_id)
+    assert refreshed_user is not None
+    response = await confirm_enrichment_draft(
+        db_session,
+        refreshed_user,
+        plan_id,
+        draft_id,
+    )
+    added = [
+        item
+        for stage in response["active_version"]["stages"]
+        for item in stage["items"]
+        if item["problem_slug"] == "contains-duplicate"
+    ]
+    assert len(added) == 1
+    refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
+    assert refreshed is not None
+    assert refreshed.status == "confirmed"
 
 
 @pytest.mark.asyncio
