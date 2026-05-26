@@ -22,6 +22,7 @@ from backend.app.services.profile_plan_enrichment import (
     persist_generated_draft,
     validate_model_output,
 )
+from backend.app.services.study_plan_service import StudyPlanError
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,10 @@ async def run_profile_plan_enrichment(
         model_name,
     )
     await _progress(publish, run.id, "building_context", "正在整理画像、计划和训练事实")
-    context = await build_enrichment_context(session, user, plan_id, request)
+    try:
+        context = await build_enrichment_context(session, user, plan_id, request)
+    except StudyPlanError as exc:
+        raise LearningFlowError(exc.detail) from None
     await _progress(publish, run.id, "calling_model", "正在调用大模型生成补强题预览")
     model_output = await _model_output(provider, model_name=model_name, context=context)
     report, normalized_items = validate_model_output(model_output, context)

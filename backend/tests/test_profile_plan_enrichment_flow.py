@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from backend.app.models.learning import ProfilePlanEnrichmentDraft
 from backend.app.models.llm_run import LlmRun
+from backend.app.services.learning_flows.goal_plan import LearningFlowError
 from backend.app.services.learning_flows.profile_plan_enrichment import (
     run_profile_plan_enrichment,
 )
@@ -108,3 +109,47 @@ async def test_profile_plan_enrichment_handler_persists_generated_draft(
     assert draft.status == "generated"
     assert draft.candidate_problem_ids_json
     assert draft.model_output_json["items"][0]["problem_slug"] == "contains-duplicate"
+
+
+@pytest.mark.asyncio
+async def test_profile_plan_enrichment_handler_maps_missing_plan_to_flow_error(
+    db_session: Any,  # noqa: F811
+) -> None:
+    user, _plan, _version = await create_user_plan(db_session)
+    run = LlmRun(
+        id=100,
+        user_id=user.id,
+        kind="profile_plan_enrichment",
+        input_json={
+            "plan_id": 9999,
+            "user_intent_md": "补哈希表边界",
+            "item_count": 2,
+            "difficulty_preference": "keep_current",
+        },
+        related_type="study_plan",
+        related_id=9999,
+        status="running",
+        stage="selecting_credential",
+        display_text_md="",
+        result_json={},
+        error_code="",
+        error_message="",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db_session.add(run)
+    await db_session.commit()
+    await db_session.refresh(run)
+    provider = FakeProvider("{}")
+
+    with pytest.raises(LearningFlowError) as exc_info:
+        await run_profile_plan_enrichment(
+            db_session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=lambda event: None,
+        )
+
+    assert exc_info.value.code == "active_study_plan_not_found"
