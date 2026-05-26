@@ -95,7 +95,9 @@ function stringList(value: unknown) {
   if (!Array.isArray(value)) {
     return []
   }
-  return value.filter((item): item is string => typeof item === 'string' && item.trim())
+  return value.filter(
+    (item): item is string => typeof item === 'string' && item.trim().length > 0,
+  )
 }
 
 function labeledValue(value: unknown, labels: Record<string, string>) {
