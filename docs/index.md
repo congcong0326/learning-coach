@@ -48,6 +48,8 @@
 - `docs/prd/prd.md`：产品定位、目标用户、核心训练流程、AI Coach 产品边界和 MVP 范围。
 - `docs/prd/ai-coach-workbench-prd.md`：做题工作台 Chat-first AI 教练区专题 PRD，说明上方题面 / 下方教练区布局、画像驱动起手提问、训练状态跳转、LeetCode AC 动作、聊天式非 AC 反馈识别与后台摘要，以及复盘沉淀。
 - `docs/prd/ai-coach-user-profile-prd.md`：面向 AI 教练决策的用户画像专题 PRD，说明画像服务边界、画像指标、画像更新流程、证据追溯和教练策略建议。
+- `docs/prd/rag-prd.md`：RAG 教练知识库专题 PRD，说明为什么使用 RAG、服务哪些产品效果、材料如何转化为教练卡片、提示档位过滤、计划增强和验收标准。
+- `docs/prd/rag-materials.md`：RAG 候选材料清单，说明优先引入的算法、刷题、面试表达材料及入库标注建议。
 - `docs/project-todolist.md`：从 PRD 拆分出的总体阶段、当前进度和后续任务追踪。
 
 ## 代码变更后的文档维护映射

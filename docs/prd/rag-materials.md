@@ -8,6 +8,9 @@
 | 调研日期 | 2026-05-19 |
 | 使用方式 | 用户自行下载或整理到本地，系统后续只负责解析、清洗、切块和抽取教练卡片 |
 | 入库目标 | 优先抽取 concept_card、pattern_card、invariant_card、common_bug_card、hint_card、interview_expression_card |
+| 产品要求 | RAG 使用目标、提示档位边界和验收标准见 `docs/prd/rag-prd.md` |
+
+本清单只说明材料候选和入库优先级。材料进入系统后应优先被抽取为可过滤的教练卡片，不应默认作为完整原文或完整题解注入 AI 上下文。
 
 ------
 

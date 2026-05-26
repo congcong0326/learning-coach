@@ -18,8 +18,8 @@
 | 当前主线任务 | T11：画像驱动计划补强 |
 | 当前任务状态 | 已完成 |
 | 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、画像驱动计划补强、计划题训练会话、Chat-first 工作台、自动代码尝试记录、LeetCode AC 动作、聊天式非 AC 反馈识别、复盘读取页、最小学习仪表盘、非 RAG `CoachGraph`、真实 Trace 页和规则化 Eval runner |
-| 下一步建议 | 保持 RAG/T6 延后；后续再评估持久化 checkpoint、RAG 教练知识库、更完整画像趋势图和 T8 面试模拟 |
-| 第一版闭环状态 | 非 RAG Agent 工程闭环已具备：计划题进入工作台、AI 教练结构化诊断、非 AC 反馈分析、AC 后复盘画像、画像驱动计划补强、下一题推荐、Trace 和 Eval 均有实现与测试；RAG/T6 明确 deferred |
+| 下一步建议 | RAG/T6 产品需求已补充，工程实现仍延后；后续再评估持久化 checkpoint、RAG 教练知识库、更完整画像趋势图和 T8 面试模拟 |
+| 第一版闭环状态 | 非 RAG Agent 工程闭环已具备：计划题进入工作台、AI 教练结构化诊断、非 AC 反馈分析、AC 后复盘画像、画像驱动计划补强、下一题推荐、Trace 和 Eval 均有实现与测试；RAG/T6 产品需求见 `docs/prd/rag-prd.md`，工程实现仍为 deferred |
 
 ## 总体阶段进度
 
@@ -58,7 +58,7 @@
 **完成标准**
 
 - 非 RAG 第一版学习闭环可按端到端路径演示。
-- RAG/T6 未实现，所有相关节点、eval 和文档均标记为 `deferred`。
+- RAG/T6 工程实现未完成，相关图节点和 eval 仍标记为 `deferred`；产品需求已补充到 `docs/prd/rag-prd.md`。
 - 验证命令至少包含后端测试、前端测试、前端类型检查和 eval。
 
 **最近验证命令**
@@ -278,10 +278,12 @@
 | 前置任务 | B0；接入教练上下文依赖 T3、T4 |
 | 当前阶段 | 阶段 4 |
 | 主要交付 | `knowledge_doc`、`knowledge_chunk`、语料导入、embedding、检索、hint 过滤、`retrieval_trace` |
+| 产品需求依据 | `docs/prd/rag-prd.md`、`docs/prd/rag-materials.md` |
 | 完成日期 | 未完成，RAG/T6 已明确 deferred |
 
 **待办**
 
+- [x] 明确 RAG 产品定位、目标效果、材料使用方式、提示档位边界和验收标准。
 - [ ] 设计 `knowledge_doc`、`knowledge_chunk`。
 - [ ] 设计本地语料 source manifest 格式。
 - [ ] 实现 Markdown/txt 第一批导入。
