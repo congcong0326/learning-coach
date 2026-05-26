@@ -23,6 +23,12 @@ MAX_RECENT_SUMMARIES = 5
 MAX_REPAIR_ATTEMPTS = 2
 ENRICHMENT_REASON_PREFIX = "画像补强："
 DIFFICULTY_RANK = {"Easy": 1, "Medium": 2, "Hard": 3}
+HINT_LEVEL_RANK = {
+    "questioning": 0,
+    "direction": 1,
+    "key_hint": 2,
+    "reflection": 3,
+}
 
 _VALID_TRAINING_MODES = {"guided", "independent", "mock_interview"}
 _TOKEN_SPLIT_RE = re.compile(r"[\s,，。；;、.!?！？:：()（）\[\]{}<>《》\"'`]+")
@@ -291,8 +297,11 @@ def _training_facts(summaries: list[SessionSummary]) -> dict[str, Any]:
     common_stuck: dict[str, int] = {}
     highest_hint_level = ""
     for summary in summaries:
-        if summary.max_hint_level_used:
-            highest_hint_level = highest_hint_level or summary.max_hint_level_used
+        if HINT_LEVEL_RANK.get(summary.max_hint_level_used, -1) > HINT_LEVEL_RANK.get(
+            highest_hint_level,
+            -1,
+        ):
+            highest_hint_level = summary.max_hint_level_used
         for point in _string_list(summary.main_stuck_points_json):
             common_stuck[point] = common_stuck.get(point, 0) + 1
 

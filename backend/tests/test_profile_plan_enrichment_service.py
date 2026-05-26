@@ -233,6 +233,41 @@ async def create_user_plan(
     return user, plan, version
 
 
+def validation_context(*, item_count: int = 3) -> dict[str, object]:
+    return {
+        "user_request": {
+            "item_count": item_count,
+            "difficulty_preference": "keep_current",
+        },
+        "current_plan": {
+            "existing_problem_slugs": ["two-sum"],
+            "current_stage": {"id": 10, "title": "哈希表基础"},
+        },
+        "candidate_problems": [
+            {
+                "problem_id": 2,
+                "slug": "contains-duplicate",
+                "title": "Contains Duplicate",
+                "translated_title": "存在重复元素",
+                "difficulty": "Easy",
+                "tags": ["array", "hash-table"],
+                "is_paid_only": False,
+                "match_reasons": ["边界"],
+            },
+            {
+                "problem_id": 3,
+                "slug": "valid-anagram",
+                "title": "Valid Anagram",
+                "translated_title": "有效的字母异位词",
+                "difficulty": "Easy",
+                "tags": ["hash-table", "string"],
+                "is_paid_only": False,
+                "match_reasons": ["哈希表"],
+            },
+        ],
+    }
+
+
 @pytest.mark.asyncio
 async def test_build_candidate_pool_excludes_existing_and_paid_only(
     db_session: AsyncSession,
@@ -282,28 +317,247 @@ def test_validate_model_output_rejects_slug_outside_candidate_pool() -> None:
         ],
         "not_added_reason_md": "",
     }
-    context = {
-        "user_request": {"item_count": 3, "difficulty_preference": "keep_current"},
-        "current_plan": {
-            "existing_problem_slugs": ["two-sum"],
-            "current_stage": {"id": 10, "title": "哈希表基础"},
-        },
-        "candidate_problems": [
-            {
-                "problem_id": 2,
-                "slug": "contains-duplicate",
-                "title": "Contains Duplicate",
-                "translated_title": "存在重复元素",
-                "difficulty": "Easy",
-                "tags": ["array", "hash-table"],
-                "is_paid_only": False,
-                "match_reasons": ["边界"],
-            }
-        ],
-    }
+    context = validation_context()
 
     report, items = validate_model_output(output, context)
 
     assert report["valid"] is False
     assert "candidate_slug_not_allowed:not-in-candidates" in report["issues"]
+    assert items == []
+
+
+def test_training_facts_reports_highest_hint_level_by_rank() -> None:
+    from backend.app.services.profile_plan_enrichment import _training_facts
+
+    now = datetime.now(UTC)
+    summaries = [
+        SessionSummary(
+            session_id=1,
+            user_id=1,
+            problem_id=1,
+            result="completed",
+            final_submission_result="ac",
+            training_mode="independent",
+            phases_visited_json=[],
+            transitions_json=[],
+            main_stuck_points_json=[],
+            error_types_json=[],
+            max_hint_level_used="direction",
+            avg_hint_level=None,
+            attempt_count=1,
+            time_spent_seconds=None,
+            complexity_analysis_json={},
+            invariant_summary_md="",
+            review_summary_md="",
+            profile_signals_json={},
+            profile_update_suggestion_json={},
+            next_recommendation_json={},
+            created_at=now,
+            updated_at=now,
+        ),
+        SessionSummary(
+            session_id=2,
+            user_id=1,
+            problem_id=2,
+            result="completed",
+            final_submission_result="wa",
+            training_mode="guided",
+            phases_visited_json=[],
+            transitions_json=[],
+            main_stuck_points_json=[],
+            error_types_json=[],
+            max_hint_level_used="reflection",
+            avg_hint_level=None,
+            attempt_count=1,
+            time_spent_seconds=None,
+            complexity_analysis_json={},
+            invariant_summary_md="",
+            review_summary_md="",
+            profile_signals_json={},
+            profile_update_suggestion_json={},
+            next_recommendation_json={},
+            created_at=now,
+            updated_at=now,
+        ),
+    ]
+
+    facts = _training_facts(summaries)
+
+    assert facts["highest_hint_level"] == "reflection"
+
+
+def test_validate_model_output_normalizes_valid_candidate_item() -> None:
+    from backend.app.services.profile_plan_enrichment import validate_model_output
+
+    output = {
+        "enrichment_theme": "哈希表补强",
+        "plan_gap_assessment": {
+            "gap_level": "medium",
+            "summary_md": "需要补边界。",
+        },
+        "overall_reason_md": "追加哈希表边界题。",
+        "items": [
+            {
+                "problem_slug": "contains-duplicate",
+                "target_stage_key": "stage-current",
+                "weakness_targets": ["边界"],
+                "difficulty": "Medium",
+                "recommendation_reason_md": "练习重复元素。",
+                "first_question_hint": "先列边界。",
+                "review_focus": "检查重复元素。",
+                "suggested_mode": "unknown",
+            }
+        ],
+        "not_added_reason_md": "",
+    }
+    context = validation_context()
+
+    report, items = validate_model_output(output, context)
+
+    assert report == {
+        "valid": True,
+        "issues": [],
+        "candidate_count": 2,
+        "item_count": 1,
+    }
+    assert items == [
+        {
+            "problem_id": 2,
+            "problem_slug": "contains-duplicate",
+            "title": "Contains Duplicate",
+            "translated_title": "存在重复元素",
+            "difficulty": "Easy",
+            "skill_tags": ["array", "hash-table"],
+            "target_stage_id": 10,
+            "target_stage_title": "哈希表基础",
+            "weakness_targets": ["边界"],
+            "recommendation_reason_md": "练习重复元素。",
+            "first_question_hint": "先列边界。",
+            "review_focus": "检查重复元素。",
+            "suggested_mode": "independent",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw_items", "item_count", "expected_issue"),
+    [
+        (
+            [
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "练习重复元素。",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                },
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "再次推荐。",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                },
+            ],
+            3,
+            "duplicate_slug:contains-duplicate",
+        ),
+        (
+            [
+                {
+                    "problem_slug": "two-sum",
+                    "recommendation_reason_md": "练习重复元素。",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                }
+            ],
+            1,
+            "existing_slug_recommended:two-sum",
+        ),
+        (
+            [
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                }
+            ],
+            1,
+            "missing_recommendation_reason:contains-duplicate",
+        ),
+        (
+            [
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "练习重复元素。",
+                    "first_question_hint": "",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                }
+            ],
+            1,
+            "missing_first_question_hint:contains-duplicate",
+        ),
+        (
+            [
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "练习重复元素。",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "",
+                    "suggested_mode": "independent",
+                }
+            ],
+            1,
+            "missing_review_focus:contains-duplicate",
+        ),
+        (
+            [
+                {
+                    "problem_slug": "contains-duplicate",
+                    "recommendation_reason_md": "练习重复元素。",
+                    "first_question_hint": "先列边界。",
+                    "review_focus": "检查重复元素。",
+                    "suggested_mode": "independent",
+                },
+                {
+                    "problem_slug": "valid-anagram",
+                    "recommendation_reason_md": "练习字符串哈希。",
+                    "first_question_hint": "先说明计数结构。",
+                    "review_focus": "检查长度不同。",
+                    "suggested_mode": "independent",
+                },
+            ],
+            1,
+            "item_count_exceeded",
+        ),
+    ],
+)
+def test_validate_model_output_rejects_invalid_candidate_items(
+    raw_items: list[dict[str, str]],
+    item_count: int,
+    expected_issue: str,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import validate_model_output
+
+    context = validation_context(item_count=item_count)
+    output = {
+        "enrichment_theme": "哈希表补强",
+        "plan_gap_assessment": {
+            "gap_level": "medium",
+            "summary_md": "需要补边界。",
+        },
+        "overall_reason_md": "追加哈希表边界题。",
+        "items": raw_items,
+        "not_added_reason_md": "",
+    }
+
+    report, items = validate_model_output(output, context)
+
+    assert report["valid"] is False
+    assert expected_issue in report["issues"]
+    assert report["item_count"] == 0
     assert items == []
