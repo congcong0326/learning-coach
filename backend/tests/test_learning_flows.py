@@ -58,6 +58,12 @@ def test_chat_feedback_result_treats_not_accepted_as_unknown() -> None:
     assert _chat_feedback_result("没通过") == "unknown"
 
 
+def test_chat_feedback_result_ignores_plain_discussion_keywords() -> None:
+    assert _chat_feedback_result("我期望用双指针维护窗口") is None
+    assert _chat_feedback_result("这题时间限制是多少") is None
+    assert _chat_feedback_result("数组越界这个概念我还不熟") is None
+
+
 class FakePlanProvider:
     def __init__(self, final_payload: dict[str, Any] | None = None) -> None:
         self.calls: list[dict[str, str]] = []
@@ -1373,6 +1379,81 @@ async def test_coach_turn_treats_pasted_non_ac_chat_as_feedback(
             "error_message": "这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。",
             "note_md": "",
         }
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_truncates_pasted_non_ac_chat_feedback_in_model_context(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        tail_marker = "TAIL_SHOULD_NOT_REACH_MODEL_OR_TRACE"
+        long_feedback = (
+            "这版 WA，失败用例是 nums=[3,3], target=6，输出是 []，"
+            + "x" * 2000
+            + tail_marker
+        )
+        practice_session, user_event, snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="review_code",
+            user_intent="unknown",
+            content_md=long_feedback,
+            with_code=True,
+        )
+        assert snapshot is not None
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="unknown",
+        )
+        provider = FakeCoachProvider(
+            {
+                "phase_after": "analyze_feedback",
+                "diagnosed_stuck_point": "chat_submission_feedback_analysis",
+                "next_action": "analyze_submission_feedback",
+                "reply_md": "先看这个 WA 的失败用例。",
+                "should_reveal_solution": False,
+            }
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        model_context = json.loads(provider.calls[0]["input_text"])
+        truncated_feedback = long_feedback[:1200]
+        assert model_context["user_message"]["content_md"] == truncated_feedback
+        assert len(model_context["user_message"]["content_md"]) <= 1200
+        assert model_context["latest_submission_feedback"]["failed_case_text"] == truncated_feedback
+        assert model_context["latest_submission_feedback"]["error_message"] == truncated_feedback
+        assert tail_marker not in provider.calls[0]["input_text"]
+
+        traces = (
+            await session.execute(
+                select(AgentTrace).where(AgentTrace.session_id == str(practice_session.id))
+            )
+        ).scalars().all()
+        trace_payload = json.dumps(
+            [
+                {
+                    "tool_calls": trace.tool_calls,
+                }
+                for trace in traces
+            ],
+            ensure_ascii=False,
+        )
+        assert tail_marker not in trace_payload
 
 
 @pytest.mark.asyncio

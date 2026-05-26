@@ -47,6 +47,8 @@ SUMMARY_SAFE_REPLY = (
 )
 DIAGNOSED_STUCK_POINT_MAX_LENGTH = 120
 NEXT_ACTION_MAX_LENGTH = 60
+CHAT_FEEDBACK_TEXT_MAX_LENGTH = 1200
+USER_MESSAGE_TEXT_MAX_LENGTH = 4000
 COACH_REPLY_INSTRUCTIONS = _COACH_TURN_PROMPT.instructions
 COACH_PHASES = {
     "understand_problem",
@@ -78,14 +80,31 @@ TARGET_CODE_LANGUAGE_LABELS = {
     "java": "Java",
 }
 CHAT_FEEDBACK_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("wa", ("wa", "wrong answer", "答案错误", "输出是", "期望")),
-    ("tle", ("tle", "time limit exceeded", "超时", "时间限制")),
-    ("re", ("re", "runtime error", "运行错误", "越界", "空指针")),
-    ("mle", ("mle", "memory limit exceeded", "内存超限")),
-    ("ce", ("ce", "compile error", "compilation error", "编译错误", "语法错误")),
+    ("wa", ("wrong answer", "答案错误")),
+    ("tle", ("time limit exceeded", "超时")),
+    ("re", ("runtime error", "运行错误")),
+    ("mle", ("memory limit exceeded", "内存超限")),
+    ("ce", ("compile error", "compilation error", "编译错误", "语法错误")),
     ("unknown", ("unknown", "未通过", "没通过", "not accepted")),
 )
-CHAT_FEEDBACK_STATUS_CODES = {"wa", "tle", "re", "mle", "ce"}
+CHAT_FEEDBACK_STATUS_CODE_RESULTS = {
+    "wa": "wa",
+    "tle": "tle",
+    "re": "re",
+    "mle": "mle",
+    "ce": "ce",
+}
+CHAT_FEEDBACK_WA_DIFF_TERMS = ("输出是", "期望", "expected", "got")
+CHAT_FEEDBACK_WA_CONTEXT_TERMS = (
+    "失败用例",
+    "用例",
+    "test case",
+    "case",
+    "expected",
+    "got",
+    "实际",
+    "输出",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +730,10 @@ def _coach_input_context(
         "trigger_context": trigger_context,
         "user_message": {
             "intent": _user_intent(user_event),
-            "content_md": user_event.content_md if user_event is not None else "",
+            "content_md": _user_message_content_context(
+                user_event,
+                chat_feedback_context=chat_feedback_context,
+            ),
             "hint_level": user_event.hint_level if user_event is not None else None,
         },
         "user_submitted_code": user_submitted_code,
@@ -842,7 +864,7 @@ def _chat_feedback_context(
     result = _chat_feedback_result(normalized)
     if result is None:
         return None
-    clipped = content[:1200]
+    clipped = content[:CHAT_FEEDBACK_TEXT_MAX_LENGTH]
     return {
         "source": "chat_extracted",
         "result": result,
@@ -854,23 +876,50 @@ def _chat_feedback_context(
 
 
 def _chat_feedback_result(normalized_content: str) -> str | None:
+    for status_code, result in CHAT_FEEDBACK_STATUS_CODE_RESULTS.items():
+        if _chat_feedback_status_code_matches(normalized_content, status_code):
+            return result
     for result, keywords in CHAT_FEEDBACK_RESULT_KEYWORDS:
         for keyword in keywords:
-            if _chat_feedback_keyword_matches(normalized_content, keyword):
+            if keyword in normalized_content:
                 return result
+    if _chat_feedback_looks_like_wa_diff(normalized_content):
+        return "wa"
     return None
 
 
-def _chat_feedback_keyword_matches(normalized_content: str, keyword: str) -> bool:
-    if keyword in CHAT_FEEDBACK_STATUS_CODES:
-        return (
-            re.search(
-                rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])",
-                normalized_content,
-            )
-            is not None
+def _chat_feedback_status_code_matches(normalized_content: str, status_code: str) -> bool:
+    return (
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(status_code)}(?![a-z0-9])",
+            normalized_content,
         )
-    return keyword in normalized_content
+        is not None
+    )
+
+
+def _chat_feedback_looks_like_wa_diff(normalized_content: str) -> bool:
+    # “期望/输出”也常出现在解法讨论里，只有和失败用例或 expected/got 结构共现时才视为提交反馈。
+    diff_terms = {
+        term for term in CHAT_FEEDBACK_WA_DIFF_TERMS if term in normalized_content
+    }
+    context_terms = {
+        term for term in CHAT_FEEDBACK_WA_CONTEXT_TERMS if term in normalized_content
+    }
+    return bool(diff_terms and context_terms and len(diff_terms | context_terms) >= 2)
+
+
+def _user_message_content_context(
+    user_event: PracticeEvent | None,
+    *,
+    chat_feedback_context: dict[str, Any] | None,
+) -> str:
+    if user_event is None:
+        return ""
+    if chat_feedback_context is not None:
+        failed_case_text = chat_feedback_context.get("failed_case_text")
+        return failed_case_text if isinstance(failed_case_text, str) else ""
+    return user_event.content_md[:USER_MESSAGE_TEXT_MAX_LENGTH]
 
 
 def _submission_feedback_context(
@@ -887,9 +936,9 @@ def _submission_feedback_context(
         "source": feedback.source,
         "result": feedback.result,
         "code_snapshot_id": feedback.code_snapshot_id,
-        "failed_case_text": feedback.failed_case_text[:1200],
-        "error_message": feedback.error_message[:1200],
-        "note_md": note_md[:1200],
+        "failed_case_text": feedback.failed_case_text[:CHAT_FEEDBACK_TEXT_MAX_LENGTH],
+        "error_message": feedback.error_message[:CHAT_FEEDBACK_TEXT_MAX_LENGTH],
+        "note_md": note_md[:CHAT_FEEDBACK_TEXT_MAX_LENGTH],
     }
 
 
