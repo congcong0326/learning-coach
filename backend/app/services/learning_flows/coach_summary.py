@@ -196,7 +196,7 @@ async def _summary_input_context(
             user_id=user_id,
             session_id=summary.session_id,
         ),
-        "feedback": await _summary_feedback_context(
+        "submission_feedbacks": await _summary_feedback_context(
             session,
             user_id=user_id,
             session_id=summary.session_id,
@@ -386,32 +386,44 @@ def _summary_reply_markdown(summary: SessionSummary) -> str:
         (_result_label(item) for item in summary.error_types_json),
         empty_text="本次没有记录未通过提交错误类型。",
     )
+    complexity_text = _truncate(summary.invariant_summary_md, 220)
+    if not complexity_text:
+        complexity_text = (
+            "复盘时可以继续补充核心状态、边界覆盖方式，以及时间和空间复杂度。"
+        )
+    review_text = _truncate(summary.review_summary_md, 220)
+    if not review_text:
+        review_text = "本次代码 review 证据较少，后续可以多记录关键分支和边界用例。"
 
     return "\n\n".join(
         [
             "## 单题复盘",
-            "\n".join(
-                [
-                    f"- **本题最终结果**：{final_result}",
-                    f"- **当前训练模式**：{summary.training_mode}",
-                    f"- **提交/回填次数**：{summary.attempt_count}",
-                    f"- **使用过的最高提示档位**：{_hint_label(summary.max_hint_level_used)}",
-                    f"- **经历阶段**：{phases}",
-                ]
-            ),
-            "### 主要卡点\n" + stuck_points,
-            "### 代码与提交反馈\n" + error_types,
             (
-                "### 复杂度与核心思路\n"
-                "- 当前记录已进入 AC 复盘，但还没有稳定记录你的复杂度口述。\n"
-                "- 下一步建议你用自己的话补充：核心状态维护什么、为什么能覆盖所有候选答案、时间和空间复杂度是多少。"
+                "### 你做得好的地方\n"
+                f"- 本题最终结果是 {final_result}，说明你已经完成本轮训练闭环。\n"
+                f"- 你经历了这些训练阶段：{phases}。"
             ),
             (
-                "### 画像信号\n"
+                "### 需要补强的地方\n"
+                f"{stuck_points}\n"
+                f"- 最高提示档位是 {_hint_label(summary.max_hint_level_used)}，"
+                "下次可以更早主动说出卡住的位置。"
+            ),
+            (
+                "### 本题关键思路\n"
+                f"- {complexity_text}\n"
+                f"- 代码和提交反馈线索：{review_text}\n"
+                f"{error_types}"
+            ),
+            (
+                "### 下次遇到同类题\n"
+                + _next_recommendation(summary)
+            ),
+            (
+                "### 画像更新\n"
                 f"- 本题结果={final_result}，最高提示档位={_hint_label(summary.max_hint_level_used)}，"
                 f"尝试次数={summary.attempt_count}。"
             ),
-            "### 下一步训练建议\n" + _next_recommendation(summary),
         ]
     )
 

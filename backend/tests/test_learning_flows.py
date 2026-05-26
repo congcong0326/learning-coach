@@ -1758,6 +1758,8 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert summary_context["summary"]["final_submission_result"] == "ac"
         assert summary_context["summary"]["attempt_count"] == 1
         assert summary_context["events"][0]["role"] in {"user", "assistant"}
+        assert "feedback" not in summary_context
+        assert summary_context["submission_feedbacks"][0]["result"] == "accepted"
         coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
         assert coach_turn is not None
         assert coach_turn.user_event_id is None
@@ -1794,6 +1796,72 @@ async def test_coach_summary_does_not_require_user_event_id(
             "正在校验教练阶段",
             "正在保存教练回复",
         ]
+
+
+@pytest.mark.asyncio
+async def test_coach_summary_fallback_uses_coach_review_headings(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, _user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="analyze_feedback",
+            user_intent="request_summary",
+        )
+        practice_session.final_result = "ac"
+        practice_session.attempt_count = 1
+        practice_session.status = "summarizing"
+        session.add(
+            SubmissionFeedback(
+                session_id=practice_session.id,
+                user_id=user.id,
+                source="leetcode_manual",
+                result="accepted",
+                runtime_ms=12,
+                memory_kb=1024,
+                failed_case_text="",
+                error_message="",
+                raw_feedback_json={"status": "Accepted"},
+                submitted_at=datetime.now(UTC),
+                created_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            kind="coach_summary",
+            trigger="request_summary",
+        )
+        events: list[LlmRunEvent] = []
+
+        async def publish(event: LlmRunEvent) -> None:
+            events.append(event)
+
+        result = await run_coach_summary(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakeFollowupProvider("unused"),
+            model_name="",
+            publish=publish,
+        )
+
+        reply_md = result["reply_md"]
+        assert "## 单题复盘" in reply_md
+        assert "### 你做得好的地方" in reply_md
+        assert "### 需要补强的地方" in reply_md
+        assert "### 本题关键思路" in reply_md
+        assert "### 下次遇到同类题" in reply_md
+        assert "### 画像更新" in reply_md
+        assert "回填次数" not in reply_md
+        assert "当前记录已进入 AC 复盘" not in reply_md
+        assistant = await session.get(PracticeEvent, result["assistant_event_id"])
+        assert assistant is not None
+        assert assistant.content_md == reply_md
 
 
 @pytest.mark.asyncio
