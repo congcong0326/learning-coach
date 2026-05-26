@@ -1728,23 +1728,41 @@ async def test_coach_summary_does_not_require_user_event_id(
         async def publish(event: LlmRunEvent) -> None:
             events.append(event)
 
+        summary_markdown = (
+            "## 单题复盘\n\n"
+            "### 你做得好的地方\n"
+            "- 你最终完成 AC，说明这题的主流程已经跑通。\n\n"
+            "### 需要补强的地方\n"
+            "- 本轮对话没有留下完整复杂度口述，下次需要先说清楚状态维护。\n\n"
+            "### 本题关键思路\n"
+            "- 哈希表题要说清楚表里保存什么，以及当前数如何查补数。\n\n"
+            "### 下次遇到同类题\n"
+            "- 先用 30 秒口述状态定义、边界和复杂度，再进入代码。\n\n"
+            "### 画像更新\n"
+            "- 本题确认你能完成哈希表 Easy 题，但复杂度表达证据不足。"
+        )
+        provider = FakeFollowupProvider(summary_markdown)
         result = await run_coach_summary(
             session,
             user_id=user.id,
             run=run,
-            provider=FakePlanProvider(),
+            provider=provider,
             model_name="gpt-test",
             publish=publish,
         )
 
+        assert provider.calls
+        assert "教练式单题复盘" in provider.calls[-1]["instructions"]
+        summary_context = json.loads(provider.calls[-1]["input_text"])
+        assert summary_context["session"]["session_id"] == practice_session.id
+        assert summary_context["summary"]["final_submission_result"] == "ac"
+        assert summary_context["summary"]["attempt_count"] == 1
+        assert summary_context["events"][0]["role"] in {"user", "assistant"}
         coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
         assert coach_turn is not None
         assert coach_turn.user_event_id is None
         assert coach_turn.phase_after == "summarize"
         assert coach_turn.next_action == "summarize_session"
-        assert "AC" in result["reply_md"]
-        assert "复盘" in result["reply_md"]
-        assert "先说明你的暴力解法" not in result["reply_md"]
         assert result["summary_status"] == "completed"
         summary = await session.get(SessionSummary, result["summary_id"])
         assistant = await session.get(PracticeEvent, result["assistant_event_id"])
@@ -1754,11 +1772,12 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert assistant is not None
         assert delta is not None
         assert snapshot is not None
-        assert assistant.content_md.startswith("## 单题复盘")
+        assert assistant.content_md == summary_markdown
         assert assistant.content_md == result["reply_md"]
-        assert "**本题最终结果**：AC" in assistant.content_md
-        assert "**使用过的最高提示档位**" in assistant.content_md
-        assert "### 下一步训练建议" in assistant.content_md
+        assert "### 你做得好的地方" in assistant.content_md
+        assert "### 需要补强的地方" in assistant.content_md
+        assert "回填次数" not in assistant.content_md
+        assert "当前记录已进入 AC 复盘" not in assistant.content_md
         assert delta.status == "accepted"
         assert delta.summary_id == summary.id
         assert snapshot.created_from_summary_id == summary.id

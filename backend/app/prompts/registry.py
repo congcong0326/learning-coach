@@ -60,6 +60,11 @@ _PROMPT_DEFINITIONS: dict[str, _PromptDefinition] = {
             "should_reveal_solution",
         ),
     ),
+    "coach_summary": _PromptDefinition(
+        version="coach-summary-v1-coaching-review",
+        resource_name="coach_summary.v1.md",
+        output_fields=("markdown",),
+    ),
 }
 
 

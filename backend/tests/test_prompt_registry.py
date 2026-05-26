@@ -14,6 +14,16 @@ def test_get_prompt_loads_resource_text() -> None:
     assert "reply_md" in prompt.instructions
 
 
+def test_get_prompt_loads_coach_summary_resource() -> None:
+    prompt = get_prompt("coach_summary")
+
+    assert prompt.key == "coach_summary"
+    assert prompt.version == "coach-summary-v1-coaching-review"
+    assert "教练式单题复盘" in prompt.instructions
+    assert "你做得好的地方" in prompt.instructions
+    assert "需要补强的地方" in prompt.instructions
+
+
 def test_prompt_registry_exposes_goal_plan_prompt_contracts() -> None:
     draft = get_prompt("goal_plan_draft")
     followup = get_prompt("goal_followup")
