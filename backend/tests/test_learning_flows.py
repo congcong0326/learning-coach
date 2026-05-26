@@ -39,6 +39,8 @@ from backend.app.services.learning_flows.coach_turn import (
     run_coach_turn,
 )
 from backend.app.services.learning_flows.coach_summary import (
+    _MAX_SUMMARY_CODE_ATTEMPTS,
+    _MAX_SUMMARY_FEEDBACKS,
     _looks_like_coach_summary,
     run_coach_summary,
 )
@@ -1694,12 +1696,18 @@ async def test_coach_summary_does_not_require_user_event_id(
 ) -> None:
     async with session_factory() as session:
         user = await create_user(session)
-        practice_session, _user_event, _snapshot = await create_practice_session_with_user_event(
+        short_message = "边界我还没想清楚。"
+        short_code = "print(1)"
+        practice_session, _user_event, snapshot = await create_practice_session_with_user_event(
             session,
             user,
             phase="analyze_feedback",
             user_intent="request_summary",
+            content_md=short_message,
+            with_code=True,
         )
+        assert snapshot is not None
+        snapshot.code_text = short_code
         practice_session.final_result = "ac"
         practice_session.attempt_count = 1
         practice_session.status = "summarizing"
@@ -1761,6 +1769,11 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert summary_context["summary"]["final_submission_result"] == "ac"
         assert summary_context["summary"]["attempt_count"] == 1
         assert summary_context["events"][0]["role"] in {"user", "assistant"}
+        assert short_message not in provider.calls[-1]["input_text"]
+        assert short_code not in provider.calls[-1]["input_text"]
+        assert "content_md" not in summary_context["events"][0]
+        assert "code_preview" not in summary_context["code_attempts"][0]
+        assert "code_text" not in summary_context["code_attempts"][0]
         assert "feedback" not in summary_context
         assert summary_context["submission_feedbacks"][0]["result"] == "accepted"
         coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
@@ -1810,6 +1823,92 @@ async def test_coach_summary_does_not_require_user_event_id(
             "正在校验教练阶段",
             "正在保存教练回复",
         ]
+
+
+@pytest.mark.asyncio
+async def test_coach_summary_context_limits_code_attempts_and_feedbacks(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="analyze_feedback",
+            user_intent="request_summary",
+            content_md="请做本题复盘。",
+            with_code=True,
+        )
+        assert snapshot is not None
+        practice_session.final_result = "wa"
+        practice_session.attempt_count = _MAX_SUMMARY_CODE_ATTEMPTS + 4
+        practice_session.status = "summarizing"
+        base_time = datetime.now(UTC)
+        for idx in range(_MAX_SUMMARY_CODE_ATTEMPTS + 4):
+            extra_snapshot = CodeSnapshot(
+                session_id=practice_session.id,
+                user_id=user.id,
+                event_id=user_event.id,
+                language="python3",
+                code_text=f"print({idx + 10})",
+                code_hash=f"hash-{idx}",
+                source="before_review",
+                client_revision=idx + 2,
+                created_at=base_time,
+            )
+            session.add(extra_snapshot)
+        for idx in range(_MAX_SUMMARY_FEEDBACKS + 5):
+            session.add(
+                SubmissionFeedback(
+                    session_id=practice_session.id,
+                    user_id=user.id,
+                    event_id=user_event.id,
+                    code_snapshot_id=snapshot.id,
+                    source="leetcode_manual",
+                    result="wrong_answer",
+                    runtime_ms=12 + idx,
+                    memory_kb=1024 + idx,
+                    failed_case_text=f"case-{idx}",
+                    error_message=f"error-{idx}",
+                    raw_feedback_json={"status": "Wrong Answer", "note_md": f"note-{idx}"},
+                    submitted_at=base_time,
+                    created_at=base_time,
+                )
+            )
+        await session.commit()
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            kind="coach_summary",
+            trigger="request_summary",
+        )
+        provider = FakeFollowupProvider(
+            "## 单题复盘\n\n"
+            "### 你做得好的地方\n- 有持续尝试。\n\n"
+            "### 需要补强的地方\n- 需要收敛提交证据。\n\n"
+            "### 本题关键思路\n- 先定义状态。\n\n"
+            "### 下次遇到同类题\n- 固定复盘模板。\n\n"
+            "### 画像更新\n- 需要继续训练。"
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        result = await run_coach_summary(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assert result["summary_status"] == "completed"
+        assert provider.calls
+        summary_context = json.loads(provider.calls[-1]["input_text"])
+        assert len(summary_context["code_attempts"]) <= _MAX_SUMMARY_CODE_ATTEMPTS
+        assert len(summary_context["submission_feedbacks"]) <= _MAX_SUMMARY_FEEDBACKS
 
 
 @pytest.mark.asyncio

@@ -28,10 +28,9 @@ logger = logging.getLogger(__name__)
 _COACH_SUMMARY_PROMPT = get_prompt("coach_summary")
 COACH_SUMMARY_PROMPT_VERSION = _COACH_SUMMARY_PROMPT.version
 COACH_SUMMARY_INSTRUCTIONS = _COACH_SUMMARY_PROMPT.instructions
-_MAX_SUMMARY_EVENT_CONTENT = 800
 _MAX_SUMMARY_EVENTS = 16
-_MAX_CODE_ATTEMPT_PREVIEW = 240
-_MAX_SUMMARY_FEEDBACK_TEXT = 800
+_MAX_SUMMARY_CODE_ATTEMPTS = 8
+_MAX_SUMMARY_FEEDBACKS = 8
 _REQUIRED_COACH_SUMMARY_HEADINGS = (
     "## 单题复盘",
     "### 你做得好的地方",
@@ -275,19 +274,7 @@ async def _summary_event_context(
         .order_by(PracticeEvent.created_at.asc(), PracticeEvent.id.asc())
         .limit(_MAX_SUMMARY_EVENTS)
     )
-    return [
-        {
-            "event_id": event.id,
-            "event_type": event.event_type,
-            "role": event.role,
-            "phase": event.phase,
-            "intent": event.intent,
-            "hint_level": event.hint_level,
-            "content_md": _truncate(event.content_md, _MAX_SUMMARY_EVENT_CONTENT),
-            "created_at": event.created_at.isoformat() if event.created_at else None,
-        }
-        for event in result.scalars()
-    ]
+    return [_event_item_context(event) for event in result.scalars()]
 
 
 async def _summary_code_context(
@@ -302,22 +289,36 @@ async def _summary_code_context(
             CodeSnapshot.session_id == session_id,
             CodeSnapshot.user_id == user_id,
         )
-        .order_by(CodeSnapshot.created_at.asc(), CodeSnapshot.id.asc())
+        .order_by(CodeSnapshot.created_at.desc(), CodeSnapshot.id.desc())
+        .limit(_MAX_SUMMARY_CODE_ATTEMPTS)
+    )
+    snapshots = list(result.scalars())
+    snapshots.reverse()
+    quality_by_event_id = await _summary_code_quality_by_event(
+        session,
+        user_id=user_id,
+        session_id=session_id,
+        event_ids=[snapshot.event_id for snapshot in snapshots if snapshot.event_id is not None],
     )
     return [
         {
             "snapshot_id": snapshot.id,
-            "event_id": snapshot.event_id,
             "language": snapshot.language,
             "source": snapshot.source,
             "client_revision": snapshot.client_revision,
-            "code_preview": _truncate(
-                snapshot.code_text,
-                _MAX_CODE_ATTEMPT_PREVIEW,
+            "code_length": len(snapshot.code_text or ""),
+            "code_hash": snapshot.code_hash,
+            "quality_status": quality_by_event_id.get(snapshot.event_id, {}).get(
+                "quality_status",
+                "",
+            ),
+            "quality_comment": quality_by_event_id.get(snapshot.event_id, {}).get(
+                "quality_comment",
+                "",
             ),
             "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
         }
-        for snapshot in result.scalars()
+        for snapshot in snapshots
     ]
 
 
@@ -333,9 +334,87 @@ async def _summary_feedback_context(
             SubmissionFeedback.session_id == session_id,
             SubmissionFeedback.user_id == user_id,
         )
-        .order_by(SubmissionFeedback.created_at.asc(), SubmissionFeedback.id.asc())
+        .order_by(SubmissionFeedback.created_at.desc(), SubmissionFeedback.id.desc())
+        .limit(_MAX_SUMMARY_FEEDBACKS)
     )
-    return [_feedback_item_context(feedback) for feedback in result.scalars()]
+    feedbacks = list(result.scalars())
+    feedbacks.reverse()
+    return [_feedback_item_context(feedback) for feedback in feedbacks]
+
+
+def _event_item_context(event: PracticeEvent) -> dict[str, Any]:
+    content_md = event.content_md or ""
+    lowered = content_md.lower()
+    return {
+        "event_id": event.id,
+        "event_type": event.event_type,
+        "role": event.role,
+        "phase": event.phase,
+        "intent": event.intent,
+        "hint_level": event.hint_level,
+        "content_length": len(content_md),
+        "has_code_fence": "```" in content_md,
+        "mentions_complexity": _contains_any(
+            lowered,
+            ("复杂度", "complexity", "time complexity", "space complexity", "o("),
+        ),
+        "mentions_boundary": _contains_any(
+            lowered,
+            ("边界", "boundary", "边界条件", "edge case", "corner case"),
+        ),
+        "mentions_leetcode_feedback": _contains_any(
+            lowered,
+            (
+                "leetcode",
+                "accepted",
+                "wrong answer",
+                "runtime error",
+                "compile error",
+                "time limit exceeded",
+                "memory limit exceeded",
+                "wa",
+                "tle",
+                "re",
+                "ce",
+                "ac",
+            ),
+        ),
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+async def _summary_code_quality_by_event(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    session_id: int,
+    event_ids: list[int],
+) -> dict[int, dict[str, str]]:
+    if not event_ids:
+        return {}
+    result = await session.execute(
+        select(PracticeEvent)
+        .where(
+            PracticeEvent.session_id == session_id,
+            PracticeEvent.user_id == user_id,
+            PracticeEvent.id.in_(event_ids),
+        )
+        .order_by(PracticeEvent.id.asc())
+    )
+    quality_by_event_id: dict[int, dict[str, str]] = {}
+    for event in result.scalars():
+        payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+        quality_status = payload.get("quality_status")
+        quality_comment = payload.get("quality_comment")
+        quality_by_event_id[event.id] = {
+            "quality_status": quality_status if isinstance(quality_status, str) else "",
+            "quality_comment": (
+                _truncate(quality_comment, 160)
+                if isinstance(quality_comment, str)
+                else ""
+            ),
+        }
+    return quality_by_event_id
 
 
 def _feedback_item_context(feedback: SubmissionFeedback) -> dict[str, Any]:
@@ -343,6 +422,9 @@ def _feedback_item_context(feedback: SubmissionFeedback) -> dict[str, Any]:
         feedback.raw_feedback_json if isinstance(feedback.raw_feedback_json, dict) else {}
     )
     note_md = raw_feedback.get("note_md")
+    failed_case_text = feedback.failed_case_text or ""
+    error_message = feedback.error_message or ""
+    safe_note_md = note_md if isinstance(note_md, str) else ""
     return {
         "feedback_id": feedback.id,
         "event_id": feedback.event_id,
@@ -351,18 +433,12 @@ def _feedback_item_context(feedback: SubmissionFeedback) -> dict[str, Any]:
         "result": feedback.result,
         "runtime_ms": feedback.runtime_ms,
         "memory_kb": feedback.memory_kb,
-        "failed_case_text": _truncate(
-            feedback.failed_case_text,
-            _MAX_SUMMARY_FEEDBACK_TEXT,
-        ),
-        "error_message": _truncate(
-            feedback.error_message,
-            _MAX_SUMMARY_FEEDBACK_TEXT,
-        ),
-        "note_md": _truncate(
-            note_md if isinstance(note_md, str) else "",
-            _MAX_SUMMARY_FEEDBACK_TEXT,
-        ),
+        "has_failed_case": bool(failed_case_text.strip()),
+        "has_error_message": bool(error_message.strip()),
+        "has_note": bool(safe_note_md.strip()),
+        "failed_case_length": len(failed_case_text),
+        "error_message_length": len(error_message),
+        "note_length": len(safe_note_md),
         "raw_status": raw_feedback.get("status"),
         "submitted_at": (
             feedback.submitted_at.isoformat() if feedback.submitted_at else None
@@ -387,6 +463,10 @@ def _truncate(value: str | None, max_length: int) -> str:
     if len(text) <= max_length:
         return text
     return text[:max_length].rstrip() + "..."
+
+
+def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in text for token in tokens)
 
 
 def _summary_reply_markdown(summary: SessionSummary) -> str:
