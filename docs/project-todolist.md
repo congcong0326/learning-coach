@@ -15,11 +15,11 @@
 | 项目 | 当前状态 |
 | --- | --- |
 | 当前阶段 | 阶段 7：第一版闭环集成 |
-| 当前主线任务 | T10：端到端收口和验证 |
+| 当前主线任务 | T11：画像驱动计划补强 |
 | 当前任务状态 | 已完成 |
-| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、计划题训练会话、Chat-first 工作台、自动代码尝试记录、LeetCode AC 动作、聊天式非 AC 反馈识别、复盘读取页、最小学习仪表盘、非 RAG `CoachGraph`、真实 Trace 页和规则化 Eval runner |
+| 已完成基础能力 | 全栈工程基座、题库 seed、题库表、题库 API、题库列表、工作台题面读取、本地注册登录、用户级 OpenAI API 资产池配置、LLM 目标校准、版本化学习计划、统一 LLM Run 流式体验层、画像驱动计划补强、计划题训练会话、Chat-first 工作台、自动代码尝试记录、LeetCode AC 动作、聊天式非 AC 反馈识别、复盘读取页、最小学习仪表盘、非 RAG `CoachGraph`、真实 Trace 页和规则化 Eval runner |
 | 下一步建议 | 保持 RAG/T6 延后；后续再评估持久化 checkpoint、RAG 教练知识库、更完整画像趋势图和 T8 面试模拟 |
-| 第一版闭环状态 | 非 RAG Agent 工程闭环已具备：计划题进入工作台、AI 教练结构化诊断、非 AC 反馈分析、AC 后复盘画像、下一题推荐、Trace 和 Eval 均有实现与测试；RAG/T6 明确 deferred |
+| 第一版闭环状态 | 非 RAG Agent 工程闭环已具备：计划题进入工作台、AI 教练结构化诊断、非 AC 反馈分析、AC 后复盘画像、画像驱动计划补强、下一题推荐、Trace 和 Eval 均有实现与测试；RAG/T6 明确 deferred |
 
 ## 总体阶段进度
 
@@ -32,7 +32,7 @@
 | 阶段 4 | Agent 状态机与知识增强 | 进行中 | 55% | T4、T6 | 非 RAG LangGraph 状态机已接入；RAG 教练知识库延后 |
 | 阶段 5 | 复盘画像与学习仪表盘 | 已完成 | 100% | T7 | 完成训练后生成复盘、画像增量、下一题推荐和最小仪表盘指标 |
 | 阶段 6 | 面试模拟与可观测性 | 进行中 | 50% | T8、T9 | T9 Trace/Eval 已完成；T8 轻量面试模拟未开始 |
-| 阶段 7 | 第一版闭环集成 | 已完成 | 100% | T10 | 非 RAG 第一版学习闭环可端到端跑通，验证命令已通过 |
+| 阶段 7 | 第一版闭环集成 | 已完成 | 100% | T10、T11 | 非 RAG 第一版学习闭环可端到端跑通，并支持画像驱动计划补强 |
 
 ## 当前阶段：阶段 7
 
@@ -389,6 +389,23 @@
 9. Trace 页通过 `/api/traces` 查看 LLM Run、Graph 节点、`rag_deferred`、守卫结果和最终回复摘要。
 10. 运行 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 验证 Hint Leakage、Diagnosis、Code Review；RAG Grounding 显示 `deferred`。
 
+### T11：画像驱动计划补强
+
+| 字段 | 内容 |
+| --- | --- |
+| 优先级 | P1 |
+| 状态 | 已完成 |
+| 前置任务 | T7、T10 |
+| 当前阶段 | 阶段 7 |
+| 主要交付 | 学习计划页画像查看、用户意愿输入、LLM 补强题预览、确认后追加计划题 |
+| 完成日期 | 2026-05-26 |
+
+**验证命令**
+
+- `uv run pytest backend/tests/test_profile_plan_enrichment_service.py backend/tests/test_profile_plan_enrichment_flow.py backend/tests/test_learning_api.py backend/tests/test_llm_runs_api.py -q`
+- `cd frontend && corepack pnpm vitest run src/pages/ProfilePlanEnrichmentDrawer.test.tsx src/pages/StudyPlanPage.test.tsx`
+- `cd frontend && corepack pnpm exec tsc -p tsconfig.app.json --noEmit --pretty false`
+
 ## 阶段推进顺序
 
 1. 阶段 1：完成 T0，建立本地用户注册登录、session 和用户级 OpenAI API 资产基础。
@@ -397,4 +414,4 @@
 4. 阶段 4：完成 T4 和 T6，把基础流程升级为 LangGraph 状态机，并接入 RAG 教练知识。
 5. 阶段 5：完成 T7，让训练结果进入复盘、画像、推荐和仪表盘。
 6. 阶段 6：完成 T8 和 T9，补齐面试模拟、Trace 和 Eval。
-7. 阶段 7：完成 T10，跑通第一版端到端学习闭环并更新验证流程。
+7. 阶段 7：完成 T10 和 T11，跑通第一版端到端学习闭环并支持画像驱动计划补强。

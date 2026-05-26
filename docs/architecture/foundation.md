@@ -104,6 +104,8 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/study-plans/{plan_id}/activate`
 - `GET /api/study-plans/{plan_id}/versions/{version_id}`
 - `POST /api/study-plans/{plan_id}/adjustments`
+- `GET /api/study-plans/{plan_id}/profile-enrichments/{draft_id}`
+- `POST /api/study-plans/{plan_id}/profile-enrichments/{draft_id}/confirm`
 - `POST /api/study-plans/{plan_id}/versions/{version_id}/activate`
 - `PATCH /api/study-plan/items/{item_id}`
 - `POST /api/study-plan/stages/{stage_id}/reorder`
@@ -126,7 +128,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.core`：配置和基础设施。
 - `backend.app.db`：数据库连接、migration 支撑。
 - `backend.app.models`：SQLAlchemy 模型。
-- `backend.app.models.learning`：目标校准草稿、学习计划、计划版本、阶段、计划项和变更日志。
+- `backend.app.models.learning`：目标校准草稿、学习计划、计划版本、阶段、计划项、变更日志和画像补强计划草稿。
 - `backend.app.models.practice`：训练会话、训练事件、代码快照、提交回填、教练回合、单题复盘、长期画像快照和画像增量。
 - `backend.app.schemas`：Pydantic 输入输出模型。
 - `backend.app.schemas.practice`：训练工作台请求响应、阶段、提示档位、训练事件、画像摘要和提交回填 schema。
@@ -137,10 +139,11 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.llm_run_events`：单进程开发环境中的 SSE 事件编码和内存事件 hub。
 - `backend.app.services.llm_orchestrator`：统一执行 LLM Run，负责选择模型资产、解密 API key、创建 provider、调度具体学习 flow，并只在 run 成功提交后发布最终 result。
 - `backend.app.services.llm_providers`：大模型 provider 适配层，当前封装 OpenAI Responses 流式输出。
-- `backend.app.services.learning_flows`：可流式执行的学习业务 flow，当前包含目标校准追问、追问回答、学习计划草稿生成、教练单轮回复和单题复盘。
+- `backend.app.services.learning_flows`：可流式执行的学习业务 flow，当前包含目标校准追问、追问回答、学习计划草稿生成、画像驱动计划补强、教练单轮回复和单题复盘。
 - `backend.app.services.learning_plan_llm`：目标校准追问、学习计划草稿生成、OpenAI Responses client 和 LLM repair loop 编排。
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
+- `backend.app.services.profile_plan_enrichment`：聚合用户意愿、画像、训练事实、当前计划和候选题池，调用大模型生成补强题 draft，并在用户确认后把补强题追加到当前 active 计划。
 - `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、复盘读取、最小仪表盘指标、阶段状态和前端 payload 组装。
 - `backend.app.services.code_attempts`：从 `review_code` 阶段聊天消息中提取代码、校验 AI 质量判断，并把代码尝试持久化为 `code_snapshot` 与 `practice_event`；模型 review 后直接建议提交的本轮代码也要沉淀为代码尝试。
 - `backend.app.services.profile_provider`：面向 AI 教练的安全画像摘要 Provider，隔离长期画像表和 prompt 输入。
@@ -205,6 +208,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `study_plan_stage`，保存阶段目标、重点标签、验收标准和阶段状态。
 - 创建 `study_plan_item`，保存正式题库题目引用、推荐理由、建议训练模式、状态、顺序和锁定标记。
 - 创建 `plan_change_log`，记录版本调整中的 preserved、added、removed 和 reordered 变化。
+- 创建 `profile_plan_enrichment_draft`，保存画像补强题生成时的用户意愿、画像快照引用、候选题池、模型输出、校验报告、确认状态和追加后的计划项引用。
 
 当前 LLM Run 相关 migration 会：
 
@@ -232,6 +236,8 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
 训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 信息如果由用户粘贴在聊天中，会被 `coach_turn` 识别为 `chat_extracted` 提交反馈摘要，并进入下一轮模型上下文；`coach_summary` 使用独立 prompt 生成教练式 AC 复盘，重点总结本题优点、缺点、证据、画像变化和下一题训练策略。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。
+
+`profile_plan_enrichment` run 会选择用户模型资产，读取 active 学习计划、最新画像和最近复盘摘要，先由后端筛出候选题池，再让模型在候选池内生成补强题预览；后端校验通过后保存 draft，用户确认前不修改正式计划。确认接口会在事务中复核计划版本、候选题、重复题和 paid only 题，并把确认后的补强题追加到当前阶段末尾。
 
 当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
 
