@@ -360,10 +360,13 @@ async def run_coach_turn(
     session.add(coach_turn)
     code_attempt_snapshot_id: int | None = None
     if (
-        decision.accepted
-        and decision.phase_after == "review_code"
-        and user_event is not None
+        user_event is not None
         and extracted_code is not None
+        and _should_persist_code_attempt(
+            decision_phase_after=decision.phase_after,
+            decision_accepted=decision.accepted,
+            model_phase_after=coach_decision["phase_after"],
+        )
     ):
         quality_status, quality_comment = quality_from_decision(coach_decision)
         snapshot = await persist_review_code_attempt(
@@ -431,6 +434,19 @@ async def run_coach_turn(
         phase_before=phase_before,
     )
     return result
+
+
+def _should_persist_code_attempt(
+    *,
+    decision_phase_after: str,
+    decision_accepted: bool,
+    model_phase_after: str,
+) -> bool:
+    if decision_accepted and decision_phase_after == "review_code":
+        return True
+    # 模型已经完成代码 review 并建议去 LeetCode 提交时，即使阶段守卫不允许
+    # 从早期阶段直接快进，也要沉淀本轮代码尝试，避免用户看到“可提交”但记录为空。
+    return model_phase_after == "submit_to_leetcode"
 
 
 async def _append_coach_turn_traces(

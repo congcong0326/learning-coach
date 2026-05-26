@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CoachPanel } from './CoachPanel'
@@ -364,6 +364,42 @@ describe('CoachPanel', () => {
       trigger: 'request_summary',
     })
     expect(refresh).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /已记录 AC/ })).toBeDisabled()
+  })
+
+  it('disables the AC action after the session already has an AC result', () => {
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          final_result: 'ac',
+          status: 'summarizing',
+          submission_feedbacks: [
+            {
+              id: 910,
+              result: 'ac',
+              event_id: 911,
+              code_snapshot_id: null,
+              failed_case_text: '',
+              error_message: '',
+              note_md: '',
+              runtime_ms: null,
+              memory_kb: null,
+              created_at: '2026-05-23T00:00:00Z',
+            },
+          ],
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    const acButton = screen.getByRole('button', { name: '已记录 AC' })
+    expect(acButton).toBeDisabled()
+
+    fireEvent.click(acButton)
+
+    expect(practiceApiMock.submitLeetCodeFeedback).not.toHaveBeenCalled()
+    expect(llmRunMock.startRun).not.toHaveBeenCalled()
   })
 
   it('uses the latest code attempt when marking LeetCode AC', async () => {
@@ -430,7 +466,9 @@ describe('CoachPanel', () => {
       <CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />,
     )
 
-    expect(screen.getByText('正在调用大模型')).toHaveClass('coach-run-status-text')
+    expect(screen.getByText('正在调用大模型 · 已等待 00:00')).toHaveClass(
+      'coach-run-status-text',
+    )
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument()
     expect(within(screen.getByLabelText('教练聊天记录')).getByText(
       '正在生成新的教练回复',
@@ -441,8 +479,55 @@ describe('CoachPanel', () => {
     llmRunState.isRunning = false
     rerender(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
 
-    expect(screen.queryByText('正在调用大模型')).not.toBeInTheDocument()
+    expect(screen.queryByText('正在调用大模型 · 已等待 00:00')).not.toBeInTheDocument()
     expect(container.querySelector('.coach-run-output')).toBeNull()
+  })
+
+  it('keeps a visible elapsed timer while a coach run is active', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-05-23T00:00:00Z'))
+      llmRunState.stage = '正在调用大模型'
+      llmRunState.isRunning = true
+
+      render(<CoachPanel session={stubSession()} onSessionRefresh={vi.fn()} />)
+
+      expect(screen.getByText('正在调用大模型 · 已等待 00:00')).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(65_000)
+      })
+
+      expect(screen.getByText('正在调用大模型 · 已等待 01:05')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows that AC summary generation is still running before the model replies', () => {
+    llmRunState.displayText = ''
+    llmRunState.stage = 'queued'
+    llmRunState.isRunning = true
+
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          final_result: 'ac',
+          status: 'summarizing',
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    expect(
+      within(screen.getByLabelText('教练聊天记录')).getByText(
+        'AC 已记录，正在生成单题复盘。',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('正在生成单题复盘 · 已等待 00:00')).toHaveClass(
+      'coach-run-status-text',
+    )
   })
 
   it('renders running coach output as an assistant chat bubble', () => {

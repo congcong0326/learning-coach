@@ -1,5 +1,5 @@
 import { Alert, Button, Input, Space, Typography, message as toast } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
@@ -20,6 +20,11 @@ type CoachPanelProps = {
 }
 
 const REQUEST_HINT_MESSAGE = '我需要一个提示。'
+const SUMMARY_PENDING_MESSAGE = 'AC 已记录，正在生成单题复盘。'
+const DEFAULT_RUNNING_MESSAGE = '教练正在处理'
+const SUMMARY_RUNNING_MESSAGE = '正在生成单题复盘'
+
+type ActiveRunPurpose = 'turn' | 'summary' | null
 
 type PendingUserMessage = {
   clientId: string
@@ -53,6 +58,65 @@ function CoachMarkdown({ markdown }: { markdown: string }) {
   )
 }
 
+type ElapsedState = {
+  startedAtMs: number | null
+  seconds: number
+}
+
+function useRunElapsedSeconds(isRunning: boolean, startedAtMs: number | null) {
+  const [elapsedState, setElapsedState] = useState<ElapsedState>({
+    startedAtMs: null,
+    seconds: 0,
+  })
+
+  useEffect(() => {
+    if (!isRunning) {
+      return undefined
+    }
+
+    const effectiveStartedAtMs = startedAtMs ?? Date.now()
+    const timer = window.setInterval(() => {
+      setElapsedState({
+        startedAtMs: effectiveStartedAtMs,
+        seconds: Math.max(0, Math.floor((Date.now() - effectiveStartedAtMs) / 1000)),
+      })
+    }, 1000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [isRunning, startedAtMs])
+
+  if (!isRunning) {
+    return 0
+  }
+  if (startedAtMs !== null && elapsedState.startedAtMs !== startedAtMs) {
+    return 0
+  }
+  return elapsedState.seconds
+}
+
+function formatElapsedTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function hasAcceptedResult(session: WorkspacePracticeSession) {
+  return (
+    session.final_result === 'ac' ||
+    (session.submission_feedbacks ?? []).some((feedback) => feedback.result === 'ac')
+  )
+}
+
+function readableRunStage(stage: string, fallback: string) {
+  const normalizedStage = stage.trim()
+  if (!normalizedStage || normalizedStage === 'queued' || normalizedStage === 'pending') {
+    return fallback
+  }
+  return normalizedStage
+}
+
 export function CoachPanel({
   session,
   onSessionRefresh,
@@ -62,14 +126,36 @@ export function CoachPanel({
   const [pendingUserMessages, setPendingUserMessages] = useState<PendingUserMessage[]>([])
   const [attemptDrawerOpen, setAttemptDrawerOpen] = useState(false)
   const [isMarkingAccepted, setIsMarkingAccepted] = useState(false)
-  const llmRun = useLlmRun({ onResult: onSessionRefresh })
-  const runStatusText = llmRun.isRunning && llmRun.stage ? llmRun.stage : ''
+  const [localAcceptedSessionId, setLocalAcceptedSessionId] = useState<number | null>(null)
+  const [activeRunPurpose, setActiveRunPurpose] = useState<ActiveRunPurpose>(null)
+  const [runStartedAtMs, setRunStartedAtMs] = useState<number | null>(null)
+  const llmRun = useLlmRun({
+    onResult: () => {
+      setRunStartedAtMs(null)
+      onSessionRefresh()
+    },
+  })
+  const elapsedSeconds = useRunElapsedSeconds(llmRun.isRunning, runStartedAtMs)
+  const acceptedResult = localAcceptedSessionId === session.id || hasAcceptedResult(session)
+  const isSummaryRunContext =
+    activeRunPurpose === 'summary' ||
+    (activeRunPurpose === null && llmRun.isRunning && acceptedResult)
+  const runStageText = llmRun.isRunning
+    ? readableRunStage(
+        llmRun.stage,
+        isSummaryRunContext ? SUMMARY_RUNNING_MESSAGE : DEFAULT_RUNNING_MESSAGE,
+      )
+    : ''
+  const runStatusText = runStageText
+    ? `${runStageText} · 已等待 ${formatElapsedTime(elapsedSeconds)}`
+    : ''
   const codeAttempts = session.code_attempts ?? []
   const latestAttemptSnapshotId =
     codeAttempts.length > 0
       ? codeAttempts[codeAttempts.length - 1].snapshot_id
       : null
   const acceptedCodeSnapshotId = latestAttemptSnapshotId
+  const acceptedButtonText = acceptedResult ? '已记录 AC' : 'LeetCode 已 AC'
   const chatEvents = session.events.filter((event) => {
     if (!event.content_md.trim()) {
       return false
@@ -78,7 +164,8 @@ export function CoachPanel({
   })
   const persistedEventIds = new Set(chatEvents.map((event) => event.id))
   const runningCoachText = llmRun.isRunning
-    ? llmRun.displayText.trim() || (runStatusText === 'queued' ? '教练正在处理' : runStatusText)
+    ? llmRun.displayText.trim() ||
+      (isSummaryRunContext ? SUMMARY_PENDING_MESSAGE : runStageText)
     : ''
   const timelineMessages: TimelineMessage[] = [
     ...chatEvents.map((event) => ({
@@ -130,12 +217,16 @@ export function CoachPanel({
             : message,
         ),
       )
+      setActiveRunPurpose('turn')
+      setRunStartedAtMs(Date.now())
       await llmRun.startRun('coach_turn', {
         session_id: session.id,
         user_event_id: createdMessage.event_id,
         trigger: messageIntent,
       })
     } catch {
+      setActiveRunPurpose(null)
+      setRunStartedAtMs(null)
       if (!messageSaved) {
         setPendingUserMessages((current) =>
           current.filter((message) => message.clientId !== pendingMessage.clientId),
@@ -157,6 +248,9 @@ export function CoachPanel({
   }
 
   async function handleAccepted() {
+    if (acceptedResult) {
+      return
+    }
     setIsMarkingAccepted(true)
     try {
       try {
@@ -169,18 +263,28 @@ export function CoachPanel({
         return
       }
 
+      setLocalAcceptedSessionId(session.id)
       onSessionRefresh()
       try {
+        setActiveRunPurpose('summary')
+        setRunStartedAtMs(Date.now())
         await llmRun.startRun('coach_summary', {
           session_id: session.id,
           trigger: 'request_summary',
         })
       } catch {
+        setActiveRunPurpose(null)
+        setRunStartedAtMs(null)
         toast.error('AC 已记录，复盘生成失败，请稍后重试')
       }
     } finally {
       setIsMarkingAccepted(false)
     }
+  }
+
+  async function handleCancelRun() {
+    setRunStartedAtMs(null)
+    await llmRun.cancelRun()
   }
 
   return (
@@ -192,9 +296,12 @@ export function CoachPanel({
           <Button
             type="primary"
             onClick={handleAccepted}
-            loading={isMarkingAccepted || llmRun.isRunning}
+            loading={
+              isMarkingAccepted || (activeRunPurpose === 'summary' && llmRun.isRunning)
+            }
+            disabled={acceptedResult || isSending || llmRun.isRunning}
           >
-            LeetCode 已 AC
+            {acceptedButtonText}
           </Button>
         </Space>
       </div>
@@ -239,7 +346,7 @@ export function CoachPanel({
               请求提示
             </Button>
             {llmRun.isRunning ? (
-              <Button aria-label="取消" onClick={llmRun.cancelRun}>
+              <Button aria-label="取消" onClick={handleCancelRun}>
                 取消
               </Button>
             ) : null}

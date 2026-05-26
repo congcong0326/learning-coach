@@ -919,6 +919,74 @@ async def test_coach_turn_extracts_code_attempt_when_review_code_is_accepted(
 
 
 @pytest.mark.asyncio
+async def test_coach_turn_persists_code_attempt_when_model_says_ready_to_submit(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        code_text = (
+            "class Solution:\n"
+            "    def twoSum(self, nums, target):\n"
+            "        seen = {}\n"
+            "        for index, num in enumerate(nums):\n"
+            "            need = target - num\n"
+            "            if need in seen:\n"
+            "                return [seen[need], index]\n"
+            "            seen[num] = index\n"
+            "        return []"
+        )
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="write_code",
+            user_intent="unknown",
+            content_md=f"这版代码逻辑应该对了：\n```python\n{code_text}\n```",
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="unknown",
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        result = await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=FakeCoachProvider(
+                {
+                    "phase_after": "submit_to_leetcode",
+                    "diagnosed_stuck_point": "implementation_ready",
+                    "next_action": "submit_to_leetcode",
+                    "reply_md": "代码逻辑正确，可以去 LeetCode 提交。",
+                    "should_reveal_solution": False,
+                    "code_quality_status": "ready_to_submit",
+                    "code_quality_comment": "哈希表维护正确，可以提交验证。",
+                }
+            ),
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assert result["guard"]["accepted"] is False
+        assert result["guard"]["reason"] == "phase_transition_not_allowed"
+        assert result["code_attempt_snapshot_id"] is not None
+        snapshot = await session.get(CodeSnapshot, result["code_attempt_snapshot_id"])
+        assert snapshot is not None
+        assert snapshot.code_text == code_text
+        assert snapshot.source == "chat_review"
+        assert practice_session.latest_code_snapshot_id == snapshot.id
+        code_event = await session.get(PracticeEvent, snapshot.event_id)
+        assert code_event is not None
+        assert code_event.payload_json["quality_status"] == "ready_to_submit"
+        assert code_event.payload_json["quality_comment"] == "哈希表维护正确，可以提交验证。"
+
+
+@pytest.mark.asyncio
 async def test_coach_turn_treats_direct_code_message_as_review_candidate(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

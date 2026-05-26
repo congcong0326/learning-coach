@@ -58,7 +58,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、学习仪表盘、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
-计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；非 AC 的 LeetCode 结果不再通过主界面表单回填，用户直接把平台提示、失败用例或错误信息发给教练，后端在 `coach_turn` 中识别并注入安全摘要。悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明；如果模型已经 review 代码并建议去 LeetCode 提交，即使阶段守卫不允许直接快进，也要沉淀本轮代码尝试。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；AC 成功记录后按钮切换为已记录状态并禁止重复点击。非 AC 的 LeetCode 结果不再通过主界面表单回填，用户直接把平台提示、失败用例或错误信息发给教练，后端在 `coach_turn` 中识别并注入安全摘要。悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态和已等待时间，并在聊天流里用临时教练气泡展示当前状态或流式回复；AC 触发复盘时，在模型返回前临时气泡明确显示复盘正在生成，不把系统执行步骤写入持久聊天历史。
 
 ## 后端选型
 
@@ -142,7 +142,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.learning_plan_validator`：本地题库校验、缺失题目替换、重复题和 paid only 题过滤。
 - `backend.app.services.study_plan_service`：目标校准 draft 生命周期、计划确认、唯一 active 计划、版本草稿、版本激活、计划项状态和重排。
 - `backend.app.services.practice_session_service`：计划题 session 创建/恢复、训练事件、代码快照、提交回填、复盘读取、最小仪表盘指标、阶段状态和前端 payload 组装。
-- `backend.app.services.code_attempts`：从 `review_code` 阶段聊天消息中提取代码、校验 AI 质量判断，并把代码尝试持久化为 `code_snapshot` 与 `practice_event`。
+- `backend.app.services.code_attempts`：从 `review_code` 阶段聊天消息中提取代码、校验 AI 质量判断，并把代码尝试持久化为 `code_snapshot` 与 `practice_event`；模型 review 后直接建议提交的本轮代码也要沉淀为代码尝试。
 - `backend.app.services.profile_provider`：面向 AI 教练的安全画像摘要 Provider，隔离长期画像表和 prompt 输入。
 - `backend.app.services.profile_service`：初始画像、画像增量校验、画像快照版本化、基于训练事实生成单题复盘，并把复盘安全证据合并为画像增量。
 - `backend.app.services.recommendation_service`：基于计划顺序、当前阶段、难度和复盘弱项的规则化下一题推荐，输出推荐原因、下一题第一问和 review 重点。
@@ -214,7 +214,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 - 创建 `practice_session`，以 `user_id + study_plan_id + problem_id` 保证同一计划题复用同一个训练会话，并记录 origin/latest 计划版本追溯字段。
 - 创建 `practice_event`，保存用户消息、AI 回复、自动代码尝试、LeetCode AC、阶段变化、复盘和画像更新等训练时间线事件。
-- 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；第一版代码主要从 `review_code` 聊天流程自动提取，完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
+- 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；第一版代码主要从 `review_code` 聊天流程自动提取，模型 review 后建议提交的本轮代码也会保存为代码尝试。完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
 - 创建 `submission_feedback`，保存用户确认的 LeetCode 结果；AC 允许不携带运行时间、内存或代码快照。非 AC 事实可以来自聊天识别、高级入口或未来自动接入，主路径不要求用户填写结构化表单。
 - 创建 `coach_turn`，保存一次 AI 教练回复的阶段判断、提示档位、守卫结果、上下文快照和 assistant event 关联。
 - 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、提交错因、复杂度/核心思路占位、画像信号和下一题建议，且一个 session 只保留一个 summary。
