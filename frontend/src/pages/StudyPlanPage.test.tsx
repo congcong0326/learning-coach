@@ -173,10 +173,23 @@ describe('StudyPlanPage', () => {
     renderPage()
 
     expect(await screen.findByText('3 个月 Java 面试冲刺计划')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/study-plan/current', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      method: 'GET',
+    })
+
     fireEvent.click(screen.getByRole('button', { name: '查看画像与补强' }))
 
     expect(screen.getByText('画像与计划补强')).toBeInTheDocument()
     expect(screen.getByLabelText('这次你希望怎么补强？')).toBeInTheDocument()
     expect(await screen.findByText('最近 AC 但边界用例需要加强。')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/practice-dashboard', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      method: 'GET',
+    })
   })
 })
