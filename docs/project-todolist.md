@@ -65,11 +65,11 @@
 
 - `uv run ruff check .`
 - `uv run mypy backend`
-- `uv run pytest backend/tests/test_practice_schema.py backend/tests/test_coach_guard.py backend/tests/test_practice_session_service.py backend/tests/test_learning_flows.py backend/tests/test_coach_graph.py backend/tests/test_agent_trace_service.py backend/tests/test_coach_eval_runner.py backend/tests/test_recommendation_service.py -q`
-- `cd frontend && corepack pnpm exec vitest run src/pages/workspace/CoachPanel.test.tsx src/pages/workspace/CodeAttemptDrawer.test.tsx src/pages/ReviewPage.test.tsx src/pages/TracePage.test.tsx src/pages/DashboardPage.test.tsx`
+- `uv run pytest backend/tests/test_prompt_registry.py backend/tests/test_learning_flows.py backend/tests/test_practice_session_service.py -q`
+- `uv run pytest backend/tests/test_practice_schema.py backend/tests/test_coach_guard.py backend/tests/test_coach_graph.py backend/tests/test_agent_trace_service.py backend/tests/test_coach_eval_runner.py backend/tests/test_recommendation_service.py -q`
+- `cd frontend && corepack pnpm exec vitest run src/pages/workspace/CoachPanel.test.tsx`
 - `cd frontend && corepack pnpm exec tsc -p tsconfig.app.json --noEmit --pretty false`
 - `uv run python -m backend.app.evals.coach_eval_runner`
-- `make eval`
 
 ## 任务进度清单
 
