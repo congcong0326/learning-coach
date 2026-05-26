@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
@@ -54,7 +55,10 @@ async def run_profile_plan_enrichment(
     plan_id = payload.get("plan_id")
     if not isinstance(plan_id, int) or isinstance(plan_id, bool):
         raise LearningFlowError("active_study_plan_not_found")
-    request = ProfilePlanEnrichmentRequest.model_validate(payload)
+    try:
+        request = ProfilePlanEnrichmentRequest.model_validate(payload)
+    except ValidationError:
+        raise LearningFlowError("profile_plan_enrichment_invalid") from None
     user = await session.get(AppUser, user_id)
     if user is None:
         raise LearningFlowError("active_study_plan_not_found")

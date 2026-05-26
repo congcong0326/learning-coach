@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,8 @@ from backend.app.models.practice import SessionSummary, UserProfileSnapshot
 from backend.app.models.problem import Problem
 from backend.app.schemas.learning import (
     ProfilePlanEnrichmentDraftResponse,
+    ProfilePlanEnrichmentItem,
+    ProfilePlanGapAssessment,
     ProfilePlanEnrichmentRequest,
 )
 from backend.app.services.profile_service import latest_profile_snapshot, snapshot_payload
@@ -126,6 +129,7 @@ def validate_model_output(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     issues: list[str] = []
     normalized_items: list[dict[str, Any]] = []
+    _validate_top_level_output(output, issues)
     candidates = {
         str(item.get("slug")): item
         for item in _list_of_dicts(context.get("candidate_problems"))
@@ -173,25 +177,28 @@ def validate_model_output(
         if not review_focus:
             issues.append(f"missing_review_focus:{slug}")
 
-        normalized_items.append(
-            {
-                "problem_id": _int_value(candidate.get("problem_id"), 0),
-                "problem_slug": slug,
-                "title": str(candidate.get("title") or ""),
-                "translated_title": str(candidate.get("translated_title") or ""),
-                "difficulty": str(
-                    candidate.get("difficulty") or raw_item.get("difficulty") or ""
-                ),
-                "skill_tags": _string_list(candidate.get("tags")),
-                "target_stage_id": _int_value(current_stage.get("id"), 0),
-                "target_stage_title": str(current_stage.get("title") or ""),
-                "weakness_targets": _string_list(raw_item.get("weakness_targets")),
-                "recommendation_reason_md": reason,
-                "first_question_hint": first_question,
-                "review_focus": review_focus,
-                "suggested_mode": _suggested_mode(raw_item.get("suggested_mode")),
-            }
-        )
+        normalized_item = {
+            "problem_id": _int_value(candidate.get("problem_id"), 0),
+            "problem_slug": slug,
+            "title": str(candidate.get("title") or ""),
+            "translated_title": str(candidate.get("translated_title") or ""),
+            "difficulty": str(
+                candidate.get("difficulty") or raw_item.get("difficulty") or ""
+            ),
+            "skill_tags": _string_list(candidate.get("tags")),
+            "target_stage_id": _int_value(current_stage.get("id"), 0),
+            "target_stage_title": str(current_stage.get("title") or ""),
+            "weakness_targets": _string_list(raw_item.get("weakness_targets")),
+            "recommendation_reason_md": reason,
+            "first_question_hint": first_question,
+            "review_focus": review_focus,
+            "suggested_mode": _suggested_mode(raw_item.get("suggested_mode")),
+        }
+        try:
+            ProfilePlanEnrichmentItem.model_validate(normalized_item)
+        except ValidationError:
+            issues.append(f"item_schema_invalid:{slug}")
+        normalized_items.append(normalized_item)
 
     valid = not issues
     if valid:
@@ -213,6 +220,25 @@ def validate_model_output(
         "item_count": len(normalized_items) if valid else 0,
     }
     return report, normalized_items if valid else []
+
+
+def _validate_top_level_output(output: dict[str, Any], issues: list[str]) -> None:
+    if not isinstance(output.get("enrichment_theme", ""), str):
+        issues.append("enrichment_theme_not_string")
+    if not isinstance(output.get("overall_reason_md", ""), str):
+        issues.append("overall_reason_md_not_string")
+    if not isinstance(output.get("not_added_reason_md", ""), str):
+        issues.append("not_added_reason_md_not_string")
+    gap = output.get("plan_gap_assessment")
+    if gap is None:
+        return
+    if not isinstance(gap, dict):
+        issues.append("plan_gap_assessment_not_object")
+        return
+    try:
+        ProfilePlanGapAssessment.model_validate(gap)
+    except ValidationError:
+        issues.append("plan_gap_assessment_invalid")
 
 
 async def persist_generated_draft(
