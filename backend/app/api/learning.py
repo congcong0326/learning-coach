@@ -17,6 +17,7 @@ from backend.app.schemas.learning import (
     PlanDraftResponse,
     PlanItemReorderRequest,
     PlanItemStatusUpdateRequest,
+    ProfilePlanEnrichmentDraftResponse,
     StudyPlanListResponse,
     StudyPlanResponse,
 )
@@ -28,7 +29,11 @@ router = APIRouter(tags=["learning"])
 
 def _http_error(exc: StudyPlanError) -> HTTPException:
     status = 404 if "not_found" in exc.detail else 400
-    if exc.detail in {"llm_credential_unavailable", "empty_problem_library"}:
+    if exc.detail in {
+        "llm_credential_unavailable",
+        "empty_problem_library",
+        "profile_plan_enrichment_not_confirmable",
+    }:
         status = 409
     return HTTPException(status_code=status, detail=exc.detail)
 
@@ -156,6 +161,49 @@ async def plan_version_route(
         from backend.app.services.study_plan_service import study_plan_payload
 
         return await study_plan_payload(session, user, plan_id, version_id=version_id)
+    except StudyPlanError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get(
+    "/study-plans/{plan_id}/profile-enrichments/{draft_id}",
+    response_model=ProfilePlanEnrichmentDraftResponse,
+)
+async def profile_enrichment_draft_route(
+    plan_id: int,
+    draft_id: int,
+    user: AppUser = Depends(current_user_dependency),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        from backend.app.services.profile_plan_enrichment import (
+            get_enrichment_draft_payload,
+        )
+
+        response = await get_enrichment_draft_payload(session, user, plan_id, draft_id)
+        if isinstance(response, ProfilePlanEnrichmentDraftResponse):
+            return response.model_dump()
+        return response
+    except StudyPlanError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post(
+    "/study-plans/{plan_id}/profile-enrichments/{draft_id}/confirm",
+    response_model=StudyPlanResponse,
+)
+async def confirm_profile_enrichment_route(
+    plan_id: int,
+    draft_id: int,
+    user: AppUser = Depends(current_user_dependency),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        from backend.app.services.profile_plan_enrichment import (
+            confirm_enrichment_draft,
+        )
+
+        return await confirm_enrichment_draft(session, user, plan_id, draft_id)
     except StudyPlanError as exc:
         raise _http_error(exc) from exc
 

@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
+    PlanChangeLog,
     ProfilePlanEnrichmentDraft,
     StudyPlan,
+    StudyPlanItem,
     StudyPlanStage,
     StudyPlanVersion,
 )
@@ -25,7 +27,7 @@ from backend.app.schemas.learning import (
     ProfilePlanEnrichmentRequest,
 )
 from backend.app.services.profile_service import latest_profile_snapshot, snapshot_payload
-from backend.app.services.study_plan_service import StudyPlanError
+from backend.app.services.study_plan_service import StudyPlanError, study_plan_payload
 
 
 logger = logging.getLogger(__name__)
@@ -332,6 +334,203 @@ def draft_response(
             "updated_at": draft.updated_at,
             "confirmed_at": draft.confirmed_at,
         }
+    )
+
+
+async def get_enrichment_draft_payload(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+    draft_id: int,
+) -> ProfilePlanEnrichmentDraftResponse:
+    draft = await _load_draft(db, user, plan_id, draft_id, for_update=False)
+    logger.info(
+        "profile_plan_enrichment_draft_loaded user_id=%s plan_id=%s draft_id=%s status=%s",
+        user.id,
+        plan_id,
+        draft_id,
+        draft.status,
+    )
+    return draft_response(draft)
+
+
+async def confirm_enrichment_draft(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+    draft_id: int,
+) -> dict[str, Any]:
+    logger.info(
+        "profile_plan_enrichment_confirm_started user_id=%s plan_id=%s draft_id=%s",
+        user.id,
+        plan_id,
+        draft_id,
+    )
+    try:
+        draft = await _load_draft(db, user, plan_id, draft_id, for_update=True)
+        if draft.status == "confirmed":
+            logger.info(
+                "profile_plan_enrichment_confirm_idempotent user_id=%s plan_id=%s draft_id=%s",
+                user.id,
+                plan_id,
+                draft_id,
+            )
+            return await study_plan_payload(db, user, plan_id)
+        if draft.status != "generated":
+            raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+
+        plan, version = await _load_active_plan_version(db, user, plan_id)
+        if version.id != draft.study_plan_version_id:
+            raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+
+        output_items = _dict_value(draft.model_output_json).get("items")
+        if not isinstance(output_items, list):
+            raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+
+        current_stage = _current_stage(version)
+        existing_slugs = {str(item.problem_slug) for item in version.items}
+        problem_items: list[tuple[dict[str, Any], Problem]] = []
+        draft_slugs: set[str] = set()
+        for raw_item in output_items:
+            if not isinstance(raw_item, dict):
+                raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+            slug = str(raw_item.get("problem_slug") or "").strip()
+            if not slug or slug in existing_slugs or slug in draft_slugs:
+                raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+            problem = await _problem_by_slug(db, slug)
+            problem_items.append((raw_item, problem))
+            draft_slugs.add(slug)
+
+        max_order = max([item.order_index for item in current_stage.items] or [-1])
+        added_ids: list[int] = []
+        now = datetime.now(UTC)
+        for index, (item_payload, problem) in enumerate(problem_items, start=1):
+            reason = ENRICHMENT_REASON_PREFIX + str(
+                item_payload.get("recommendation_reason_md") or ""
+            )
+            item = StudyPlanItem(
+                version_id=version.id,
+                stage_id=current_stage.id,
+                problem_id=problem.id,
+                problem_slug=problem.slug,
+                skill_tags_json=_merged_skill_tags(problem, item_payload),
+                difficulty=problem.difficulty,
+                suggested_mode=_suggested_mode(item_payload.get("suggested_mode")),
+                recommendation_reason=reason,
+                status="pending",
+                order_index=max_order + index,
+                locked=False,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(item)
+            await db.flush()
+            added_ids.append(item.id)
+            _add_enrichment_change_log(db, version, item, draft)
+
+        draft.status = "confirmed"
+        draft.confirmed_item_ids_json = added_ids
+        draft.confirmed_at = now
+        draft.updated_at = now
+        plan.updated_at = now
+        confirmed_plan_id = plan.id
+        confirmed_draft_id = draft.id
+        await db.commit()
+        # 同一个 session 在生成上下文时已经加载过 version/stage.items；确认后必须刷新关系，
+        # 否则返回 payload 可能复用旧集合，看不到刚追加的补强题。
+        await db.refresh(version, attribute_names=["stages", "items"])
+        for stage in version.stages:
+            await db.refresh(stage, attribute_names=["items"])
+            for stage_item in stage.items:
+                await db.refresh(stage_item, attribute_names=["problem"])
+        payload = await study_plan_payload(db, user, confirmed_plan_id)
+        logger.info(
+            "profile_plan_enrichment_confirmed user_id=%s plan_id=%s draft_id=%s added_count=%s",
+            user.id,
+            confirmed_plan_id,
+            confirmed_draft_id,
+            len(added_ids),
+        )
+        return payload
+    except StudyPlanError as exc:
+        await db.rollback()
+        logger.warning(
+            "profile_plan_enrichment_confirm_rejected user_id=%s plan_id=%s draft_id=%s reason=%s",
+            user.id,
+            plan_id,
+            draft_id,
+            exc.detail,
+        )
+        raise
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "profile_plan_enrichment_confirm_failed user_id=%s plan_id=%s draft_id=%s",
+            user.id,
+            plan_id,
+            draft_id,
+        )
+        raise
+
+
+async def _load_draft(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+    draft_id: int,
+    *,
+    for_update: bool,
+) -> ProfilePlanEnrichmentDraft:
+    query = select(ProfilePlanEnrichmentDraft).where(
+        ProfilePlanEnrichmentDraft.id == draft_id,
+        ProfilePlanEnrichmentDraft.user_id == user.id,
+        ProfilePlanEnrichmentDraft.study_plan_id == plan_id,
+    )
+    if for_update:
+        query = query.with_for_update()
+    result = await db.execute(query)
+    draft = result.scalar_one_or_none()
+    if draft is None:
+        raise StudyPlanError("profile_plan_enrichment_not_found")
+    return draft
+
+
+async def _problem_by_slug(db: AsyncSession, slug: str) -> Problem:
+    result = await db.execute(
+        select(Problem).where(Problem.slug == slug, Problem.is_paid_only.is_(False))
+    )
+    problem = result.scalar_one_or_none()
+    if problem is None:
+        raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+    return problem
+
+
+def _merged_skill_tags(problem: Problem, item_payload: dict[str, Any]) -> list[str]:
+    tags = list(_problem_tag_slugs(problem))
+    for value in _string_list(item_payload.get("weakness_targets")):
+        if value not in tags:
+            tags.append(value)
+    return tags[:12]
+
+
+def _add_enrichment_change_log(
+    db: AsyncSession,
+    version: StudyPlanVersion,
+    item: StudyPlanItem,
+    draft: ProfilePlanEnrichmentDraft,
+) -> None:
+    db.add(
+        PlanChangeLog(
+            version_id=version.id,
+            change_type="profile_enrichment_added",
+            problem_id=item.problem_id,
+            detail_json={
+                "draft_id": draft.id,
+                "problem_slug": item.problem_slug,
+                "source": "profile_plan_enrichment",
+            },
+            reason_md=item.recommendation_reason,
+        )
     )
 
 

@@ -561,3 +561,72 @@ def test_validate_model_output_rejects_invalid_candidate_items(
     assert expected_issue in report["issues"]
     assert report["item_count"] == 0
     assert items == []
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_appends_items_to_current_stage(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.models.learning import ProfilePlanEnrichmentDraft
+    from backend.app.services.profile_plan_enrichment import (
+        build_enrichment_context,
+        confirm_enrichment_draft,
+        persist_generated_draft,
+        validate_model_output,
+    )
+
+    user, plan, version = await create_user_plan(db_session)
+    request = ProfilePlanEnrichmentRequest(
+        user_intent_md="补哈希表边界",
+        item_count=2,
+        difficulty_preference="keep_current",
+    )
+    context = await build_enrichment_context(db_session, user, plan.id, request)
+    output = {
+        "enrichment_theme": "哈希表边界补强",
+        "plan_gap_assessment": {"gap_level": "medium", "summary_md": "需要补强。"},
+        "overall_reason_md": "追加边界题。",
+        "items": [
+            {
+                "problem_slug": "contains-duplicate",
+                "target_stage_key": "stage-current",
+                "weakness_targets": ["边界"],
+                "difficulty": "Easy",
+                "recommendation_reason_md": "练习重复元素。",
+                "first_question_hint": "先列重复元素。",
+                "review_focus": "检查 set。",
+                "suggested_mode": "independent",
+            }
+        ],
+        "not_added_reason_md": "",
+    }
+    report, items = validate_model_output(output, context)
+    draft = await persist_generated_draft(
+        db_session,
+        user=user,
+        plan_id=plan.id,
+        version_id=version.id,
+        profile_snapshot_id=context["profile_snapshot"]["id"],
+        llm_run_id=1,
+        payload=request,
+        context=context,
+        model_output=output,
+        validation_report=report,
+        normalized_items=items,
+    )
+    await db_session.commit()
+
+    response = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    added = [
+        item
+        for stage in response["active_version"]["stages"]
+        for item in stage["items"]
+        if item["problem_slug"] == "contains-duplicate"
+    ]
+    assert len(added) == 1
+    assert added[0]["recommendation_reason"].startswith("画像补强：")
+    refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft.id)
+    assert refreshed is not None
+    assert refreshed.status == "confirmed"
+    assert len(refreshed.confirmed_item_ids_json) == 1
