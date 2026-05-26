@@ -4,6 +4,7 @@ export type LlmRunKind =
   | 'goal_followup'
   | 'goal_plan_generate'
   | 'study_plan_adjustment'
+  | 'profile_plan_enrichment'
   | 'coach_turn'
   | 'coach_summary'
   | 'coach_message'
