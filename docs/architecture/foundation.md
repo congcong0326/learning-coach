@@ -148,6 +148,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.recommendation_service`：基于计划顺序、当前阶段、难度和复盘弱项的规则化下一题推荐，输出推荐原因、下一题第一问和 review 重点。
 - `backend.app.services.coach_guard`：教练阶段跳转和提示档位守卫，防止低提示档位输出完整解法或无证据快进。
 - `backend.app.services.agent_trace_service`：写入和读取 `agent_trace`，对节点输入输出摘要、守卫原因和最终回复进行截断，避免完整用户输入和完整代码进入 trace。
+- `backend.app.prompts`：静态 LLM prompt resource registry，使用 package resource 托管提示词正文，并集中声明 prompt key、版本和输出字段契约。学习 flow 只组装动态上下文并通过 registry 读取静态 instructions，避免 prompt 文本散落在业务代码中。
 - `backend.app.agents`：LangGraph 编排，当前包含 `CoachGraph` 的非 RAG 状态机，记录 `load_training_context`、输入分类、卡点诊断、`retrieve_supporting_context=rag_deferred`、动作决策、守卫、回复生成、持久化和复盘触发节点，并通过 `practice_session.thread_id` 与图 checkpointer 对齐。
 - `backend.app.rag`：知识库导入、切块、检索。
 - `backend.app.tools`：后续工具能力目录。PRD v0.3 第一版优先做 LeetCode 提交结果归因；如后续重新引入本地代码运行，再在此边界内接入。
@@ -230,7 +231,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 回填会作为结构化提交反馈进入下一轮 `coach_turn` 上下文，前端也展示提交反馈历史。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；真实 RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
+训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 回填会作为结构化提交反馈进入下一轮 `coach_turn` 上下文，前端也展示提交反馈历史。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；真实 RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
 
 当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
 

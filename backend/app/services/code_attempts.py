@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -38,7 +39,7 @@ def extract_code_from_message(content_md: str) -> ExtractedCode | None:
     for language, code_text in _iter_fenced_blocks(content_md):
         if _looks_like_code(code_text):
             return ExtractedCode(
-                language=_normalize_language(language),
+                language=_normalize_language(language, code_text=code_text),
                 code_text=code_text,
             )
     if has_fence_token:
@@ -122,9 +123,42 @@ async def persist_review_code_attempt(
     return snapshot
 
 
-def _normalize_language(language: str) -> str:
+def _normalize_language(language: str, *, code_text: str = "") -> str:
     key = language.strip().lower()
-    return _LANGUAGE_ALIASES.get(key, "python3")
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    return _infer_language_from_code(code_text)
+
+
+def _infer_language_from_code(code_text: str) -> str:
+    stripped = code_text.strip()
+    if not stripped:
+        return "python3"
+    lower = stripped.lower()
+    if re.search(r"\b(public|private|protected)\s+", stripped) and re.search(
+        r"\b(class|boolean|int|long|string|void)\b",
+        stripped,
+    ):
+        return "java"
+    if re.search(r"\bclass\s+\w+\s*\{", stripped) and re.search(
+        r"\b(public|boolean|int|long|string|void)\b",
+        stripped,
+    ):
+        return "java"
+    if re.search(r"^\s*(def|class)\s+\w+.*:", stripped, re.MULTILINE):
+        return "python3"
+    if "from " in lower and " import " in lower:
+        return "python3"
+    if re.search(r"\b(function|const|let|var)\s+", stripped) or "=>" in stripped:
+        return "javascript"
+    if re.search(r"^\s*package\s+\w+", stripped, re.MULTILINE) or re.search(
+        r"\bfunc\s+\w+\s*\(",
+        stripped,
+    ):
+        return "go"
+    if "#include" in stripped or re.search(r"\bint\s+main\s*\(", stripped):
+        return "c"
+    return "python3"
 
 
 def _iter_fenced_blocks(content_md: str) -> list[tuple[str, str]]:
@@ -184,7 +218,10 @@ def _extract_unfenced_code_block(content_md: str) -> ExtractedCode | None:
             break
         code_text = "\n".join(candidate_lines).strip()
         if _looks_like_code(code_text):
-            return ExtractedCode(language="python3", code_text=code_text)
+            return ExtractedCode(
+                language=_infer_language_from_code(code_text),
+                code_text=code_text,
+            )
     return None
 
 

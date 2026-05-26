@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 import backend.app.models.trace  # noqa: F401
 from backend.app.models.auth import AppUser
-from backend.app.models.learning import GoalCalibrationDraft
+from backend.app.models.learning import GoalCalibrationDraft, StudyPlan, StudyPlanVersion
 from backend.app.models.llm_run import LlmRun
 from backend.app.models.practice import (
     CodeSnapshot,
@@ -311,6 +311,48 @@ async def create_practice_session_with_user_event(
     if snapshot is not None:
         await session.refresh(snapshot)
     return practice_session, user_event, snapshot
+
+
+async def attach_plan_version_with_target_language(
+    session: AsyncSession,
+    user: AppUser,
+    practice_session: PracticeSession,
+    *,
+    preferred_language: str,
+) -> StudyPlanVersion:
+    now = datetime.now(UTC)
+    plan = StudyPlan(
+        user_id=user.id,
+        title="Java 面试冲刺计划",
+        status="active",
+        active_version_number=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(plan)
+    await session.flush()
+    version = StudyPlanVersion(
+        plan_id=plan.id,
+        version_number=1,
+        status="active",
+        target_snapshot_json={
+            "goal_type": "interview_sprint",
+            "preferred_language": preferred_language,
+        },
+        generation_summary_md="",
+        validation_report_json={},
+        repair_log_json=[],
+        created_at=now,
+        activated_at=now,
+    )
+    session.add(version)
+    await session.flush()
+    practice_session.study_plan_id = plan.id
+    practice_session.latest_plan_version_id = version.id
+    await session.commit()
+    await session.refresh(practice_session)
+    await session.refresh(version)
+    return version
 
 
 async def create_coach_run(
@@ -697,6 +739,63 @@ async def test_coach_turn_uses_model_reply_when_user_already_described_hash_idea
             "正在保存教练回复",
         ]
         assert events[-2].data["text"] == reply
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_passes_plan_preferred_language_to_model_context(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="define_invariant",
+            user_intent="request_hint",
+            content_md="能给一个示例吗？",
+        )
+        await attach_plan_version_with_target_language(
+            session,
+            user,
+            practice_session,
+            preferred_language="java",
+        )
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="request_hint",
+        )
+        provider = FakeCoachProvider(
+            {
+                "phase_after": "write_code",
+                "diagnosed_stuck_point": "needs_language_specific_example",
+                "next_action": "give_java_scaffold",
+                "reply_md": "可以，先用 Java 写出方法签名和哈希表状态。",
+                "should_reveal_solution": False,
+            }
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assert "target_code_language" in provider.calls[0]["instructions"]
+        model_context = json.loads(provider.calls[0]["input_text"])
+        assert model_context["session"]["target_code_language"] == {
+            "value": "java",
+            "label": "Java",
+            "source": "study_plan_target_snapshot",
+        }
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,39 @@ def test_extract_code_from_message_uses_direct_code_without_fence() -> None:
     )
 
 
+def test_extract_code_from_message_infers_java_from_unlabeled_fenced_block() -> None:
+    extracted = extract_code_from_message(
+        "请 review：\n"
+        "```\n"
+        "class Solution {\n"
+        "    public boolean isPalindrome(String s) {\n"
+        "        int left = 0;\n"
+        "        int right = s.length() - 1;\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n"
+        "```"
+    )
+
+    assert extracted is not None
+    assert extracted.language == "java"
+
+
+def test_extract_code_from_message_infers_java_from_direct_code_without_fence() -> None:
+    extracted = extract_code_from_message(
+        "class Solution {\n"
+        "    public boolean isPalindrome(String s) {\n"
+        "        int left = 0;\n"
+        "        int right = s.length() - 1;\n"
+        "        return true;\n"
+        "    }\n"
+        "}"
+    )
+
+    assert extracted is not None
+    assert extracted.language == "java"
+
+
 def test_extract_code_from_message_omits_surrounding_chat_without_fence() -> None:
     extracted = extract_code_from_message(
         "这是我的解答思路：\n"

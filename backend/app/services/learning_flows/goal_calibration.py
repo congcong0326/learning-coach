@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.learning import GoalCalibrationDraft
 from backend.app.models.llm_run import LlmRun
+from backend.app.prompts import get_prompt
 from backend.app.services.learning_flows.goal_plan import LearningFlowError, PROMPT_VERSION
 from backend.app.services.llm_providers.base import LlmProvider
 from backend.app.services.llm_run_events import LlmRunEvent
@@ -21,12 +22,7 @@ from backend.app.services.llm_run_service import (
 )
 
 
-FOLLOWUP_INSTRUCTIONS = (
-    "默认语言语境：简体中文。你是目标校准教练。根据用户的原始目标校准信息，"
-    "判断是否还需要提出 1 个关键追问。信息足够时只输出 null；需要追问时只输出 "
-    'JSON 对象，格式为 {"question_id": "q1", "question": "问题文本"}。'
-    "question 必须使用简体中文。不要输出解释性前后缀。"
-)
+FOLLOWUP_INSTRUCTIONS = get_prompt("goal_followup").instructions
 MAX_FOLLOWUPS = 3
 FOLLOWUP_EDITABLE_STATUSES = {"asking_followup", "collecting_input"}
 FOLLOWUP_STREAM_DISPLAY_MESSAGES = (

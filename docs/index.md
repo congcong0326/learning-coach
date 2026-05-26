@@ -17,6 +17,7 @@
 - `backend/app/models/`：SQLAlchemy 模型，当前包含题目、题目分类、题目分类关系、本地用户、登录 session、LLM API 资产、LLM Run、Agent Trace、目标校准草稿、学习计划、计划版本、阶段、计划项、变更日志、训练会话、训练事件、代码快照、LeetCode 回填、教练回合、单题复盘、画像快照和画像增量。
 - `backend/app/schemas/`：Pydantic 请求和响应模型，当前包含题库、认证、LLM API 资产、LLM Run、目标校准、学习计划和训练工作台相关请求响应。
 - `backend/app/services/`：业务服务层，当前包含题库查询、题库 seed 导入、认证 session、API key 加密、LLM API 资产管理、粘性路由、OpenAI 连接测试、统一 LLM Run 状态与 SSE 事件、OpenAI Responses 流式 provider、目标校准/计划生成 flow、计划草稿校验、学习计划生命周期服务、训练会话服务、画像 Provider/合并服务、规则化下一题推荐、Agent Trace 写入、教练状态守卫和教练 run handler。
+- `backend/app/prompts/`：静态大模型提示词资源和 registry，集中托管目标校准、学习计划、教练回复等 prompt 正文、版本和输出契约；业务 flow 只引用 registry，不直接内联长提示词。
 - `backend/app/agents/`：LangGraph / Agent 编排代码目录，当前包含非 RAG `CoachGraph` 状态机，用于承载可恢复教练状态、`thread_id`、节点摘要和 `rag_deferred` 检索占位。
 - `backend/app/evals/`：本地规则化 AI Coach eval runner，当前覆盖 Hint Leakage、Diagnosis、Code Review；RAG Grounding 因 T6/RAG 延后仅报告 `deferred`。
 - `backend/app/rag/`：后续知识导入、切块、embedding 和检索代码目录。

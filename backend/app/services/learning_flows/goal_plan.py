@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.learning import GoalCalibrationDraft
 from backend.app.models.llm_run import LlmRun
+from backend.app.prompts import get_prompt
 from backend.app.services.learning_plan_validator import validate_and_repair_plan_draft
 from backend.app.services.llm_providers.base import LlmProvider
 from backend.app.services.llm_run_events import LlmRunEvent
@@ -21,21 +22,11 @@ from backend.app.services.llm_run_service import (
 )
 
 
-PROMPT_VERSION = "goal-plan-v3-streaming"
-PLAN_DRAFT_INSTRUCTIONS = (
-    "默认语言语境：简体中文。根据用户目标、追问历史和训练偏好生成阶段化学习计划。"
-    "只输出 JSON，且 stages 至少包含 1 个阶段，每个阶段 items 至少包含 1 道题。"
-    "面向用户展示的 title、objective_md、assessment_criteria、recommendation_reason "
-    "必须使用简体中文；problem_slug、difficulty、suggested_mode、skill_tags 等机器字段保持英文或枚举值。"
-    "suggested_mode 只能使用 guided、independent、mock_interview，不要使用目标偏好字段 "
-    "independent_first 或 interviewer_style。"
-    "正式题单会由后端本地题库校验和修复，不要输出解释性前后缀。"
-)
-REPAIR_PLAN_INSTRUCTIONS = (
-    "默认语言语境：简体中文。根据 validation_report 修复学习计划。"
-    "若报告包含空阶段、空题目、缺失题目、付费题或重复题，必须补充或替换为可训练题目。"
-    "只输出符合学习计划结构的 JSON。"
-)
+_PLAN_DRAFT_PROMPT = get_prompt("goal_plan_draft")
+_REPAIR_PLAN_PROMPT = get_prompt("goal_plan_repair")
+PROMPT_VERSION = _PLAN_DRAFT_PROMPT.version
+PLAN_DRAFT_INSTRUCTIONS = _PLAN_DRAFT_PROMPT.instructions
+REPAIR_PLAN_INSTRUCTIONS = _REPAIR_PLAN_PROMPT.instructions
 PLAN_STREAM_DISPLAY_MESSAGES = (
     "模型正在生成计划草稿...\n",
     "正在组织阶段目标和训练重点...\n",

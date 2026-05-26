@@ -10,6 +10,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.agents.coach_graph import CoachGraph, CoachGraphState
+from backend.app.models.learning import StudyPlan, StudyPlanVersion
 from backend.app.models.llm_run import LlmRun
 from backend.app.models.practice import (
     CoachTurn,
@@ -18,6 +19,7 @@ from backend.app.models.practice import (
     PracticeSession,
     SubmissionFeedback,
 )
+from backend.app.prompts import get_prompt
 from backend.app.services.coach_guard import guard_transition
 from backend.app.services.agent_trace_service import append_agent_trace
 from backend.app.services.code_attempts import (
@@ -35,7 +37,8 @@ from backend.app.services.llm_run_service import (
 )
 
 
-PROMPT_VERSION = "coach-turn-v2-structured"
+_COACH_TURN_PROMPT = get_prompt("coach_turn")
+PROMPT_VERSION = _COACH_TURN_PROMPT.version
 SAFE_REPLY = "我已经记录你的输入。先说明你的暴力解法、你准备维护的关键状态，以及你认为必须覆盖的边界用例。"
 SUMMARY_SAFE_REPLY = (
     "LeetCode AC 已记录。下面进入单题复盘：我会围绕本题最终结果、"
@@ -43,17 +46,7 @@ SUMMARY_SAFE_REPLY = (
 )
 DIAGNOSED_STUCK_POINT_MAX_LENGTH = 120
 NEXT_ACTION_MAX_LENGTH = 60
-COACH_REPLY_INSTRUCTIONS = (
-    "默认语言语境：简体中文。你是 Agentic Coding Learning Coach 的单题 AI 教练，"
-    "必须根据当前题目训练上下文、用户画像、训练阶段、提示档位和用户本轮输入生成下一步教练回复。"
-    "不要机械重复固定流程；如果用户已经给出清晰思路，可以快进到不变量、代码或提交阶段。"
-    "低提示档位下不要泄露完整可提交答案。只输出 JSON 对象，不要输出解释性前后缀。"
-    "JSON 字段必须包含：phase_after、diagnosed_stuck_point、next_action、reply_md、"
-    "should_reveal_solution。phase_after 只能使用允许状态；reply_md 必须是面向用户的简体中文。"
-    "如果 user_submitted_code 非空，优先判断本轮是否应进入 review_code，并且只基于其中的代码内容做代码质量判断。"
-    "当 phase_after 为 review_code 且用户本轮提供代码时，可以额外返回 code_quality_status "
-    "和 code_quality_comment。code_quality_status 只能是 pending、needs_fix 或 ready_to_submit。"
-)
+COACH_REPLY_INSTRUCTIONS = _COACH_TURN_PROMPT.instructions
 COACH_PHASES = {
     "understand_problem",
     "propose_bruteforce",
@@ -76,6 +69,13 @@ COACH_EVENT_TRIGGERS = {
 }
 HINT_LEVEL_ORDER = ["questioning", "direction", "key_hint", "reflection"]
 HINT_LEVEL_INDEX = {level: index for index, level in enumerate(HINT_LEVEL_ORDER)}
+TARGET_CODE_LANGUAGE_LABELS = {
+    "c": "C",
+    "go": "Go",
+    "python3": "Python3",
+    "javascript": "JavaScript",
+    "java": "Java",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,11 @@ async def run_coach_turn(
         session_id=practice_session.id,
     )
     has_feedback = latest_submission_feedback is not None
+    target_code_language = await _target_code_language_context(
+        session,
+        user_id=user_id,
+        practice_session=practice_session,
+    )
     graph_state = await CoachGraph().run_turn(
         _coach_graph_state(
             practice_session,
@@ -184,6 +189,7 @@ async def run_coach_turn(
         extracted_code=extracted_code,
         latest_submission_feedback=latest_submission_feedback,
         has_feedback=has_feedback,
+        target_code_language=target_code_language,
         trigger_context=trigger_context,
     )
     await _publish_progress(
@@ -567,6 +573,7 @@ async def _coach_decision(
     extracted_code: ExtractedCode | None,
     latest_submission_feedback: SubmissionFeedback | None,
     has_feedback: bool,
+    target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
 ) -> dict[str, Any]:
     fallback = _fallback_coach_decision(trigger_context)
@@ -587,6 +594,7 @@ async def _coach_decision(
                     extracted_code=extracted_code,
                     latest_submission_feedback=latest_submission_feedback,
                     has_feedback=has_feedback,
+                    target_code_language=target_code_language,
                     trigger_context=trigger_context,
                 ),
                 ensure_ascii=False,
@@ -634,6 +642,7 @@ def _coach_input_context(
     extracted_code: ExtractedCode | None,
     latest_submission_feedback: SubmissionFeedback | None,
     has_feedback: bool,
+    target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
 ) -> dict[str, Any]:
     latest_code: dict[str, Any] | None = None
@@ -661,6 +670,7 @@ def _coach_input_context(
             "visible_hint_gear": practice_session.visible_hint_gear,
             "has_code": practice_session.latest_code_snapshot_id is not None,
             "has_submission_feedback": has_feedback,
+            "target_code_language": target_code_language,
         },
         "profile_snapshot": practice_session.profile_snapshot_json,
         "trigger_context": trigger_context,
@@ -676,11 +686,46 @@ def _coach_input_context(
             "phase_after": "one allowed phase",
             "diagnosed_stuck_point": "short stable snake_case string",
             "next_action": "short stable snake_case string",
-            "reply_md": "简体中文教练回复",
+            "reply_md": "简体中文教练回复；如包含代码示例，使用 session.target_code_language",
             "should_reveal_solution": "boolean",
             "code_quality_status": "optional pending | needs_fix | ready_to_submit when reviewing code",
             "code_quality_comment": "optional short Chinese review summary",
         },
+    }
+
+
+async def _target_code_language_context(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    practice_session: PracticeSession,
+) -> dict[str, str] | None:
+    version_id = (
+        practice_session.latest_plan_version_id
+        or practice_session.origin_plan_version_id
+    )
+    if version_id is None:
+        return None
+    result = await session.execute(
+        select(StudyPlanVersion.target_snapshot_json)
+        .join(StudyPlan, StudyPlan.id == StudyPlanVersion.plan_id)
+        .where(
+            StudyPlanVersion.id == version_id,
+            StudyPlan.id == practice_session.study_plan_id,
+            StudyPlan.user_id == user_id,
+        )
+    )
+    target_snapshot = result.scalar_one_or_none()
+    if not isinstance(target_snapshot, dict):
+        return None
+    language = target_snapshot.get("preferred_language")
+    if not isinstance(language, str) or language not in TARGET_CODE_LANGUAGE_LABELS:
+        return None
+    # 目标训练语言来自学习计划，不来自用户自由输入；模型只能消费规范化枚举和展示标签。
+    return {
+        "value": language,
+        "label": TARGET_CODE_LANGUAGE_LABELS[language],
+        "source": "study_plan_target_snapshot",
     }
 
 
