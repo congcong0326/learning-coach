@@ -58,7 +58,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、学习仪表盘、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
 
-计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
+计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；非 AC 的 LeetCode 结果不再通过主界面表单回填，用户直接把平台提示、失败用例或错误信息发给教练，后端在 `coach_turn` 中识别并注入安全摘要。悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态，并在聊天流里用临时教练气泡展示当前状态或流式回复，不把系统执行步骤写入持久聊天历史。
 
 ## 后端选型
 
@@ -215,7 +215,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `practice_session`，以 `user_id + study_plan_id + problem_id` 保证同一计划题复用同一个训练会话，并记录 origin/latest 计划版本追溯字段。
 - 创建 `practice_event`，保存用户消息、AI 回复、自动代码尝试、LeetCode AC、阶段变化、复盘和画像更新等训练时间线事件。
 - 创建 `code_snapshot`，保存用户代码版本和 `code_hash`；第一版代码主要从 `review_code` 聊天流程自动提取，完整代码只在代码快照表中留存，不进入普通日志或长期画像摘要。
-- 创建 `submission_feedback`，保存用户确认的 LeetCode 结果；AC 允许不携带运行时间、内存或代码快照，非 AC 反馈仍可关联失败样例摘要、错误信息和代码尝试。
+- 创建 `submission_feedback`，保存用户确认的 LeetCode 结果；AC 允许不携带运行时间、内存或代码快照。非 AC 事实可以来自聊天识别、高级入口或未来自动接入，主路径不要求用户填写结构化表单。
 - 创建 `coach_turn`，保存一次 AI 教练回复的阶段判断、提示档位、守卫结果、上下文快照和 assistant event 关联。
 - 创建 `session_summary`，保存单题复盘、阶段轨迹、卡点、提交错因、复杂度/核心思路占位、画像信号和下一题建议，且一个 session 只保留一个 summary。
 - 创建 `user_profile_snapshot`，保存面向 AI 教练读取的长期画像版本，不原地覆盖旧版本。
@@ -231,7 +231,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 回填会作为结构化提交反馈进入下一轮 `coach_turn` 上下文，前端也展示提交反馈历史。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。`coach_summary` run 暂时保留确定性安全回复，并在教练回复后创建或更新 `session_summary`，再生成 `profile_delta` 并经后端校验合并为新的 `user_profile_snapshot`；真实 RAG 和更完整的复盘模型输出后续可以在相同 run kind 边界内替换。
+训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 信息如果由用户粘贴在聊天中，会被 `coach_turn` 识别为 `chat_extracted` 提交反馈摘要，并进入下一轮模型上下文；`coach_summary` 使用独立 prompt 生成教练式 AC 复盘，重点总结本题优点、缺点、证据、画像变化和下一题训练策略。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。
 
 当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
 
