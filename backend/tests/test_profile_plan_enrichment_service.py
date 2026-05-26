@@ -6,11 +6,15 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import backend.app.models.llm_run  # noqa: F401
 from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
+    PlanChangeLog,
+    ProfilePlanEnrichmentDraft,
     StudyPlan,
     StudyPlanItem,
     StudyPlanStage,
@@ -266,6 +270,61 @@ def validation_context(*, item_count: int = 3) -> dict[str, object]:
             },
         ],
     }
+
+
+async def create_generated_enrichment_draft(
+    db_session: AsyncSession,
+    *,
+    output_items: list[dict[str, object]] | None = None,
+) -> tuple[AppUser, StudyPlan, StudyPlanVersion, ProfilePlanEnrichmentDraft]:
+    from backend.app.services.profile_plan_enrichment import (
+        build_enrichment_context,
+        persist_generated_draft,
+        validate_model_output,
+    )
+
+    user, plan, version = await create_user_plan(db_session)
+    request = ProfilePlanEnrichmentRequest(
+        user_intent_md="补哈希表边界",
+        item_count=2,
+        difficulty_preference="keep_current",
+    )
+    context = await build_enrichment_context(db_session, user, plan.id, request)
+    output = {
+        "enrichment_theme": "哈希表边界补强",
+        "plan_gap_assessment": {"gap_level": "medium", "summary_md": "需要补强。"},
+        "overall_reason_md": "追加边界题。",
+        "items": output_items
+        or [
+            {
+                "problem_slug": "contains-duplicate",
+                "target_stage_key": "stage-current",
+                "weakness_targets": ["边界"],
+                "difficulty": "Easy",
+                "recommendation_reason_md": "练习重复元素。",
+                "first_question_hint": "先列重复元素。",
+                "review_focus": "检查 set。",
+                "suggested_mode": "independent",
+            }
+        ],
+        "not_added_reason_md": "",
+    }
+    report, items = validate_model_output(output, context)
+    draft = await persist_generated_draft(
+        db_session,
+        user=user,
+        plan_id=plan.id,
+        version_id=version.id,
+        profile_snapshot_id=context["profile_snapshot"]["id"],
+        llm_run_id=1,
+        payload=request,
+        context=context,
+        model_output=output,
+        validation_report=report,
+        normalized_items=items,
+    )
+    await db_session.commit()
+    return user, plan, version, draft
 
 
 @pytest.mark.asyncio
@@ -567,66 +626,139 @@ def test_validate_model_output_rejects_invalid_candidate_items(
 async def test_confirm_enrichment_draft_appends_items_to_current_stage(
     db_session: AsyncSession,
 ) -> None:
-    from backend.app.models.learning import ProfilePlanEnrichmentDraft
-    from backend.app.services.profile_plan_enrichment import (
-        build_enrichment_context,
-        confirm_enrichment_draft,
-        persist_generated_draft,
-        validate_model_output,
-    )
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
 
-    user, plan, version = await create_user_plan(db_session)
-    request = ProfilePlanEnrichmentRequest(
-        user_intent_md="补哈希表边界",
-        item_count=2,
-        difficulty_preference="keep_current",
-    )
-    context = await build_enrichment_context(db_session, user, plan.id, request)
-    output = {
-        "enrichment_theme": "哈希表边界补强",
-        "plan_gap_assessment": {"gap_level": "medium", "summary_md": "需要补强。"},
-        "overall_reason_md": "追加边界题。",
-        "items": [
-            {
-                "problem_slug": "contains-duplicate",
-                "target_stage_key": "stage-current",
-                "weakness_targets": ["边界"],
-                "difficulty": "Easy",
-                "recommendation_reason_md": "练习重复元素。",
-                "first_question_hint": "先列重复元素。",
-                "review_focus": "检查 set。",
-                "suggested_mode": "independent",
-            }
-        ],
-        "not_added_reason_md": "",
-    }
-    report, items = validate_model_output(output, context)
-    draft = await persist_generated_draft(
-        db_session,
-        user=user,
-        plan_id=plan.id,
-        version_id=version.id,
-        profile_snapshot_id=context["profile_snapshot"]["id"],
-        llm_run_id=1,
-        payload=request,
-        context=context,
-        model_output=output,
-        validation_report=report,
-        normalized_items=items,
-    )
-    await db_session.commit()
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
 
     response = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
 
-    added = [
-        item
+    added_with_stage = [
+        (stage, item)
         for stage in response["active_version"]["stages"]
         for item in stage["items"]
         if item["problem_slug"] == "contains-duplicate"
     ]
+    added = [item for _stage, item in added_with_stage]
     assert len(added) == 1
     assert added[0]["recommendation_reason"].startswith("画像补强：")
     refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft.id)
     assert refreshed is not None
     assert refreshed.status == "confirmed"
     assert len(refreshed.confirmed_item_ids_json) == 1
+
+    log_result = await db_session.execute(
+        select(PlanChangeLog).where(
+            PlanChangeLog.change_type == "profile_enrichment_added"
+        )
+    )
+    change_log = log_result.scalar_one()
+    assert change_log.problem_id == added[0]["problem_id"]
+    assert change_log.detail_json["draft_id"] == draft.id
+    assert change_log.detail_json["problem_slug"] == "contains-duplicate"
+    assert change_log.detail_json["study_plan_item_id"] == added[0]["id"]
+    assert change_log.detail_json["stage_id"] == added_with_stage[0][0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_is_idempotent(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+
+    first = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+    second = await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    first_items = [
+        item
+        for stage in first["active_version"]["stages"]
+        for item in stage["items"]
+        if item["problem_slug"] == "contains-duplicate"
+    ]
+    second_items = [
+        item
+        for stage in second["active_version"]["stages"]
+        for item in stage["items"]
+        if item["problem_slug"] == "contains-duplicate"
+    ]
+    assert len(first_items) == 1
+    assert second_items == first_items
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_non_generated_status(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    draft.status = "failed"
+    await db_session.commit()
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_duplicate_existing_slug(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+    draft_id = draft.id
+    draft.model_output_json = {
+        **draft.model_output_json,
+        "items": [
+            {
+                "problem_id": draft.model_output_json["items"][0]["problem_id"],
+                "problem_slug": "two-sum",
+                "title": "Two Sum",
+                "translated_title": "两数之和",
+                "difficulty": "Easy",
+                "skill_tags": ["array", "hash-table"],
+                "target_stage_id": 1,
+                "target_stage_title": "哈希表基础",
+                "weakness_targets": ["边界"],
+                "recommendation_reason_md": "重复题。",
+                "first_question_hint": "先列边界。",
+                "review_focus": "检查重复元素。",
+                "suggested_mode": "independent",
+            }
+        ],
+    }
+    await db_session.commit()
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"
+    refreshed = await db_session.get(ProfilePlanEnrichmentDraft, draft_id)
+    assert refreshed is not None
+    assert refreshed.status == "generated"
+
+
+@pytest.mark.asyncio
+async def test_confirm_enrichment_draft_rejects_integrity_conflict(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.services.profile_plan_enrichment import confirm_enrichment_draft
+    from backend.app.services.study_plan_service import StudyPlanError
+
+    user, plan, _version, draft = await create_generated_enrichment_draft(db_session)
+
+    async def fail_flush() -> None:
+        raise IntegrityError("insert", {}, Exception("unique conflict"))
+
+    monkeypatch.setattr(db_session, "flush", fail_flush)
+
+    with pytest.raises(StudyPlanError) as exc_info:
+        await confirm_enrichment_draft(db_session, user, plan.id, draft.id)
+
+    assert exc_info.value.detail == "profile_plan_enrichment_not_confirmable"

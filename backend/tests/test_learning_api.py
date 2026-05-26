@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from backend.app.api.auth import current_user_dependency
 from backend.app.main import app
 from backend.app.models.auth import AppUser
+from backend.app.services.study_plan_service import StudyPlanError
 
 
 def fake_user() -> AppUser:
@@ -153,3 +154,47 @@ def test_profile_enrichment_confirm_route_returns_updated_plan(monkeypatch) -> N
 
     assert response.status_code == 200
     assert response.json()["id"] == 7
+
+
+def test_profile_enrichment_confirm_route_maps_not_confirmable_to_conflict(
+    monkeypatch,
+) -> None:
+    async def fake_confirm(session, user, plan_id, draft_id):
+        del session, user, plan_id, draft_id
+        raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+
+    monkeypatch.setattr(
+        "backend.app.services.profile_plan_enrichment.confirm_enrichment_draft",
+        fake_confirm,
+        raising=False,
+    )
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.post("/api/study-plans/7/profile-enrichments/3/confirm")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "profile_plan_enrichment_not_confirmable"
+
+
+def test_profile_enrichment_draft_route_maps_not_found(monkeypatch) -> None:
+    async def fake_get(session, user, plan_id, draft_id):
+        del session, user, plan_id, draft_id
+        raise StudyPlanError("profile_plan_enrichment_not_found")
+
+    monkeypatch.setattr(
+        "backend.app.services.profile_plan_enrichment.get_enrichment_draft_payload",
+        fake_get,
+        raising=False,
+    )
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.get("/api/study-plans/7/profile-enrichments/3")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "profile_plan_enrichment_not_found"

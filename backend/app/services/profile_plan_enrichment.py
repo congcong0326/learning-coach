@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
@@ -360,18 +361,23 @@ async def confirm_enrichment_draft(
     plan_id: int,
     draft_id: int,
 ) -> dict[str, Any]:
+    user_id = user.id
     logger.info(
         "profile_plan_enrichment_confirm_started user_id=%s plan_id=%s draft_id=%s",
-        user.id,
+        user_id,
         plan_id,
         draft_id,
     )
+    confirmed_plan_id = plan_id
+    confirmed_draft_id = draft_id
+    added_count = 0
+    response_version: StudyPlanVersion | None = None
     try:
         draft = await _load_draft(db, user, plan_id, draft_id, for_update=True)
         if draft.status == "confirmed":
             logger.info(
                 "profile_plan_enrichment_confirm_idempotent user_id=%s plan_id=%s draft_id=%s",
-                user.id,
+                user_id,
                 plan_id,
                 draft_id,
             )
@@ -379,9 +385,14 @@ async def confirm_enrichment_draft(
         if draft.status != "generated":
             raise StudyPlanError("profile_plan_enrichment_not_confirmable")
 
+        await _lock_plan_for_confirmation(db, user, plan_id)
         plan, version = await _load_active_plan_version(db, user, plan_id)
+        await _lock_version_content_for_confirmation(db, version.id)
         if version.id != draft.study_plan_version_id:
             raise StudyPlanError("profile_plan_enrichment_not_confirmable")
+        await db.refresh(version, attribute_names=["stages", "items"])
+        for stage in version.stages:
+            await db.refresh(stage, attribute_names=["items"])
 
         output_items = _dict_value(draft.model_output_json).get("items")
         if not isinstance(output_items, list):
@@ -435,42 +446,96 @@ async def confirm_enrichment_draft(
         plan.updated_at = now
         confirmed_plan_id = plan.id
         confirmed_draft_id = draft.id
+        added_count = len(added_ids)
+        response_version = version
         await db.commit()
-        # 同一个 session 在生成上下文时已经加载过 version/stage.items；确认后必须刷新关系，
-        # 否则返回 payload 可能复用旧集合，看不到刚追加的补强题。
-        await db.refresh(version, attribute_names=["stages", "items"])
-        for stage in version.stages:
-            await db.refresh(stage, attribute_names=["items"])
-            for stage_item in stage.items:
-                await db.refresh(stage_item, attribute_names=["problem"])
-        payload = await study_plan_payload(db, user, confirmed_plan_id)
-        logger.info(
-            "profile_plan_enrichment_confirmed user_id=%s plan_id=%s draft_id=%s added_count=%s",
-            user.id,
-            confirmed_plan_id,
-            confirmed_draft_id,
-            len(added_ids),
-        )
-        return payload
     except StudyPlanError as exc:
         await db.rollback()
         logger.warning(
             "profile_plan_enrichment_confirm_rejected user_id=%s plan_id=%s draft_id=%s reason=%s",
-            user.id,
+            user_id,
             plan_id,
             draft_id,
             exc.detail,
         )
         raise
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.warning(
+            "profile_plan_enrichment_confirm_rejected user_id=%s plan_id=%s draft_id=%s reason=integrity_conflict",
+            user_id,
+            plan_id,
+            draft_id,
+        )
+        raise StudyPlanError("profile_plan_enrichment_not_confirmable") from exc
     except Exception:
         await db.rollback()
         logger.exception(
             "profile_plan_enrichment_confirm_failed user_id=%s plan_id=%s draft_id=%s",
-            user.id,
+            user_id,
             plan_id,
             draft_id,
         )
         raise
+
+    if response_version is not None:
+        # 同一个 session 在生成上下文时已经加载过 version/stage.items；确认后必须刷新关系，
+        # 否则返回 payload 可能复用旧集合，看不到刚追加的补强题。
+        await db.refresh(response_version, attribute_names=["stages", "items"])
+        for stage in response_version.stages:
+            await db.refresh(stage, attribute_names=["items"])
+            for stage_item in stage.items:
+                await db.refresh(stage_item, attribute_names=["problem"])
+    payload = await study_plan_payload(db, user, confirmed_plan_id)
+    logger.info(
+        "profile_plan_enrichment_confirmed user_id=%s plan_id=%s draft_id=%s added_count=%s",
+        user_id,
+        confirmed_plan_id,
+        confirmed_draft_id,
+        added_count,
+    )
+    return payload
+
+
+async def _lock_plan_for_confirmation(
+    db: AsyncSession,
+    user: AppUser,
+    plan_id: int,
+) -> None:
+    result = await db.execute(
+        select(StudyPlan)
+        .where(
+            StudyPlan.id == plan_id,
+            StudyPlan.user_id == user.id,
+            StudyPlan.status == "active",
+        )
+        .with_for_update()
+    )
+    if result.scalar_one_or_none() is None:
+        raise StudyPlanError("active_study_plan_not_found")
+
+
+async def _lock_version_content_for_confirmation(
+    db: AsyncSession,
+    version_id: int,
+) -> None:
+    # 确认补强题时要串行化当前版本的阶段尾部和题目集合，避免并发确认时
+    # 同时通过重复题检查或计算出相同 order_index。
+    await db.execute(
+        select(StudyPlanVersion)
+        .where(StudyPlanVersion.id == version_id)
+        .with_for_update()
+    )
+    await db.execute(
+        select(StudyPlanStage)
+        .where(StudyPlanStage.version_id == version_id)
+        .with_for_update()
+    )
+    await db.execute(
+        select(StudyPlanItem)
+        .where(StudyPlanItem.version_id == version_id)
+        .with_for_update()
+    )
 
 
 async def _load_draft(
@@ -528,6 +593,8 @@ def _add_enrichment_change_log(
                 "draft_id": draft.id,
                 "problem_slug": item.problem_slug,
                 "source": "profile_plan_enrichment",
+                "stage_id": item.stage_id,
+                "study_plan_item_id": item.id,
             },
             reason_md=item.recommendation_reason,
         )
