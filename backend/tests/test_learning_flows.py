@@ -38,7 +38,10 @@ from backend.app.services.learning_flows.coach_turn import (
     _parse_coach_json,
     run_coach_turn,
 )
-from backend.app.services.learning_flows.coach_summary import run_coach_summary
+from backend.app.services.learning_flows.coach_summary import (
+    _looks_like_coach_summary,
+    run_coach_summary,
+)
 from backend.app.services.learning_flows.goal_calibration import run_goal_followup
 from backend.app.services.llm_providers.base import ProviderChunk
 from backend.app.services.llm_run_events import LlmRunEvent
@@ -1776,6 +1779,17 @@ async def test_coach_summary_does_not_require_user_event_id(
         assert snapshot is not None
         assert assistant.content_md == summary_markdown
         assert assistant.content_md == result["reply_md"]
+        assert coach_turn.prompt_version == "coach-summary-v1-coaching-review"
+        assert (
+            coach_turn.response_json["prompt_version"]
+            == "coach-summary-v1-coaching-review"
+        )
+        assert coach_turn.response_json["generation_mode"] == "coach_summary_model"
+        assert (
+            assistant.payload_json["prompt_version"]
+            == "coach-summary-v1-coaching-review"
+        )
+        assert assistant.payload_json["generation_mode"] == "coach_summary_model"
         assert "### 你做得好的地方" in assistant.content_md
         assert "### 需要补强的地方" in assistant.content_md
         assert "回填次数" not in assistant.content_md
@@ -1862,6 +1876,31 @@ async def test_coach_summary_fallback_uses_coach_review_headings(
         assistant = await session.get(PracticeEvent, result["assistant_event_id"])
         assert assistant is not None
         assert assistant.content_md == reply_md
+        coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
+        assert coach_turn is not None
+        assert coach_turn.response_json["generation_mode"] == "coach_summary_fallback"
+        assert assistant.payload_json["generation_mode"] == "coach_summary_fallback"
+
+
+def test_looks_like_coach_summary_requires_section_order() -> None:
+    valid = (
+        "## 单题复盘\n"
+        "### 你做得好的地方\n"
+        "### 需要补强的地方\n"
+        "### 本题关键思路\n"
+        "### 下次遇到同类题\n"
+        "### 画像更新"
+    )
+    invalid = (
+        "## 单题复盘\n"
+        "### 需要补强的地方\n"
+        "### 你做得好的地方\n"
+        "### 本题关键思路\n"
+        "### 下次遇到同类题\n"
+        "### 画像更新"
+    )
+    assert _looks_like_coach_summary(valid) is True
+    assert _looks_like_coach_summary(invalid) is False
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ async def run_coach_summary(
     )
     summary = await session.get(SessionSummary, summary_result.summary_id)
     if summary is not None:
-        reply_md = await _generate_summary_reply(
+        reply_md, generation_mode = await _generate_summary_reply(
             session,
             user_id=user_id,
             run=run,
@@ -78,10 +78,18 @@ async def run_coach_summary(
         coach_turn = await session.get(CoachTurn, result["coach_turn_id"])
         if assistant_event is not None:
             assistant_event.content_md = reply_md
+            assistant_event.payload_json = {
+                **assistant_event.payload_json,
+                "prompt_version": COACH_SUMMARY_PROMPT_VERSION,
+                "generation_mode": generation_mode,
+            }
         if coach_turn is not None:
+            coach_turn.prompt_version = COACH_SUMMARY_PROMPT_VERSION
             coach_turn.response_json = {
                 **coach_turn.response_json,
                 "content_md": reply_md,
+                "prompt_version": COACH_SUMMARY_PROMPT_VERSION,
+                "generation_mode": generation_mode,
             }
         run.display_text_md = reply_md
         result["reply_md"] = reply_md
@@ -109,10 +117,10 @@ async def _generate_summary_reply(
     provider: LlmProvider,
     model_name: str,
     summary: SessionSummary,
-) -> str:
+) -> tuple[str, str]:
     fallback = _summary_reply_markdown(summary)
     if not model_name:
-        return fallback
+        return fallback, "coach_summary_fallback"
     input_context = await _summary_input_context(
         session,
         user_id=user_id,
@@ -138,7 +146,7 @@ async def _generate_summary_reply(
             summary.session_id,
             type(exc).__name__,
         )
-        return fallback
+        return fallback, "coach_summary_fallback"
     if not final_text:
         final_text = "".join(raw_parts)
     reply_md = final_text.strip()
@@ -149,8 +157,8 @@ async def _generate_summary_reply(
             user_id,
             summary.session_id,
         )
-        return fallback
-    return reply_md
+        return fallback, "coach_summary_fallback"
+    return reply_md, "coach_summary_model"
 
 
 async def _summary_input_context(
@@ -365,7 +373,13 @@ def _feedback_item_context(feedback: SubmissionFeedback) -> dict[str, Any]:
 def _looks_like_coach_summary(markdown: str) -> bool:
     if not markdown:
         return False
-    return all(heading in markdown for heading in _REQUIRED_COACH_SUMMARY_HEADINGS)
+    current_index = -1
+    for heading in _REQUIRED_COACH_SUMMARY_HEADINGS:
+        next_index = markdown.find(heading, current_index + 1)
+        if next_index < 0:
+            return False
+        current_index = next_index
+    return True
 
 
 def _truncate(value: str | None, max_length: int) -> str:
