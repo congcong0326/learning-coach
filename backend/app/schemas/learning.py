@@ -198,11 +198,12 @@ ProfilePlanEnrichmentDifficulty = Literal[
     "keep_current",
     "stretch",
 ]
+ProfilePlanEnrichmentItemCount = Literal[2, 3, 5]
 
 
 class ProfilePlanEnrichmentRequest(BaseModel):
     user_intent_md: str = Field(default="", max_length=2000)
-    item_count: Literal[2, 3, 5] = 3
+    item_count: ProfilePlanEnrichmentItemCount = 3
     difficulty_preference: ProfilePlanEnrichmentDifficulty = "keep_current"
 
 
@@ -234,7 +235,7 @@ class ProfilePlanEnrichmentDraftResponse(BaseModel):
     plan_version_id: int
     profile_snapshot_id: int | None
     user_intent_md: str
-    item_count: int
+    item_count: ProfilePlanEnrichmentItemCount
     difficulty_preference: ProfilePlanEnrichmentDifficulty
     enrichment_theme: str = ""
     plan_gap_assessment: ProfilePlanGapAssessment | None = None

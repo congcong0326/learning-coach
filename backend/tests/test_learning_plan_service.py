@@ -30,6 +30,8 @@ from backend.app.schemas.learning import (
     FollowupAnswer,
     GoalCalibrationInput,
     PlanAdjustmentRequest,
+    ProfilePlanEnrichmentDraftResponse,
+    ProfilePlanEnrichmentRequest,
     StudyPlanResponse,
 )
 from backend.app.services.learning_plan_llm import PROMPT_VERSION
@@ -93,6 +95,37 @@ def test_profile_plan_enrichment_draft_has_auditable_context_fields() -> None:
     assert "confirmed_item_ids_json" in columns
     assert "error_summary" in columns
     assert "confirmed_at" in columns
+
+
+def test_profile_plan_enrichment_request_accepts_supported_item_counts() -> None:
+    for item_count in [2, 3, 5]:
+        payload = ProfilePlanEnrichmentRequest(item_count=cast(Any, item_count))
+
+        assert payload.item_count == item_count
+
+
+def test_profile_plan_enrichment_request_rejects_unsupported_item_count() -> None:
+    with pytest.raises(ValidationError):
+        ProfilePlanEnrichmentRequest(item_count=cast(Any, 4))
+
+
+def test_profile_plan_enrichment_response_rejects_unsupported_item_count() -> None:
+    now = datetime.now(UTC)
+
+    with pytest.raises(ValidationError):
+        ProfilePlanEnrichmentDraftResponse(
+            draft_id=1,
+            status="generated",
+            plan_id=1,
+            plan_version_id=1,
+            profile_snapshot_id=None,
+            user_intent_md="",
+            item_count=cast(Any, 4),
+            difficulty_preference="keep_current",
+            items=[],
+            created_at=now,
+            updated_at=now,
+        )
 
 
 def test_confirmed_version_fk_is_named_and_deferred() -> None:
