@@ -71,6 +71,8 @@ def test_chat_feedback_result_ignores_plain_discussion_keywords() -> None:
     assert _chat_feedback_result("这个递归会不会运行错误") is None
     assert _chat_feedback_result("这段代码可能有编译错误吗") is None
     assert _chat_feedback_result("unknown complexity") is None
+    assert _chat_feedback_result("如果这版没通过我该先查什么") is None
+    assert _chat_feedback_result("what if this is not accepted") is None
 
 
 def test_chat_feedback_result_detects_contextual_failure_text() -> None:

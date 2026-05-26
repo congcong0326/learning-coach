@@ -130,6 +130,15 @@ CHAT_FEEDBACK_WA_CONTEXT_TERMS = (
     "实际",
     "输出",
 )
+CHAT_FEEDBACK_HYPOTHETICAL_TERMS = (
+    "如果",
+    "假如",
+    "万一",
+    "要是",
+    "该先",
+    "怎么办",
+    "what if",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -902,6 +911,10 @@ def _chat_feedback_context(
 
 def _chat_feedback_result(normalized_content: str) -> str | None:
     normalized_content = normalized_content.lower()
+    if _chat_feedback_is_hypothetical(normalized_content) and not (
+        _chat_feedback_looks_like_wa_diff(normalized_content)
+    ):
+        return None
     has_result_context = _chat_feedback_has_result_context(normalized_content)
     for status_code, result in CHAT_FEEDBACK_STATUS_CODE_RESULTS.items():
         if _chat_feedback_status_code_matches(
@@ -912,8 +925,17 @@ def _chat_feedback_result(normalized_content: str) -> str | None:
             return result
     for result, keywords in CHAT_FEEDBACK_STRONG_RESULT_KEYWORDS:
         for keyword in keywords:
-            if keyword in normalized_content:
-                return result
+            if keyword not in normalized_content:
+                continue
+            if result == "unknown" and not (
+                has_result_context
+                or _chat_feedback_keyword_is_standalone_result(
+                    normalized_content,
+                    keyword,
+                )
+            ):
+                continue
+            return result
     if has_result_context:
         for result, keywords in CHAT_FEEDBACK_CONTEXTUAL_RESULT_KEYWORDS:
             for keyword in keywords:
@@ -926,6 +948,23 @@ def _chat_feedback_result(normalized_content: str) -> str | None:
 
 def _chat_feedback_has_result_context(normalized_content: str) -> bool:
     return any(term in normalized_content for term in CHAT_FEEDBACK_RESULT_CONTEXT_TERMS)
+
+
+def _chat_feedback_is_hypothetical(normalized_content: str) -> bool:
+    return any(term in normalized_content for term in CHAT_FEEDBACK_HYPOTHETICAL_TERMS)
+
+
+def _chat_feedback_keyword_is_standalone_result(
+    normalized_content: str,
+    keyword: str,
+) -> bool:
+    return (
+        re.fullmatch(
+            rf"\s*{re.escape(keyword)}\s*(?:了|啦|:|：|。|!|！|\.)?\s*",
+            normalized_content,
+        )
+        is not None
+    )
 
 
 def _chat_feedback_status_code_matches(
