@@ -62,6 +62,18 @@ def test_chat_feedback_result_ignores_plain_discussion_keywords() -> None:
     assert _chat_feedback_result("我期望用双指针维护窗口") is None
     assert _chat_feedback_result("这题时间限制是多少") is None
     assert _chat_feedback_result("数组越界这个概念我还不熟") is None
+    assert _chat_feedback_result("我担心这个复杂度会超时") is None
+    assert _chat_feedback_result("这个递归会不会运行错误") is None
+    assert _chat_feedback_result("这段代码可能有编译错误吗") is None
+    assert _chat_feedback_result("unknown complexity") is None
+
+
+def test_chat_feedback_result_detects_contextual_failure_text() -> None:
+    assert _chat_feedback_result("LeetCode 显示超时") == "tle"
+    assert _chat_feedback_result("提交后运行错误，提示 index out of range") == "re"
+    assert _chat_feedback_result("结果是编译错误") == "ce"
+    assert _chat_feedback_result("WA 了，失败用例是 nums=[3,3]") == "wa"
+    assert _chat_feedback_result("not accepted") == "unknown"
 
 
 class FakePlanProvider:

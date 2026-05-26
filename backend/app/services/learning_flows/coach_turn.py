@@ -79,13 +79,19 @@ TARGET_CODE_LANGUAGE_LABELS = {
     "javascript": "JavaScript",
     "java": "Java",
 }
-CHAT_FEEDBACK_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+CHAT_FEEDBACK_STRONG_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("wa", ("wrong answer", "答案错误")),
-    ("tle", ("time limit exceeded", "超时")),
-    ("re", ("runtime error", "运行错误")),
-    ("mle", ("memory limit exceeded", "内存超限")),
-    ("ce", ("compile error", "compilation error", "编译错误", "语法错误")),
-    ("unknown", ("unknown", "未通过", "没通过", "not accepted")),
+    ("tle", ("time limit exceeded",)),
+    ("re", ("runtime error",)),
+    ("mle", ("memory limit exceeded",)),
+    ("ce", ("compile error", "compilation error")),
+    ("unknown", ("未通过", "没通过", "not accepted")),
+)
+CHAT_FEEDBACK_CONTEXTUAL_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("tle", ("超时",)),
+    ("re", ("运行错误",)),
+    ("mle", ("内存超限",)),
+    ("ce", ("编译错误", "语法错误")),
 )
 CHAT_FEEDBACK_STATUS_CODE_RESULTS = {
     "wa": "wa",
@@ -94,6 +100,25 @@ CHAT_FEEDBACK_STATUS_CODE_RESULTS = {
     "mle": "mle",
     "ce": "ce",
 }
+CHAT_FEEDBACK_RESULT_CONTEXT_TERMS = (
+    "leetcode",
+    "力扣",
+    "提交",
+    "结果",
+    "显示",
+    "提示",
+    "报错",
+    "错误信息",
+    "失败",
+    "用例",
+    "输出",
+    "期望",
+    "expected",
+    "got",
+    "actual",
+    "test case",
+    "case",
+)
 CHAT_FEEDBACK_WA_DIFF_TERMS = ("输出是", "期望", "expected", "got")
 CHAT_FEEDBACK_WA_CONTEXT_TERMS = (
     "失败用例",
@@ -876,22 +901,59 @@ def _chat_feedback_context(
 
 
 def _chat_feedback_result(normalized_content: str) -> str | None:
+    normalized_content = normalized_content.lower()
+    has_result_context = _chat_feedback_has_result_context(normalized_content)
     for status_code, result in CHAT_FEEDBACK_STATUS_CODE_RESULTS.items():
-        if _chat_feedback_status_code_matches(normalized_content, status_code):
+        if _chat_feedback_status_code_matches(
+            normalized_content,
+            status_code,
+            has_result_context=has_result_context,
+        ):
             return result
-    for result, keywords in CHAT_FEEDBACK_RESULT_KEYWORDS:
+    for result, keywords in CHAT_FEEDBACK_STRONG_RESULT_KEYWORDS:
         for keyword in keywords:
             if keyword in normalized_content:
                 return result
+    if has_result_context:
+        for result, keywords in CHAT_FEEDBACK_CONTEXTUAL_RESULT_KEYWORDS:
+            for keyword in keywords:
+                if keyword in normalized_content:
+                    return result
     if _chat_feedback_looks_like_wa_diff(normalized_content):
         return "wa"
     return None
 
 
-def _chat_feedback_status_code_matches(normalized_content: str, status_code: str) -> bool:
+def _chat_feedback_has_result_context(normalized_content: str) -> bool:
+    return any(term in normalized_content for term in CHAT_FEEDBACK_RESULT_CONTEXT_TERMS)
+
+
+def _chat_feedback_status_code_matches(
+    normalized_content: str,
+    status_code: str,
+    *,
+    has_result_context: bool,
+) -> bool:
+    if _chat_feedback_short_status_code_matches(normalized_content, status_code):
+        return True
+    if not has_result_context:
+        return False
     return (
         re.search(
             rf"(?<![a-z0-9]){re.escape(status_code)}(?![a-z0-9])",
+            normalized_content,
+        )
+        is not None
+    )
+
+
+def _chat_feedback_short_status_code_matches(
+    normalized_content: str,
+    status_code: str,
+) -> bool:
+    return (
+        re.fullmatch(
+            rf"\s*{re.escape(status_code)}\s*(?:了|啦|:|：|。|!|！|\.)?\s*",
             normalized_content,
         )
         is not None
