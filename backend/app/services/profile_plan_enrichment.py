@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.auth import AppUser
-from backend.app.models.learning import StudyPlan, StudyPlanStage, StudyPlanVersion
+from backend.app.models.learning import (
+    ProfilePlanEnrichmentDraft,
+    StudyPlan,
+    StudyPlanStage,
+    StudyPlanVersion,
+)
 from backend.app.models.practice import SessionSummary, UserProfileSnapshot
 from backend.app.models.problem import Problem
-from backend.app.schemas.learning import ProfilePlanEnrichmentRequest
+from backend.app.schemas.learning import (
+    ProfilePlanEnrichmentDraftResponse,
+    ProfilePlanEnrichmentRequest,
+)
 from backend.app.services.profile_service import latest_profile_snapshot, snapshot_payload
 from backend.app.services.study_plan_service import StudyPlanError
 
@@ -204,6 +213,100 @@ def validate_model_output(
         "item_count": len(normalized_items) if valid else 0,
     }
     return report, normalized_items if valid else []
+
+
+async def persist_generated_draft(
+    db: AsyncSession,
+    *,
+    user: AppUser,
+    plan_id: int,
+    version_id: int,
+    profile_snapshot_id: int | None,
+    llm_run_id: int,
+    payload: ProfilePlanEnrichmentRequest,
+    context: dict[str, Any],
+    model_output: dict[str, Any],
+    validation_report: dict[str, Any],
+    normalized_items: list[dict[str, Any]],
+) -> ProfilePlanEnrichmentDraft:
+    now = datetime.now(UTC)
+    issues = validation_report.get("issues", [])
+    draft = ProfilePlanEnrichmentDraft(
+        user_id=user.id,
+        study_plan_id=plan_id,
+        study_plan_version_id=version_id,
+        profile_snapshot_id=profile_snapshot_id,
+        llm_run_id=llm_run_id,
+        status="generated" if validation_report.get("valid") else "failed",
+        user_intent_md=payload.user_intent_md,
+        item_count=payload.item_count,
+        difficulty_preference=payload.difficulty_preference,
+        context_summary_json=_safe_context_summary(context),
+        candidate_problem_ids_json=[
+            _int_value(item.get("problem_id"), 0)
+            for item in _list_of_dicts(context.get("candidate_problems"))
+            if _int_value(item.get("problem_id"), 0) > 0
+        ],
+        model_output_json={**model_output, "items": normalized_items},
+        validation_report_json=validation_report,
+        confirmed_item_ids_json=[],
+        error_summary=";".join(str(issue) for issue in issues)
+        if isinstance(issues, list)
+        else str(issues or ""),
+        created_at=now,
+        updated_at=now,
+        confirmed_at=None,
+    )
+    db.add(draft)
+    await db.flush()
+    logger.info(
+        "profile_plan_enrichment_generated user_id=%s plan_id=%s draft_id=%s item_count=%s valid=%s",
+        user.id,
+        plan_id,
+        draft.id,
+        len(normalized_items),
+        validation_report.get("valid"),
+    )
+    return draft
+
+
+def _safe_context_summary(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user_request": context.get("user_request", {}),
+        "goal_context": context.get("goal_context", {}),
+        "profile_snapshot": context.get("profile_snapshot", {}),
+        "training_facts": context.get("training_facts", {}),
+        "current_plan": context.get("current_plan", {}),
+        "candidate_count": len(_list_of_dicts(context.get("candidate_problems"))),
+    }
+
+
+def draft_response(
+    draft: ProfilePlanEnrichmentDraft,
+) -> ProfilePlanEnrichmentDraftResponse:
+    output = _dict_value(draft.model_output_json)
+    gap = output.get("plan_gap_assessment")
+    return ProfilePlanEnrichmentDraftResponse.model_validate(
+        {
+            "draft_id": draft.id,
+            "status": draft.status,
+            "plan_id": draft.study_plan_id,
+            "plan_version_id": draft.study_plan_version_id,
+            "profile_snapshot_id": draft.profile_snapshot_id,
+            "user_intent_md": draft.user_intent_md,
+            "item_count": draft.item_count,
+            "difficulty_preference": draft.difficulty_preference,
+            "enrichment_theme": str(output.get("enrichment_theme") or ""),
+            "plan_gap_assessment": gap if isinstance(gap, dict) else None,
+            "overall_reason_md": str(output.get("overall_reason_md") or ""),
+            "not_added_reason_md": str(output.get("not_added_reason_md") or ""),
+            "items": output.get("items") if isinstance(output.get("items"), list) else [],
+            "validation_report": _dict_value(draft.validation_report_json),
+            "created_at": draft.created_at,
+            "updated_at": draft.updated_at,
+            "confirmed_at": draft.confirmed_at,
+        }
+    )
 
 
 async def _load_active_plan_version(

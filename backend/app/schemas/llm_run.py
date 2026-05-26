@@ -14,6 +14,7 @@ LlmRunKind = Literal[
     "coach_message",
     "code_review",
     "reflection",
+    "profile_plan_enrichment",
 ]
 LlmRunStatus = Literal["pending", "running", "succeeded", "failed", "canceled"]
 

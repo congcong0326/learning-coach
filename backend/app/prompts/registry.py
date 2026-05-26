@@ -65,6 +65,17 @@ _PROMPT_DEFINITIONS: dict[str, _PromptDefinition] = {
         resource_name="coach_summary.v1.md",
         output_fields=("markdown",),
     ),
+    "profile_plan_enrichment": _PromptDefinition(
+        version="profile-plan-enrichment-v1",
+        resource_name="profile_plan_enrichment.v1.md",
+        output_fields=(
+            "enrichment_theme",
+            "plan_gap_assessment",
+            "overall_reason_md",
+            "items",
+            "not_added_reason_md",
+        ),
+    ),
 }
 
 

@@ -11,6 +11,9 @@ from backend.app.services.learning_flows.coach_summary import CoachSummaryHandle
 from backend.app.services.learning_flows.coach_turn import CoachTurnHandler
 from backend.app.services.learning_flows.goal_calibration import run_goal_followup
 from backend.app.services.learning_flows.goal_plan import run_goal_plan_generate
+from backend.app.services.learning_flows.profile_plan_enrichment import (
+    ProfilePlanEnrichmentHandler,
+)
 from backend.app.services.llm_providers.base import LlmProvider
 from backend.app.services.llm_run_events import LlmRunEvent
 
@@ -98,6 +101,13 @@ RUN_KIND_SPECS: dict[str, RunKindSpec] = {
         related_type="study_plan",
         related_id_key="plan_id",
         requires_model=False,
+    ),
+    # study_plan：画像驱动的补强题预览，正式追加仍需用户确认。
+    "profile_plan_enrichment": RunKindSpec(
+        handler=ProfilePlanEnrichmentHandler(),
+        related_type="study_plan",
+        related_id_key="plan_id",
+        requires_model=True,
     ),
 }
 

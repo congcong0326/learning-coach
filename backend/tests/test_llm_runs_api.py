@@ -237,6 +237,48 @@ def test_create_llm_run_preserves_study_plan_adjustment_related_mapping(monkeypa
     }
 
 
+def test_profile_plan_enrichment_run_uses_registry_related_mapping(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_create(
+        session: Any,
+        user: AppUser,
+        *,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        related_type: str = "",
+        related_id: int | None = None,
+    ):
+        captured["kind"] = kind
+        captured["payload"] = payload
+        captured["related_type"] = related_type
+        captured["related_id"] = related_id
+        return type("Run", (), {"id": 12, "kind": kind, "status": "pending", "stage": "queued"})()
+
+    monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
+    app.dependency_overrides[current_user_dependency] = fake_user
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/llm-runs",
+            json={
+                "kind": "profile_plan_enrichment",
+                "payload": {
+                    "plan_id": 9,
+                    "user_intent_md": "补边界",
+                    "item_count": 3,
+                    "difficulty_preference": "keep_current",
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured["related_type"] == "study_plan"
+    assert captured["related_id"] == 9
+
+
 @pytest.mark.parametrize("kind", ["coach_turn", "coach_summary"])
 def test_create_llm_run_accepts_practice_run_kinds(monkeypatch, kind: str) -> None:
     captured: dict[str, Any] = {}
