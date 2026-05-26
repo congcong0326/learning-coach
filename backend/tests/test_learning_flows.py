@@ -1296,11 +1296,76 @@ async def test_coach_turn_includes_latest_non_ac_feedback_in_model_context(
         assert result["guard"]["accepted"] is True
         model_context = json.loads(provider.calls[0]["input_text"])
         assert model_context["latest_submission_feedback"] == {
+            "source": "leetcode_manual",
             "result": "wa",
             "code_snapshot_id": snapshot.id,
             "failed_case_text": "nums=[3,3], target=6",
             "error_message": "expected [0,1], got []",
             "note_md": "怀疑补数查询顺序有问题",
+        }
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_treats_pasted_non_ac_chat_as_feedback(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="review_code",
+            user_intent="unknown",
+            content_md="这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。",
+            with_code=True,
+        )
+        assert snapshot is not None
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="unknown",
+        )
+        provider = FakeCoachProvider(
+            {
+                "phase_after": "analyze_feedback",
+                "diagnosed_stuck_point": "chat_submission_feedback_analysis",
+                "next_action": "analyze_submission_feedback",
+                "reply_md": "这个 WA 先围绕重复元素用例 trace 查询和写入哈希表的顺序。",
+                "should_reveal_solution": False,
+            }
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        result = await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        assert result["phase_after"] == "analyze_feedback"
+        assert result["guard"]["accepted"] is True
+        model_context = json.loads(provider.calls[0]["input_text"])
+        assert model_context["trigger_context"] == {
+            "trigger": "unknown",
+            "proposed_phase": "analyze_feedback",
+            "next_action": "analyze_submission_feedback",
+            "diagnosed_stuck_point": "chat_submission_feedback_analysis",
+        }
+        assert model_context["session"]["has_submission_feedback"] is True
+        assert model_context["latest_submission_feedback"] == {
+            "source": "chat_extracted",
+            "result": "wa",
+            "code_snapshot_id": snapshot.id,
+            "failed_case_text": "这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。",
+            "error_message": "这版 WA，失败用例是 nums=[3,3], target=6，输出是 []。",
+            "note_md": "",
         }
 
 

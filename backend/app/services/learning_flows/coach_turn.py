@@ -76,6 +76,14 @@ TARGET_CODE_LANGUAGE_LABELS = {
     "javascript": "JavaScript",
     "java": "Java",
 }
+CHAT_FEEDBACK_RESULT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("wa", ("wa", "wrong answer", "答案错误", "输出是", "期望")),
+    ("tle", ("tle", "time limit exceeded", "超时", "时间限制")),
+    ("re", ("re", "runtime error", "运行错误", "越界", "空指针")),
+    ("mle", ("mle", "memory limit exceeded", "内存超限")),
+    ("ce", ("ce", "compile error", "compilation error", "编译错误", "语法错误")),
+    ("unknown", ("unknown", "未通过", "没通过", "not accepted")),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +139,23 @@ async def run_coach_turn(
         user_id=user_id,
         session_id=practice_session.id,
     )
-    has_feedback = latest_submission_feedback is not None
+    chat_feedback_context = _chat_feedback_context(
+        user_event,
+        code_snapshot=code_snapshot,
+    )
+    if chat_feedback_context is not None:
+        logger.info(
+            "coach turn chat feedback detected run_id=%s user_id=%s session_id=%s "
+            "result=%s code_snapshot_id=%s",
+            run.id,
+            user_id,
+            practice_session.id,
+            chat_feedback_context["result"],
+            chat_feedback_context["code_snapshot_id"],
+        )
+    has_feedback = (
+        latest_submission_feedback is not None or chat_feedback_context is not None
+    )
     target_code_language = await _target_code_language_context(
         session,
         user_id=user_id,
@@ -144,6 +168,7 @@ async def run_coach_turn(
             run=run,
             code_snapshot=code_snapshot,
             latest_submission_feedback=latest_submission_feedback,
+            chat_feedback_context=chat_feedback_context,
         )
     )
     trigger_context = _trigger_context(
@@ -153,6 +178,7 @@ async def run_coach_turn(
         has_submission_feedback=has_feedback,
         force_summary=run.kind == "coach_summary",
         extracted_code=extracted_code,
+        chat_feedback_context=chat_feedback_context,
     )
     await _publish_progress(
         publish,
@@ -188,6 +214,7 @@ async def run_coach_turn(
         code_snapshot=code_snapshot,
         extracted_code=extracted_code,
         latest_submission_feedback=latest_submission_feedback,
+        chat_feedback_context=chat_feedback_context,
         has_feedback=has_feedback,
         target_code_language=target_code_language,
         trigger_context=trigger_context,
@@ -572,6 +599,7 @@ async def _coach_decision(
     code_snapshot: CodeSnapshot | None,
     extracted_code: ExtractedCode | None,
     latest_submission_feedback: SubmissionFeedback | None,
+    chat_feedback_context: dict[str, Any] | None,
     has_feedback: bool,
     target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
@@ -593,6 +621,7 @@ async def _coach_decision(
                     code_snapshot=code_snapshot,
                     extracted_code=extracted_code,
                     latest_submission_feedback=latest_submission_feedback,
+                    chat_feedback_context=chat_feedback_context,
                     has_feedback=has_feedback,
                     target_code_language=target_code_language,
                     trigger_context=trigger_context,
@@ -641,6 +670,7 @@ def _coach_input_context(
     code_snapshot: CodeSnapshot | None,
     extracted_code: ExtractedCode | None,
     latest_submission_feedback: SubmissionFeedback | None,
+    chat_feedback_context: dict[str, Any] | None,
     has_feedback: bool,
     target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
@@ -657,7 +687,10 @@ def _coach_input_context(
             "language": extracted_code.language,
             "code_text": extracted_code.code_text,
         }
-    feedback_context = _submission_feedback_context(latest_submission_feedback)
+    feedback_context = _submission_feedback_context(
+        latest_submission_feedback,
+        chat_feedback_context,
+    )
     return {
         "allowed_phases": sorted(COACH_PHASES),
         "session": {
@@ -736,6 +769,7 @@ def _coach_graph_state(
     run: LlmRun,
     code_snapshot: CodeSnapshot | None,
     latest_submission_feedback: SubmissionFeedback | None,
+    chat_feedback_context: dict[str, Any] | None,
 ) -> CoachGraphState:
     thread_id = _ensure_thread_id(practice_session)
     profile_snapshot = practice_session.profile_snapshot_json
@@ -757,7 +791,8 @@ def _coach_graph_state(
         "recent_events": [],
         "latest_code_attempt": _latest_code_attempt_context(code_snapshot),
         "latest_submission_feedback": _submission_feedback_context(
-            latest_submission_feedback
+            latest_submission_feedback,
+            chat_feedback_context,
         ),
         "run": {
             "id": run.id,
@@ -791,16 +826,50 @@ def _latest_code_attempt_context(
     }
 
 
+def _chat_feedback_context(
+    user_event: PracticeEvent | None,
+    *,
+    code_snapshot: CodeSnapshot | None,
+) -> dict[str, Any] | None:
+    if user_event is None or user_event.event_type != "user_message":
+        return None
+    content = user_event.content_md.strip()
+    if not content:
+        return None
+    normalized = content.lower()
+    result = _chat_feedback_result(normalized)
+    if result is None:
+        return None
+    clipped = content[:1200]
+    return {
+        "source": "chat_extracted",
+        "result": result,
+        "code_snapshot_id": code_snapshot.id if code_snapshot is not None else None,
+        "failed_case_text": clipped,
+        "error_message": clipped,
+        "note_md": "",
+    }
+
+
+def _chat_feedback_result(normalized_content: str) -> str | None:
+    for result, keywords in CHAT_FEEDBACK_RESULT_KEYWORDS:
+        if any(keyword in normalized_content for keyword in keywords):
+            return result
+    return None
+
+
 def _submission_feedback_context(
     feedback: SubmissionFeedback | None,
+    chat_feedback_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if feedback is None:
-        return None
+        return chat_feedback_context
     raw_feedback = feedback.raw_feedback_json
     note_md = ""
     if isinstance(raw_feedback, dict) and isinstance(raw_feedback.get("note_md"), str):
         note_md = raw_feedback["note_md"]
     return {
+        "source": feedback.source,
         "result": feedback.result,
         "code_snapshot_id": feedback.code_snapshot_id,
         "failed_case_text": feedback.failed_case_text[:1200],
@@ -936,6 +1005,7 @@ def _trigger_context(
     has_submission_feedback: bool,
     force_summary: bool,
     extracted_code: ExtractedCode | None,
+    chat_feedback_context: dict[str, Any] | None,
 ) -> dict[str, str]:
     payload_trigger = payload.get("trigger")
     if payload_trigger is not None and not isinstance(payload_trigger, str):
@@ -969,6 +1039,13 @@ def _trigger_context(
             "proposed_phase": "analyze_feedback",
             "next_action": "analyze_submission_feedback",
             "diagnosed_stuck_point": "submission_feedback_analysis",
+        }
+    if chat_feedback_context is not None:
+        return {
+            "trigger": trigger,
+            "proposed_phase": "analyze_feedback",
+            "next_action": "analyze_submission_feedback",
+            "diagnosed_stuck_point": "chat_submission_feedback_analysis",
         }
     if trigger == "code_review":
         return {
