@@ -911,10 +911,6 @@ def _chat_feedback_context(
 
 def _chat_feedback_result(normalized_content: str) -> str | None:
     normalized_content = normalized_content.lower()
-    if _chat_feedback_is_hypothetical(normalized_content) and not (
-        _chat_feedback_looks_like_wa_diff(normalized_content)
-    ):
-        return None
     has_result_context = _chat_feedback_has_result_context(normalized_content)
     for status_code, result in CHAT_FEEDBACK_STATUS_CODE_RESULTS.items():
         if _chat_feedback_status_code_matches(
@@ -932,6 +928,10 @@ def _chat_feedback_result(normalized_content: str) -> str | None:
                 or _chat_feedback_keyword_is_standalone_result(
                     normalized_content,
                     keyword,
+                )
+                or (
+                    keyword == "not accepted"
+                    and not _chat_feedback_is_hypothetical(normalized_content)
                 )
             ):
                 continue

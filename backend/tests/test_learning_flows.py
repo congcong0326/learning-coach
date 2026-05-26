@@ -80,6 +80,10 @@ def test_chat_feedback_result_detects_contextual_failure_text() -> None:
     assert _chat_feedback_result("提交后运行错误，提示 index out of range") == "re"
     assert _chat_feedback_result("结果是编译错误") == "ce"
     assert _chat_feedback_result("WA 了，失败用例是 nums=[3,3]") == "wa"
+    assert _chat_feedback_result("提交没通过了怎么办") == "unknown"
+    assert _chat_feedback_result("LeetCode 运行错误了怎么办") == "re"
+    assert _chat_feedback_result("结果是编译错误，接下来该先查什么") == "ce"
+    assert _chat_feedback_result("not accepted, what should I check first") == "unknown"
     assert _chat_feedback_result("not accepted") == "unknown"
 
 
