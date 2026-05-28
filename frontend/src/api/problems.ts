@@ -30,6 +30,11 @@ export type ProblemListResponse = {
   page_size: number
 }
 
+export type ProblemListParams = {
+  page?: number
+  page_size?: number
+}
+
 export type ProblemDetail = ProblemListItem & {
   statement_md: string
   leetcode_url: string
@@ -37,8 +42,21 @@ export type ProblemDetail = ProblemListItem & {
   python3_snippet: string
 }
 
-export function getProblems(): Promise<ProblemListResponse> {
-  return requestJson<ProblemListResponse>('/api/problems')
+export function getProblems(
+  params: ProblemListParams = {},
+): Promise<ProblemListResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.page !== undefined) {
+    searchParams.set('page', String(params.page))
+  }
+  if (params.page_size !== undefined) {
+    searchParams.set('page_size', String(params.page_size))
+  }
+
+  const query = searchParams.toString()
+  return requestJson<ProblemListResponse>(
+    query ? `/api/problems?${query}` : '/api/problems',
+  )
 }
 
 export function getProblem(slug: string): Promise<ProblemDetail> {

@@ -153,6 +153,10 @@ PYTHON_CMD=python3 make smoke
 POSTGRES_HOST_PORT=15433 BACKEND_PORT=18000 FRONTEND_PORT=15173 make up
 ```
 
+### Vite 代理域名被拒绝
+
+开发环境的 Vite dev server 保留 host 校验。当前已允许通过本地代理域名 `my-leetcode.com` 访问前端容器；如果代理软件使用新的自定义域名，需要同步更新 `frontend/vite.config.ts` 的 `server.allowedHosts`。
+
 ### 重新构建容器
 
 ```bash

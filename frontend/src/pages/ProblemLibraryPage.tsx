@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Alert, Space, Table, Tag, Typography } from 'antd'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { getProblems, type ProblemListItem } from '../api/problems'
@@ -15,9 +16,11 @@ function difficultyColor(difficulty: ProblemListItem['difficulty']) {
 }
 
 export function ProblemLibraryPage() {
+  const [page, setPage] = useState(1)
+  const pageSize = 20
   const { data, isError, isLoading } = useQuery({
-    queryKey: ['problems'],
-    queryFn: getProblems,
+    queryKey: ['problems', page, pageSize],
+    queryFn: () => getProblems({ page, page_size: pageSize }),
   })
 
   return (
@@ -42,9 +45,12 @@ export function ProblemLibraryPage() {
         loading={isLoading}
         pagination={{
           current: data?.page ?? 1,
-          pageSize: data?.page_size ?? 20,
+          pageSize: data?.page_size ?? pageSize,
           total: data?.total ?? 0,
           showSizeChanger: false,
+          onChange: (nextPage) => {
+            setPage(nextPage)
+          },
         }}
         dataSource={data?.items ?? []}
         columns={[

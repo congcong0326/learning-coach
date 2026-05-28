@@ -47,6 +47,36 @@ def _has_tag(problem: Problem, tag: str) -> bool:
     return any(item.get("slug") == tag for item in _tags(problem))
 
 
+def _frontend_id_sort_key(problem: Problem) -> tuple[int, int, str]:
+    frontend_id = problem.frontend_id.strip()
+    if frontend_id.isdigit():
+        return (0, int(frontend_id), frontend_id)
+    return (1, 0, frontend_id)
+
+
+def _sort_problems(problems: list[Problem], sort: str) -> list[Problem]:
+    if sort == "title":
+        return sorted(
+            problems,
+            key=lambda problem: (
+                problem.title.casefold(),
+                _frontend_id_sort_key(problem),
+            ),
+        )
+    if sort == "difficulty":
+        difficulty_order = {"Easy": 0, "Medium": 1, "Hard": 2}
+        return sorted(
+            problems,
+            key=lambda problem: (
+                difficulty_order.get(problem.difficulty, 99),
+                _frontend_id_sort_key(problem),
+            ),
+        )
+
+    # LeetCode 题号在数据库中以字符串保存，分页前必须按数值语义排序。
+    return sorted(problems, key=_frontend_id_sort_key)
+
+
 async def list_problems(
     session: AsyncSession,
     *,
@@ -75,15 +105,11 @@ async def list_problems(
             ProblemCategory.slug == category
         )
 
-    order_column = {
-        "frontend_id": Problem.frontend_id,
-        "difficulty": Problem.difficulty,
-        "title": Problem.title,
-    }.get(sort, Problem.frontend_id)
-    result = await session.execute(query.order_by(order_column))
+    result = await session.execute(query)
     problems = list(result.scalars().unique().all())
     if tag:
         problems = [problem for problem in problems if _has_tag(problem, tag)]
+    problems = _sort_problems(problems, sort)
 
     total = len(problems)
     offset = (page - 1) * page_size
