@@ -143,6 +143,8 @@ describe('ProfilePlanEnrichmentDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认加入当前计划' }))
 
     await waitFor(() => expect(onPlanUpdated).toHaveBeenCalledWith(expect.objectContaining({ title: '更新后的计划' })))
+    expect(await screen.findByText('已加入当前计划，计划列表已刷新。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /已加入当前计划/ })).toBeDisabled()
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/study-plans/10/profile-enrichments/700/confirm',
       expect.objectContaining({
@@ -150,6 +152,40 @@ describe('ProfilePlanEnrichmentDrawer', () => {
         credentials: 'include',
       }),
     )
+  })
+
+  it('prevents repeated confirm clicks while the draft is being confirmed', async () => {
+    let resolveConfirm: (response: Response) => void = () => undefined
+    const confirmPromise = new Promise<Response>((resolve) => {
+      resolveConfirm = resolve
+    })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(okJson(dashboardPayload()))
+      .mockImplementationOnce(() => confirmPromise)
+    vi.stubGlobal('fetch', fetchMock)
+    llmRunMock.startRun.mockImplementation(async () => {
+      llmRunState.onResult?.(stubDraft())
+      return { run_id: 99 }
+    })
+
+    renderDrawer()
+
+    fireEvent.click(screen.getByRole('button', { name: '生成补强预览' }))
+    expect(await screen.findByText('House Robber')).toBeInTheDocument()
+
+    const confirmButton = screen.getByRole('button', { name: '确认加入当前计划' })
+    fireEvent.click(confirmButton)
+    fireEvent.click(confirmButton)
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes('/api/study-plans/10/profile-enrichments/700/confirm'),
+      ),
+    ).toHaveLength(1)
+
+    resolveConfirm(okJson(stubPlan()))
+    expect(await screen.findByRole('button', { name: /已加入当前计划/ })).toBeDisabled()
   })
 })
 

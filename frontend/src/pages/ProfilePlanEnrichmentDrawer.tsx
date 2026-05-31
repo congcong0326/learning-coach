@@ -12,7 +12,7 @@ import {
   Typography,
 } from 'antd'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import { getPracticeDashboard, type PracticeDashboard } from '../api/dashboard'
 import {
@@ -319,7 +319,10 @@ export function ProfilePlanEnrichmentDrawer({
   const [draft, setDraft] = useState<ProfilePlanEnrichmentDraft | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState('')
+  const [confirmSuccess, setConfirmSuccess] = useState('')
   const [resultError, setResultError] = useState('')
+  const [confirmedDraftId, setConfirmedDraftId] = useState<number | null>(null)
+  const confirmInFlightRef = useRef(false)
   const dashboardQuery = useQuery({
     enabled: open,
     queryKey: ['practice-dashboard'],
@@ -344,6 +347,8 @@ export function ProfilePlanEnrichmentDrawer({
       setDraft(nextDraft)
       setResultError('')
       setConfirmError('')
+      setConfirmSuccess('')
+      setConfirmedDraftId(nextDraft.status === 'confirmed' ? nextDraft.draft_id : null)
     },
   })
 
@@ -351,6 +356,8 @@ export function ProfilePlanEnrichmentDrawer({
     setDraft(null)
     setResultError('')
     setConfirmError('')
+    setConfirmSuccess('')
+    setConfirmedDraftId(null)
     await llmRun.startRun('profile_plan_enrichment', {
       plan_id: plan.id,
       user_intent_md: values.user_intent_md.trim(),
@@ -360,17 +367,32 @@ export function ProfilePlanEnrichmentDrawer({
   }
 
   async function handleConfirm() {
-    if (!draft) {
+    if (
+      !draft ||
+      confirmInFlightRef.current ||
+      draft.status === 'confirmed' ||
+      confirmedDraftId === draft.draft_id
+    ) {
       return
     }
+    confirmInFlightRef.current = true
     setConfirming(true)
     setConfirmError('')
+    setConfirmSuccess('')
     try {
       const updatedPlan = await confirmProfilePlanEnrichment(plan.id, draft.draft_id)
+      setConfirmedDraftId(draft.draft_id)
+      setDraft({
+        ...draft,
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+      })
+      setConfirmSuccess('已加入当前计划，计划列表已刷新。')
       onPlanUpdated(updatedPlan)
     } catch (error) {
       setConfirmError(error instanceof Error ? error.message : '确认补强失败，请稍后重试。')
     } finally {
+      confirmInFlightRef.current = false
       setConfirming(false)
     }
   }
@@ -388,8 +410,15 @@ export function ProfilePlanEnrichmentDrawer({
       setDraft(null)
       setResultError('')
       setConfirmError('')
+      setConfirmSuccess('')
+      setConfirmedDraftId(null)
+      confirmInFlightRef.current = false
     }
   }
+
+  const draftConfirmed =
+    !!draft &&
+    (draft.status === 'confirmed' || Boolean(draft.confirmed_at) || confirmedDraftId === draft.draft_id)
 
   return (
     <Drawer
@@ -462,6 +491,7 @@ export function ProfilePlanEnrichmentDrawer({
 
         {resultError ? <Alert showIcon type="error" message={resultError} /> : null}
         {confirmError ? <Alert showIcon type="error" message={confirmError} /> : null}
+        {confirmSuccess ? <Alert showIcon type="success" message={confirmSuccess} /> : null}
 
         {draft ? <DraftPreview draft={draft} /> : null}
 
@@ -469,9 +499,9 @@ export function ProfilePlanEnrichmentDrawer({
           <Button
             onClick={handleConfirm}
             loading={confirming}
-            disabled={!draft || draft.items.length === 0 || llmRun.isRunning}
+            disabled={!draft || draft.items.length === 0 || llmRun.isRunning || draftConfirmed}
           >
-            确认加入当前计划
+            {draftConfirmed ? '已加入当前计划' : '确认加入当前计划'}
           </Button>
           <Button onClick={handleClose}>关闭</Button>
         </Space>
