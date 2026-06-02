@@ -21,7 +21,9 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (
     !user.has_default_llm_credential &&
-    location.pathname !== '/settings/api-keys'
+    !['/settings/api-keys', '/settings/backup-restore'].includes(
+      location.pathname,
+    )
   ) {
     return <Navigate to="/settings/api-keys" replace />
   }

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     rag_embedding_base_url: str | None = None
     rag_embedding_model: str = "text-embedding-3-small"
     rag_embedding_dimensions: int = 1536
+    database_backup_max_bytes: int = 256 * 1024 * 1024
 
     model_config = SettingsConfigDict(
         env_file=".env",

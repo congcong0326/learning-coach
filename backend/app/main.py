@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from backend.app.api.auth import router as auth_router
+from backend.app.api.database_backups import router as database_backups_router
 from backend.app.api.db_health import router as db_health_router
 from backend.app.api.health import router as health_router
 from backend.app.api.learning import router as learning_router
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(health_router, prefix=settings.api_prefix)
     application.include_router(auth_router, prefix=settings.api_prefix)
+    application.include_router(database_backups_router, prefix=settings.api_prefix)
     application.include_router(llm_credentials_router, prefix=settings.api_prefix)
     application.include_router(llm_runs_router, prefix=settings.api_prefix)
     application.include_router(learning_router, prefix=settings.api_prefix)
