@@ -40,6 +40,7 @@ async def append_agent_trace(
     stuck_point: str | None = None,
     should_reveal_solution: bool | None = None,
     error_summary: str | None = None,
+    retrieved_chunk_ids: list[int] | None = None,
 ) -> AgentTrace:
     sanitized_input = _sanitize_trace_value(input_summary or {})
     sanitized_output = _sanitize_trace_value(output_summary or {})
@@ -60,7 +61,7 @@ async def append_agent_trace(
         input_tokens=None,
         output_tokens=None,
         latency_ms=latency_ms,
-        retrieved_chunk_ids=[],
+        retrieved_chunk_ids=retrieved_chunk_ids or [],
         tool_calls=tool_calls,
         hint_level=_hint_level_to_index(hint_level),
         stuck_point=(stuck_point or "")[:80] or None,

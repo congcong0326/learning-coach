@@ -3,6 +3,22 @@ from __future__ import annotations
 import pytest
 
 from backend.app.agents.coach_graph import CoachGraph, CoachGraphState
+from backend.app.rag.retrieval import (
+    FilteredChunk,
+    RetrievalRequest,
+    RetrievalResult,
+    SelectedChunk,
+)
+
+
+class FixtureRetrievalService:
+    def __init__(self, result: RetrievalResult) -> None:
+        self.result = result
+        self.requests: list[RetrievalRequest] = []
+
+    async def retrieve_for_coach(self, request: RetrievalRequest) -> RetrievalResult:
+        self.requests.append(request)
+        return self.result
 
 
 def graph_state() -> CoachGraphState:
@@ -15,6 +31,7 @@ def graph_state() -> CoachGraphState:
         "latest_plan_item_id": 5,
         "problem_id": 6,
         "problem_slug": "two-sum",
+        "problem_tags": ["hash-table"],
         "phase": "understand_problem",
         "hint_level": "questioning",
         "profile_summary": "画像置信度低，先追问。",
@@ -22,6 +39,7 @@ def graph_state() -> CoachGraphState:
         "latest_code_attempt": None,
         "latest_submission_feedback": None,
         "run": {"id": 7, "kind": "coach_turn"},
+        "user_query_summary": "用户想先说明暴力解法。",
         "trace": [],
         "error_summary": "",
         "retrieval_context": {"status": "not_loaded", "chunks": []},
@@ -29,25 +47,55 @@ def graph_state() -> CoachGraphState:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_supporting_context_is_rag_deferred() -> None:
-    graph = CoachGraph()
+async def test_retrieve_supporting_context_uses_injected_retrieval_service() -> None:
+    service = FixtureRetrievalService(
+        RetrievalResult(
+            status="used",
+            selected_chunks=[
+                SelectedChunk(
+                    chunk_id=10,
+                    chunk_uid="manual:10",
+                    knowledge_type="common_bug_card",
+                    title="查询写入顺序",
+                    summary_md="先查 complement，再写入当前元素。",
+                    source_name="manual-two-sum",
+                )
+            ],
+            candidate_chunk_ids=[9, 10],
+            filtered_chunks=[FilteredChunk(chunk_id=9, reason="full_solution_blocked")],
+            trace_id=123,
+            prompt_context_md="- [10] 先查 complement",
+        )
+    )
+    graph = CoachGraph(retrieval_service=service)
 
     next_state = await graph.retrieve_supporting_context(graph_state())
 
-    assert next_state["retrieval_context"] == {
-        "status": "rag_deferred",
-        "chunks": [],
-        "reason": "RAG/T6 延后，当前非 RAG 图节点不做检索。",
-    }
+    assert next_state["retrieval_context"]["status"] == "used"
+    assert next_state["retrieval_context"]["trace_id"] == 123
+    assert next_state["retrieval_context"]["chunks"][0]["chunk_id"] == 10
+    assert next_state["retrieval_context"]["filtered"] == [
+        {"chunk_id": 9, "reason": "full_solution_blocked"}
+    ]
+    assert service.requests[0].problem_tags == ["hash-table"]
+    assert service.requests[0].query_summary == "用户想先说明暴力解法。"
 
 
 @pytest.mark.asyncio
-async def test_graph_run_records_ordered_node_trace_and_rag_deferred() -> None:
+async def test_retrieve_supporting_context_without_service_returns_error() -> None:
+    next_state = await CoachGraph().retrieve_supporting_context(graph_state())
+
+    assert next_state["retrieval_context"]["status"] == "error"
+    assert next_state["retrieval_context"]["reason"] == "retrieval_service_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_graph_run_records_ordered_node_trace_and_retrieval_error() -> None:
     graph = CoachGraph()
 
     next_state = await graph.run_turn(graph_state())
 
-    assert next_state["retrieval_context"]["status"] == "rag_deferred"
+    assert next_state["retrieval_context"]["status"] == "error"
     assert [item["node"] for item in next_state["trace"]] == [
         "load_training_context",
         "classify_user_input",

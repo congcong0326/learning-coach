@@ -26,6 +26,7 @@ from backend.app.models.practice import (
     UserProfileSnapshot,
 )
 from backend.app.models.problem import Base, Problem
+from backend.app.models.rag import KnowledgeChunk, KnowledgeDoc, stable_chunk_uid
 from backend.app.models.trace import AgentTrace
 from backend.app.schemas.practice import PracticeEventResponse
 from backend.app.services.learning_flows.goal_plan import (
@@ -1607,7 +1608,7 @@ async def test_coach_turn_accepts_submission_feedback_event_as_trigger(
 
 
 @pytest.mark.asyncio
-async def test_coach_turn_returns_graph_thread_and_rag_deferred_context(
+async def test_coach_turn_returns_graph_thread_and_no_match_rag_context(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
@@ -1648,9 +1649,101 @@ async def test_coach_turn_returns_graph_thread_and_rag_deferred_context(
         )
 
         assert result["graph"]["thread_id"] == f"practice-session-{practice_session.id}"
-        assert result["graph"]["retrieval_context"]["status"] == "rag_deferred"
+        assert result["graph"]["retrieval_context"]["status"] == "no_match"
         await session.refresh(practice_session)
         assert practice_session.thread_id == f"practice-session-{practice_session.id}"
+
+
+@pytest.mark.asyncio
+async def test_coach_turn_prompt_includes_only_safe_rag_summaries(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        user = await create_user(session)
+        practice_session, user_event, _snapshot = await create_practice_session_with_user_event(
+            session,
+            user,
+            phase="review_code",
+            user_intent="code_review",
+            content_md="这段 Two Sum 代码在重复元素上错了。",
+            with_code=True,
+        )
+        doc = KnowledgeDoc(
+            source_name="manual-two-sum",
+            source_type="manual_cards",
+            language="zh",
+            priority="P0",
+            main_usage_json=["common_bug_card"],
+            local_path="cards/two-sum.jsonl",
+            license_note="本地人工整理",
+            content_hash="doc-hash",
+            metadata_json={},
+        )
+        session.add(doc)
+        await session.flush()
+        chunk = KnowledgeChunk(
+            doc_id=doc.id,
+            chunk_uid=stable_chunk_uid(
+                source_name=doc.source_name,
+                source_locator="cards.jsonl:1",
+                title="查询写入顺序",
+                content_hash="chunk-hash",
+            ),
+            chunk_kind="coach_card",
+            knowledge_type="common_bug_card",
+            title="查询写入顺序",
+            summary_md="Two Sum 中先查询 complement，再写入当前元素。",
+            content_md="FULL_SOURCE_SECRET: 这里是完整材料原文，不能进入 prompt。",
+            source_locator="cards.jsonl:1",
+            problem_slug="two-sum",
+            problem_tags_json=["hash-table"],
+            phases_json=["review_code"],
+            stuck_points_json=[],
+            hint_level_min=0,
+            hint_level_max=2,
+            has_full_solution=False,
+            language="zh",
+            quality_score=0.95,
+            content_hash="chunk-hash",
+            metadata_json={},
+        )
+        session.add(chunk)
+        await session.commit()
+        run = await create_coach_run(
+            session,
+            user,
+            practice_session,
+            user_event_id=user_event.id,
+            trigger="code_review",
+        )
+        provider = FakeCoachProvider(
+            {
+                "phase_after": "review_code",
+                "diagnosed_stuck_point": "edge_case_missing",
+                "next_action": "ask_counterexample_trace",
+                "reply_md": "先看重复元素用例。",
+                "should_reveal_solution": False,
+            }
+        )
+
+        async def publish(_event: LlmRunEvent) -> None:
+            return None
+
+        result = await run_coach_turn(
+            session,
+            user_id=user.id,
+            run=run,
+            provider=provider,
+            model_name="gpt-test",
+            publish=publish,
+        )
+
+        model_context = json.loads(provider.calls[0]["input_text"])
+        assert result["graph"]["retrieval_context"]["status"] == "used"
+        assert model_context["rag_context"]["status"] == "used"
+        assert model_context["rag_context"]["chunks"][0]["chunk_id"] == chunk.id
+        assert "先查询 complement" in provider.calls[0]["input_text"]
+        assert "FULL_SOURCE_SECRET" not in provider.calls[0]["input_text"]
 
 
 @pytest.mark.asyncio
@@ -1713,7 +1806,7 @@ async def test_coach_turn_writes_agent_trace_for_graph_guard_and_reply(
             trace for trace in traces if trace.node_name == "retrieve_supporting_context"
         )
         assert retrieval_trace.tool_calls is not None
-        assert retrieval_trace.tool_calls["output_summary"]["retrieval_status"] == "rag_deferred"
+        assert retrieval_trace.tool_calls["output_summary"]["retrieval_status"] == "no_match"
 
 
 @pytest.mark.asyncio

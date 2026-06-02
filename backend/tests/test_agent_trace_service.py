@@ -98,3 +98,24 @@ async def test_trace_service_records_error_summary(
     assert trace.tool_calls is not None
     assert trace.tool_calls["error_summary"].endswith("...")
     assert "x" * 1000 not in trace.tool_calls["error_summary"]
+
+
+@pytest.mark.asyncio
+async def test_trace_service_records_retrieved_chunk_ids(
+    db_session: AsyncSession,
+) -> None:
+    from backend.app.services.agent_trace_service import append_agent_trace
+
+    trace = await append_agent_trace(
+        db_session,
+        session_id="1",
+        thread_id="practice-session-1",
+        node_name="retrieve_supporting_context",
+        output_summary={
+            "retrieval_status": "used",
+            "selected_chunk_ids": [10, 12],
+        },
+        retrieved_chunk_ids=[10, 12],
+    )
+
+    assert trace.retrieved_chunk_ids == [10, 12]

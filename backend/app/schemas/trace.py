@@ -18,6 +18,7 @@ class AgentTraceResponse(BaseModel):
     latency_ms: int | None
     stuck_point: str | None
     should_reveal_solution: bool | None
+    retrieved_chunk_ids: list[Any] = Field(default_factory=list)
     input_summary: dict[str, Any] = Field(default_factory=dict)
     output_summary: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

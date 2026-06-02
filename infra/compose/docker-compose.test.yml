@@ -32,6 +32,10 @@ services:
       LLM_MODEL_ID: ""
       LLM_BASE_URL: ""
       SERPAPI_API_KEY: ""
+      RAG_EMBEDDING_API_KEY: ""
+      RAG_EMBEDDING_BASE_URL: ""
+      RAG_EMBEDDING_MODEL: "text-embedding-3-small"
+      RAG_EMBEDDING_DIMENSIONS: "1536"
     command: ["uv", "run", "--no-sync", "pytest", "-q"]
     depends_on:
       postgres:

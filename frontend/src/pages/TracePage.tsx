@@ -20,6 +20,36 @@ function outputReason(trace: AgentTrace) {
   return '-'
 }
 
+function numberList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === 'number')
+    : []
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : []
+}
+
+function ragDetails(trace: AgentTrace) {
+  const selected = numberList(trace.output_summary.selected_chunk_ids)
+  const fallback = numberList(trace.retrieved_chunk_ids)
+  const chunkIds = selected.length > 0 ? selected : fallback
+  const reasons = stringList(trace.output_summary.filtered_reasons)
+  if (chunkIds.length === 0 && reasons.length === 0) {
+    return '-'
+  }
+  return (
+    <div>
+      {chunkIds.length > 0 ? <div>{`chunks ${chunkIds.join(', ')}`}</div> : null}
+      {reasons.map((reason) => (
+        <Tag key={reason}>{reason}</Tag>
+      ))}
+    </div>
+  )
+}
+
 export function TracePage() {
   const [params] = useSearchParams()
   const sessionIdText = params.get('sessionId')
@@ -64,6 +94,11 @@ export function TracePage() {
             title: '结果',
             key: 'result',
             render: (_, trace) => outputReason(trace),
+          },
+          {
+            title: 'RAG',
+            key: 'rag',
+            render: (_, trace) => ragDetails(trace),
           },
           {
             title: '耗时',

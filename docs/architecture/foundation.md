@@ -152,8 +152,8 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.services.coach_guard`：教练阶段跳转和提示档位守卫，防止低提示档位输出完整解法或无证据快进。
 - `backend.app.services.agent_trace_service`：写入和读取 `agent_trace`，对节点输入输出摘要、守卫原因和最终回复进行截断，避免完整用户输入和完整代码进入 trace。
 - `backend.app.prompts`：静态 LLM prompt resource registry，使用 package resource 托管提示词正文，并集中声明 prompt key、版本和输出字段契约。学习 flow 只组装动态上下文并通过 registry 读取静态 instructions，避免 prompt 文本散落在业务代码中。
-- `backend.app.agents`：LangGraph 编排，当前包含 `CoachGraph` 的非 RAG 状态机，记录 `load_training_context`、输入分类、卡点诊断、`retrieve_supporting_context=rag_deferred`、动作决策、守卫、回复生成、持久化和复盘触发节点，并通过 `practice_session.thread_id` 与图 checkpointer 对齐。
-- `backend.app.rag`：知识库导入、切块、检索。
+- `backend.app.agents`：LangGraph 编排，当前包含接入 RAG 的 `CoachGraph` 状态机，记录 `load_training_context`、输入分类、卡点诊断、`retrieve_supporting_context`、动作决策、守卫、回复生成、持久化和复盘触发节点，并通过 `practice_session.thread_id` 与图 checkpointer 对齐。
+- `backend.app.rag`：知识库 manifest 解析、人工教练卡片导入、Markdown/txt 切块、embedding provider、pgvector/metadata 检索、提示档位过滤和 retrieval trace 写入。
 - `backend.app.tools`：后续工具能力目录。PRD v0.3 第一版优先做 LeetCode 提交结果归因；如后续重新引入本地代码运行，再在此边界内接入。
 
 ## 数据库选型
@@ -173,6 +173,11 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - 创建 `app_metadata`。
 - 创建基础 `agent_trace`。
 - 创建基础 `retrieval_trace`。
+
+当前 RAG knowledge migration 会：
+
+- 创建 `knowledge_doc`，记录 source manifest、授权说明、来源路径摘要和导入状态。
+- 创建 `knowledge_chunk`，保存教练卡片或材料切块、提示档位、题型标签、是否完整解法、质量分、embedding 模型和 pgvector embedding。
 
 题库数据使用结构化 seed 文件导入，不在应用运行时解析第三方参考仓库。数据准备流程是：
 
@@ -235,13 +240,13 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 
 目标校准页已经接入该层：首次校准、追问回答和计划草稿生成都通过 `goal_followup` 或 `goal_plan_generate` run 执行。结构化模型输出只作为后端草稿来源，SSE `delta` 面向前端发布安全的用户可读进度文本，不直接展示原始 JSON、题单 schema 或未校验题目 slug。正式计划草稿只在后端校验、repair 和 run 成功提交后通过 `result` 事件暴露给前端；取消或失败时，半截输出只能作为过程文本展示，不能被确认成正式计划。
 
-训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入 `CoachGraph` 非 RAG 状态机并绑定 `practice_session.thread_id`，其中 `retrieve_supporting_context` 明确返回 `rag_deferred`，再调用大模型生成结构化教练决策，经后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 信息如果由用户粘贴在聊天中，会被 `coach_turn` 识别为 `chat_extracted` 提交反馈摘要，并进入下一轮模型上下文；`coach_summary` 使用独立 prompt 生成教练式 AC 复盘，重点总结本题优点、缺点、证据、画像变化和下一题训练策略。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、`rag_deferred`、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。
+训练工作台也接入该层：`coach_turn` run 会选择用户模型资产，先进入接入 RAG 的 `CoachGraph` 状态机并绑定 `practice_session.thread_id`，`retrieve_supporting_context` 会按题目、阶段、提示档位、检索意图和安全 query 摘要检索教练知识；检索无命中或异常时回退为非 RAG 教练流程。检索结果只把 chunk id、类型、标题、摘要和过滤原因注入模型上下文，不复制完整材料原文，并且仍由后端 `coach_guard` 校验后持久化 assistant event 和 `coach_turn` 记录。`coach_turn` 会从当前学习计划版本的 `target_snapshot.preferred_language` 读取目标训练语言，并以 `session.target_code_language` 注入模型上下文；模型生成代码示例、方法签名或接近代码的伪代码时必须使用该目标语言，不得在用户选择 Java、Go、C 或 JavaScript 时默认输出 Python。模型输出只负责提出 `phase_after`、卡点、下一步动作和用户可见回复；状态跳转、提示升降档、低档位泄题拦截、缺代码 review、缺提交反馈分析和缺 AC/终态复盘仍由后端守卫控制。WA/TLE/RE/MLE/CE/UNKNOWN 等非 AC 信息如果由用户粘贴在聊天中，会被 `coach_turn` 识别为 `chat_extracted` 提交反馈摘要，并进入下一轮模型上下文；`coach_summary` 使用独立 prompt 生成教练式 AC 复盘，重点总结本题优点、缺点、证据、画像变化和下一题训练策略。如果模型调用失败或结构化输出无效，`coach_turn` 会回退到安全追问模板并记录 warning。`coach_turn` 会写入 `agent_trace`，覆盖 LLM run 生命周期、图节点摘要、检索状态、选中 chunk id、过滤原因、守卫原因和最终回复摘要，Trace 页通过 `/api/traces` 读取当前用户可访问的真实 trace 数据。
 
 `profile_plan_enrichment` run 会选择用户模型资产，读取 active 学习计划、最新画像和最近复盘摘要，先由后端筛出候选题池，再让模型在候选池内生成补强题预览；后端校验通过后保存 draft，用户确认前不修改正式计划。确认接口会在事务中复核计划版本、候选题、重复题和 paid only 题，并把确认后的补强题追加到当前阶段末尾。
 
 当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
 
-最小 Eval runner 位于 `backend.app.evals.coach_eval_runner`，可通过 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 运行。当前固定样例覆盖 Hint Leakage、Diagnosis 和 Code Review；RAG Grounding 因 RAG/T6 延后而报告为 `deferred`，不接真实检索。
+最小 Eval runner 位于 `backend.app.evals.coach_eval_runner`，可通过 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 运行。当前固定样例覆盖 Hint Leakage、Diagnosis、Code Review 和 RAG Grounding；RAG Grounding 使用本地 fixture 验证低提示档过滤完整解法、common bug grounding 和非 AC 反馈 grounding。
 
 ## Docker Compose 角色
 

@@ -12,6 +12,7 @@ export type AgentTrace = {
   latency_ms: number | null
   stuck_point: string | null
   should_reveal_solution: boolean | null
+  retrieved_chunk_ids: unknown[]
   input_summary: Record<string, unknown>
   output_summary: Record<string, unknown>
   created_at: string

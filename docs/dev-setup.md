@@ -82,7 +82,7 @@ make build
 ```
 
 `make build` 会串行执行后端 lint、mypy、pytest、前端 lint、前端测试和前端生产构建。
-`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis 和 Code Review；RAG Grounding 因 RAG/T6 延后会显示为 `deferred`。
+`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis、Code Review 和 RAG Grounding，成功时 summary 中 `deferred=0`。
 
 ## 端口
 
@@ -113,6 +113,7 @@ cp .env.example .env
 - `OPENAI_API_KEY`
 - `LLM_API_KEY`
 - `SERPAPI_API_KEY`
+- `RAG_EMBEDDING_API_KEY`
 
 `CREDENTIAL_ENCRYPTION_KEY` 用于加密用户在 API 设置页保存的 OpenAI API key，必须是 Fernet key。首次本地开发可运行：
 
@@ -127,6 +128,17 @@ CREDENTIAL_ENCRYPTION_KEY=<上一步输出>
 ```
 
 如果该变量为空或格式无效，注册登录仍可使用，但创建或测试 API 资产会失败并返回明确错误。
+
+RAG 本地导入可选配置：
+
+```bash
+RAG_EMBEDDING_API_KEY=<OpenAI-compatible embedding key>
+RAG_EMBEDDING_BASE_URL=<可选 OpenAI-compatible base URL>
+RAG_EMBEDDING_MODEL=text-embedding-3-small
+RAG_EMBEDDING_DIMENSIONS=1536
+```
+
+未配置 `RAG_EMBEDDING_API_KEY` 时，`make rag-ingest MANIFEST=...` 仍会导入文档和 chunk metadata，但会跳过 embedding 生成。
 
 ## WSL 注意事项
 

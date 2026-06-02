@@ -65,6 +65,11 @@ def _trace_response(trace: AgentTrace) -> AgentTraceResponse:
             "latency_ms": trace.latency_ms,
             "stuck_point": trace.stuck_point,
             "should_reveal_solution": trace.should_reveal_solution,
+            "retrieved_chunk_ids": (
+                trace.retrieved_chunk_ids
+                if isinstance(trace.retrieved_chunk_ids, list)
+                else []
+            ),
             "input_summary": input_summary if isinstance(input_summary, dict) else {},
             "output_summary": output_summary if isinstance(output_summary, dict) else {},
             "created_at": trace.created_at,

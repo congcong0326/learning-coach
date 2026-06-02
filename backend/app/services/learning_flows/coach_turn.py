@@ -20,7 +20,9 @@ from backend.app.models.practice import (
     PracticeSession,
     SubmissionFeedback,
 )
+from backend.app.models.problem import Problem
 from backend.app.prompts import get_prompt
+from backend.app.rag.retrieval import RetrievalService
 from backend.app.services.coach_guard import guard_transition
 from backend.app.services.agent_trace_service import append_agent_trace
 from backend.app.services.code_attempts import (
@@ -164,6 +166,8 @@ async def run_coach_turn(
     model_name: str,
     publish: Callable[[LlmRunEvent], Awaitable[None]],
 ) -> dict[str, Any]:
+    """执行单轮 AI 教练：加载上下文、调用模型、守卫状态迁移并持久化结果。"""
+    # 入口先确认 run 仍可写，并锁定训练会话；后续回复、阶段迁移和 run 终态要在同一事务完成。
     await _ensure_run_mutable(session, run)
     payload = _payload_for_run(run)
     practice_session = await _load_practice_session(
@@ -172,6 +176,7 @@ async def run_coach_turn(
         run=run,
         payload=payload,
     )
+    # coach_summary 是系统触发的复盘 run，可能没有用户消息；普通 coach_turn 必须绑定本轮用户事件。
     user_event = await _load_user_event(
         session,
         user_id=user_id,
@@ -179,6 +184,7 @@ async def run_coach_turn(
         payload=payload,
         required=run.kind == "coach_turn",
     )
+    # 用户消息里的代码块、最近代码快照和提交反馈共同决定本轮是否进入 review 或反馈分析。
     extracted_code = (
         extract_code_from_message(user_event.content_md)
         if user_event is not None
@@ -194,6 +200,7 @@ async def run_coach_turn(
         user_id=user_id,
         session_id=practice_session.id,
     )
+    # 用户直接在聊天里粘贴 WA/TLE/RE 等平台结果时，也按提交反馈处理，避免强制走单独表单。
     chat_feedback_context = _chat_feedback_context(
         user_event,
         code_snapshot=code_snapshot,
@@ -216,16 +223,7 @@ async def run_coach_turn(
         user_id=user_id,
         practice_session=practice_session,
     )
-    graph_state = await CoachGraph().run_turn(
-        _coach_graph_state(
-            practice_session,
-            user_id=user_id,
-            run=run,
-            code_snapshot=code_snapshot,
-            latest_submission_feedback=latest_submission_feedback,
-            chat_feedback_context=chat_feedback_context,
-        )
-    )
+    # 触发器是本轮教练决策的路由信号；它会影响目标阶段、RAG query 摘要和兜底回复。
     trigger_context = _trigger_context(
         payload,
         practice_session,
@@ -234,6 +232,31 @@ async def run_coach_turn(
         force_summary=run.kind == "coach_summary",
         extracted_code=extracted_code,
         chat_feedback_context=chat_feedback_context,
+    )
+    problem_tags = await _problem_tags_context(
+        session,
+        problem_id=practice_session.problem_id,
+    )
+    # CoachGraph 负责整理图状态、RAG 检索和节点 trace；RAG 只能增强教练判断，不能绕过状态守卫。
+    graph_state = await CoachGraph(
+        retrieval_service=RetrievalService(session),
+    ).run_turn(
+        _coach_graph_state(
+            practice_session,
+            user_id=user_id,
+            run=run,
+            code_snapshot=code_snapshot,
+            latest_submission_feedback=latest_submission_feedback,
+            chat_feedback_context=chat_feedback_context,
+            problem_tags=problem_tags,
+            user_query_summary=_rag_query_summary(
+                user_event=user_event,
+                extracted_code=extracted_code,
+                latest_submission_feedback=latest_submission_feedback,
+                chat_feedback_context=chat_feedback_context,
+                trigger_context=trigger_context,
+            ),
+        )
     )
     await _publish_progress(
         publish,
@@ -258,6 +281,7 @@ async def run_coach_turn(
         stage="calling_model",
         message="正在调用大模型",
     )
+    # LLM 只产出诊断、回复草稿和建议阶段；最终能否跳转由下面的 coach_guard 统一裁决。
     coach_decision = await _coach_decision(
         session,
         user_id=user_id,
@@ -273,6 +297,7 @@ async def run_coach_turn(
         has_feedback=has_feedback,
         target_code_language=target_code_language,
         trigger_context=trigger_context,
+        rag_context=graph_state["retrieval_context"],
     )
     await _publish_progress(
         publish,
@@ -280,6 +305,7 @@ async def run_coach_turn(
         stage="guarding_transition",
         message="正在校验教练阶段",
     )
+    # 提示档位先按用户行为推进，再进入阶段守卫，防止低提示档位泄题或无证据快进。
     hint_level_after_policy = _hint_level_after_turn(
         practice_session.current_hint_level,
         trigger=trigger_context["trigger"],
@@ -295,6 +321,7 @@ async def run_coach_turn(
         hint_level=hint_level_after_policy,
         should_reveal_solution=bool(coach_decision["should_reveal_solution"]),
     )
+    # 用户看到的是 guard 处理后的安全回复；模型建议不合法时会被回退到当前训练边界内。
     reply_md = _reply_after_guard(coach_decision, decision_reason=decision.reason)
     await publish(LlmRunEvent("delta", {"run_id": run.id, "text": reply_md}))
     await _publish_progress(
@@ -306,6 +333,7 @@ async def run_coach_turn(
 
     now = datetime.now(UTC)
     phase_before = practice_session.phase
+    # assistant_event 写入聊天时间线；CoachTurn 写入可审计的结构化回合记录，二者通过同一个 run 串联。
     assistant_event = PracticeEvent(
         session_id=practice_session.id,
         user_id=user_id,
@@ -354,11 +382,16 @@ async def run_coach_turn(
             "generation_mode": coach_decision["generation_mode"],
         },
         # 只保存安全画像快照和结构化上下文，不把完整用户输入或完整代码复制进 turn。
-        context_snapshot_json=_context_snapshot(practice_session, has_feedback=has_feedback),
+        context_snapshot_json=_context_snapshot(
+            practice_session,
+            has_feedback=has_feedback,
+            rag_context=graph_state["retrieval_context"],
+        ),
         created_at=now,
     )
     session.add(coach_turn)
     code_attempt_snapshot_id: int | None = None
+    # 只有进入 review_code 或模型已建议去 LeetCode 提交时，才把本轮代码沉淀为尝试记录。
     if (
         user_event is not None
         and extracted_code is not None
@@ -385,6 +418,7 @@ async def run_coach_turn(
         **coach_turn.response_json,
         "code_attempt_snapshot_id": code_attempt_snapshot_id,
     }
+    # 只有守卫接受时才推进 session 状态；被拒绝的模型跳转会保留原因，但不污染训练阶段。
     if decision.accepted:
         practice_session.phase = decision.phase_after
         practice_session.current_hint_level = decision.hint_level_after
@@ -484,9 +518,17 @@ async def _append_coach_turn_traces(
             continue
         output_summary: dict[str, Any] = {"status": "completed"}
         if node_name == "retrieve_supporting_context":
+            retrieval_context = graph_state["retrieval_context"]
+            selected_chunk_ids = _selected_rag_chunk_ids(retrieval_context)
             output_summary = {
-                "retrieval_status": graph_state["retrieval_context"].get("status"),
-                "rag_deferred": True,
+                "retrieval_status": retrieval_context.get("status"),
+                "trace_id": retrieval_context.get("trace_id"),
+                "selected_chunk_ids": selected_chunk_ids,
+                "filtered_reasons": [
+                    item.get("reason")
+                    for item in retrieval_context.get("filtered", [])
+                    if isinstance(item, dict)
+                ],
             }
         await append_agent_trace(
             session,
@@ -496,6 +538,11 @@ async def _append_coach_turn_traces(
             hint_level=item.get("hint_level"),
             input_summary={"run_id": run.id},
             output_summary=output_summary,
+            retrieved_chunk_ids=(
+                _selected_rag_chunk_ids(graph_state["retrieval_context"])
+                if node_name == "retrieve_supporting_context"
+                else None
+            ),
         )
     await append_agent_trace(
         session,
@@ -674,6 +721,7 @@ async def _coach_decision(
     has_feedback: bool,
     target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
+    rag_context: dict[str, Any],
 ) -> dict[str, Any]:
     fallback = _fallback_coach_decision(trigger_context)
     if run.kind != "coach_turn" or not model_name:
@@ -696,6 +744,7 @@ async def _coach_decision(
                     has_feedback=has_feedback,
                     target_code_language=target_code_language,
                     trigger_context=trigger_context,
+                    rag_context=rag_context,
                 ),
                 ensure_ascii=False,
             ),
@@ -745,6 +794,7 @@ def _coach_input_context(
     has_feedback: bool,
     target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
+    rag_context: dict[str, Any],
 ) -> dict[str, Any]:
     latest_code: dict[str, Any] | None = None
     if code_snapshot is not None:
@@ -789,6 +839,7 @@ def _coach_input_context(
         "user_submitted_code": user_submitted_code,
         "latest_code": latest_code,
         "latest_submission_feedback": feedback_context,
+        "rag_context": _rag_context_for_prompt(rag_context),
         "output_contract": {
             "phase_after": "one allowed phase",
             "diagnosed_stuck_point": "short stable snake_case string",
@@ -836,6 +887,30 @@ async def _target_code_language_context(
     }
 
 
+async def _problem_tags_context(
+    session: AsyncSession,
+    *,
+    problem_id: int,
+) -> list[str]:
+    result = await session.execute(
+        select(Problem.metadata_json).where(Problem.id == problem_id)
+    )
+    metadata = result.scalar_one_or_none()
+    if not isinstance(metadata, dict):
+        return []
+    tags = metadata.get("topic_tags")
+    if not isinstance(tags, list):
+        return []
+    normalized: list[str] = []
+    for item in tags:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("slug")
+        if isinstance(slug, str) and slug:
+            normalized.append(slug)
+    return normalized
+
+
 def _coach_graph_state(
     practice_session: PracticeSession,
     *,
@@ -844,6 +919,8 @@ def _coach_graph_state(
     code_snapshot: CodeSnapshot | None,
     latest_submission_feedback: SubmissionFeedback | None,
     chat_feedback_context: dict[str, Any] | None,
+    problem_tags: list[str],
+    user_query_summary: str,
 ) -> CoachGraphState:
     thread_id = _ensure_thread_id(practice_session)
     profile_snapshot = practice_session.profile_snapshot_json
@@ -859,6 +936,7 @@ def _coach_graph_state(
         "latest_plan_item_id": practice_session.latest_plan_item_id,
         "problem_id": practice_session.problem_id,
         "problem_slug": practice_session.problem_slug,
+        "problem_tags": problem_tags,
         "phase": practice_session.phase,
         "hint_level": practice_session.current_hint_level,
         "profile_summary": profile_summary[:1200],
@@ -874,10 +952,39 @@ def _coach_graph_state(
             "related_type": run.related_type,
             "related_id": run.related_id,
         },
+        "user_query_summary": user_query_summary,
         "trace": [],
         "error_summary": "",
         "retrieval_context": {"status": "not_loaded", "chunks": []},
     }
+
+
+def _rag_query_summary(
+    *,
+    user_event: PracticeEvent | None,
+    extracted_code: ExtractedCode | None,
+    latest_submission_feedback: SubmissionFeedback | None,
+    chat_feedback_context: dict[str, Any] | None,
+    trigger_context: dict[str, str],
+) -> str:
+    if chat_feedback_context is not None:
+        return f"chat_submission_feedback result={chat_feedback_context.get('result')}"
+    if latest_submission_feedback is not None:
+        return f"submission_feedback result={latest_submission_feedback.result}"
+    if extracted_code is not None:
+        return (
+            f"user_code_attempt language={extracted_code.language} "
+            f"line_count={len(extracted_code.code_text.splitlines())}"
+        )
+    if user_event is not None:
+        content = _strip_code_blocks(user_event.content_md)
+        return f"{trigger_context['trigger']}: {content[:240]}"
+    return f"trigger={trigger_context['trigger']}"
+
+
+def _strip_code_blocks(value: str) -> str:
+    stripped = re.sub(r"```.*?```", " ", value, flags=re.DOTALL)
+    return " ".join(stripped.split())
 
 
 def _ensure_thread_id(practice_session: PracticeSession) -> str:
@@ -1278,10 +1385,62 @@ def _user_intent(user_event: PracticeEvent | None) -> str:
     return user_event.intent or ""
 
 
+def _rag_context_for_prompt(rag_context: dict[str, Any]) -> dict[str, Any]:
+    chunks: list[dict[str, Any]] = []
+    raw_chunks = rag_context.get("chunks")
+    if isinstance(raw_chunks, list):
+        for item in raw_chunks[:5]:
+            if not isinstance(item, dict):
+                continue
+            chunks.append(
+                {
+                    "chunk_id": item.get("chunk_id"),
+                    "knowledge_type": item.get("knowledge_type"),
+                    "title": item.get("title"),
+                    "summary_md": item.get("summary_md"),
+                    "source_name": item.get("source_name"),
+                }
+            )
+    filtered: list[dict[str, Any]] = []
+    raw_filtered = rag_context.get("filtered")
+    if isinstance(raw_filtered, list):
+        for item in raw_filtered[:16]:
+            if isinstance(item, dict):
+                filtered.append(
+                    {
+                        "chunk_id": item.get("chunk_id"),
+                        "reason": item.get("reason"),
+                    }
+                )
+    return {
+        "status": rag_context.get("status", "not_loaded"),
+        "trace_id": rag_context.get("trace_id"),
+        "retrieval_intent": rag_context.get("retrieval_intent"),
+        "chunks": chunks,
+        "filtered": filtered,
+        "instruction": "RAG 知识只作为教练提示依据，不能绕过当前提示档位和 coach_guard。",
+    }
+
+
+def _selected_rag_chunk_ids(rag_context: dict[str, Any]) -> list[int]:
+    raw_chunks = rag_context.get("chunks")
+    if not isinstance(raw_chunks, list):
+        return []
+    ids: list[int] = []
+    for item in raw_chunks:
+        if not isinstance(item, dict):
+            continue
+        chunk_id = item.get("chunk_id")
+        if isinstance(chunk_id, int):
+            ids.append(chunk_id)
+    return ids
+
+
 def _context_snapshot(
     practice_session: PracticeSession,
     *,
     has_feedback: bool,
+    rag_context: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "session_id": practice_session.id,
@@ -1294,6 +1453,7 @@ def _context_snapshot(
         "has_code": practice_session.latest_code_snapshot_id is not None,
         "has_submission_feedback": has_feedback,
         "profile_snapshot": practice_session.profile_snapshot_json,
+        "rag_context": _rag_context_for_prompt(rag_context),
     }
 
 

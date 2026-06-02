@@ -36,3 +36,26 @@ class AgentTrace(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class RetrievalTrace(Base):
+    __tablename__ = "retrieval_trace"
+    __table_args__ = (
+        Index("ix_retrieval_trace_session_created_at", "session_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True, autoincrement=True)
+    session_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    problem_slug: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    query: Mapped[str] = mapped_column(String(600), nullable=False)
+    retrieved_doc_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    selected_chunk_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    current_hint_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retrieval_intent: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    filtered_out_chunk_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    used_in_prompt: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

@@ -41,6 +41,10 @@ test: ## Run backend and frontend tests
 eval: ## Run local AI coach eval samples
 	uv run python -m backend.app.evals.coach_eval_runner
 
+.PHONY: rag-ingest
+rag-ingest: ## Import local RAG materials from MANIFEST
+	uv run python -m backend.app.cli.rag_ingest --manifest $(MANIFEST)
+
 .PHONY: build
 build: ## Run local verification and build frontend assets
 	uv run ruff check .

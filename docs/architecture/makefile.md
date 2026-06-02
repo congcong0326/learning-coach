@@ -18,7 +18,7 @@
 
 成功标准：
 
-- 输出包含 `bootstrap install lint test eval build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
+- 输出包含 `bootstrap install lint test eval rag-ingest build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
 
 ### `make bootstrap`
 
@@ -103,8 +103,25 @@ uv run python -m backend.app.evals.coach_eval_runner
 - Hint Leakage 样例通过。
 - Diagnosis 样例通过。
 - Code Review 样例通过。
-- RAG Grounding 输出 `deferred`，原因是 RAG/T6 已按当前范围延后。
+- RAG Grounding 真实样例通过，summary 中 `deferred=0`。
 - 命令退出码为 0。
+
+### `make rag-ingest`
+
+导入本地 RAG source manifest 指向的材料。
+
+执行内容：
+
+```bash
+uv run python -m backend.app.cli.rag_ingest --manifest $(MANIFEST)
+```
+
+成功标准：
+
+- `MANIFEST` 指向合法 JSON manifest。
+- 数据库已完成 migration。
+- 命令输出 `rag_ingest_summary source_name=... doc_id=... chunks_upserted=...`。
+- 未配置 `RAG_EMBEDDING_API_KEY` 时允许跳过 embedding，只导入 metadata 和 chunk。
 
 ### `make build`
 
@@ -200,7 +217,7 @@ docker compose --env-file .env -f infra/compose/docker-compose.dev.yml exec back
 成功标准：
 
 - Alembic 升级到 head。
-- 当前 head 为 `20260522_0007`。
+- 当前 head 为 `20260531_0009`。
 
 ### `make prepare-problem-seed`
 
