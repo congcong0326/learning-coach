@@ -58,6 +58,10 @@ function CoachMarkdown({ markdown }: { markdown: string }) {
   )
 }
 
+function CoachPlainText({ text }: { text: string }) {
+  return <div className="coach-chat-content coach-plain-text">{text}</div>
+}
+
 type ElapsedState = {
   startedAtMs: number | null
   seconds: number
@@ -318,7 +322,11 @@ export function CoachPanel({
               <Typography.Text className="coach-message-role">
                 {message.role === 'assistant' ? '教练' : '我'}
               </Typography.Text>
-              <CoachMarkdown markdown={message.contentMd} />
+              {message.role === 'user' ? (
+                <CoachPlainText text={message.contentMd} />
+              ) : (
+                <CoachMarkdown markdown={message.contentMd} />
+              )}
             </div>
           ))
         )}

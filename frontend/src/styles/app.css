@@ -528,6 +528,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+.coach-plain-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .coach-markdown > :first-child {
   margin-top: 0;
 }

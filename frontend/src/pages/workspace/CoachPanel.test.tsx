@@ -207,6 +207,39 @@ describe('CoachPanel', () => {
     expect(screen.getByText('本题最终结果')).toBeInTheDocument()
   })
 
+  it('preserves line breaks and indentation in persisted user messages', () => {
+    const pastedCode = 'class Solution:\n    def twoSum(self, nums, target):\n        return []'
+
+    render(
+      <CoachPanel
+        session={{
+          ...stubSession(),
+          events: [
+            {
+              id: 707,
+              event_type: 'user_message',
+              role: 'user',
+              phase: 'review_code',
+              intent: 'unknown',
+              content_md: pastedCode,
+              payload: {},
+              hint_level: null,
+              visible_hint_gear: 'questioning',
+              created_at: '2026-05-22T00:06:00Z',
+            },
+          ],
+        }}
+        onSessionRefresh={vi.fn()}
+      />,
+    )
+
+    const userMessage = screen
+      .getByLabelText('教练聊天记录')
+      .querySelector('.coach-chat-message-user .coach-plain-text')
+    expect(userMessage).toHaveClass('coach-plain-text')
+    expect(userMessage?.textContent).toBe(pastedCode)
+  })
+
   it('renders markdown for streaming coach output', () => {
     llmRunState.isRunning = true
     llmRunState.displayText = '## 正在复盘\n\n- **本题最终结果**：AC'
