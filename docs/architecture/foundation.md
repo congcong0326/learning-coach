@@ -56,7 +56,7 @@ PRD v0.3 第一版不再把本地代码运行纳入核心产品流程。用户�
 
 Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态优先交给 TanStack Query。只有当客户端全局状态明显变复杂时再考虑 Redux。
 
-当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、学习仪表盘、工作台、API 设置、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，已有首选 API 资产的用户默认进入 `/study-plan`。
+当前登录后产品界面使用左侧窄导航和主内容区，页面包含题库、学习计划、学习仪表盘、工作台、API 设置、备份恢复、复盘和 Trace。未登录用户进入登录或注册页；已登录但没有启用的首选 API 资产的用户会被引导到 `/settings/api-keys`，但仍可访问 `/settings/backup-restore` 先恢复旧数据；已有首选 API 资产的用户默认进入 `/study-plan`。
 
 计划题训练工作台使用 `/workspace/items/:itemId` 路由作为学习计划项入口。前端会通过 practice API 创建或恢复同一个训练会话，页面采用上方题面、下方 Chat-first 教练区的上下布局；主界面不再维护独立代码草稿。用户把思路、卡点和代码直接发给教练，发送后前端先用本地临时消息更新聊天流，后续由后端会话事件接管正式历史。代码尝试记录由 `review_code` 流程自动提取并通过 session payload 回传；后端会先从本轮消息中截取明确代码候选交给教练模型判断，持久化时只保存代码块本身，不保存前后聊天说明；如果模型已经 review 代码并建议去 LeetCode 提交，即使阶段守卫不允许直接快进，也要沉淀本轮代码尝试。教练区提供代码尝试记录居中悬浮框和“LeetCode 已 AC”动作；AC 成功记录后按钮切换为已记录状态并禁止重复点击。非 AC 的 LeetCode 结果不再通过主界面表单回填，用户直接把平台提示、失败用例或错误信息发给教练，后端在 `coach_turn` 中识别并注入安全摘要。悬浮框中的完整代码默认折叠，用户展开单条尝试后查看完整代码。AI 教练消息和复盘通过统一 LLM Run SSE 层执行，前端不直接调用模型；run 进行中只在输入区附近显示一行当前后端状态和已等待时间，并在聊天流里用临时教练气泡展示当前状态或流式回复；AC 触发复盘时，在模型返回前临时气泡明确显示复盘正在生成，不把系统执行步骤写入持久聊天历史。
 
@@ -84,6 +84,8 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
+- `GET /api/database-backups/export`
+- `POST /api/database-backups/restore`
 - `GET /api/me/llm-credentials`
 - `POST /api/me/llm-credentials`
 - `PATCH /api/me/llm-credentials/{id}`
@@ -133,6 +135,7 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 - `backend.app.schemas`：Pydantic 输入输出模型。
 - `backend.app.schemas.practice`：训练工作台请求响应、阶段、提示档位、训练事件、画像摘要和提交回填 schema。
 - `backend.app.services.auth_service`：本地用户、Argon2id 密码 hash、session token hash、注册登录退出和当前用户查询。
+- `backend.app.services.database_backup_service`：全库备份恢复服务，使用 `pg_dump -Fc` 导出 PostgreSQL custom dump，使用 `pg_restore --list` 校验并通过 `pg_restore --clean --if-exists --single-transaction` 恢复；服务通过进程内锁拒绝并发备份/恢复，日志只记录用户 ID、操作状态、文件大小和错误摘要，不记录数据库密码、完整连接串或备份内容。
 - `backend.app.services.credential_crypto`：Fernet API key 加密、解密和 mask。
 - `backend.app.services.llm_credential_service`：用户级 OpenAI API 资产 CRUD、首选/当前通讯资产处理、粘性路由、连续失败计数和所有权校验。
 - `backend.app.services.llm_run_service`：LLM Run 创建、状态迁移、取消、结果落库和终态并发保护。
@@ -245,6 +248,8 @@ Redux Toolkit 当前没有引入。业务请求、缓存、加载态和错误态
 `profile_plan_enrichment` run 会选择用户模型资产，读取 active 学习计划、最新画像和最近复盘摘要，先由后端筛出候选题池，再让模型在候选池内生成补强题预览；后端校验通过后保存 draft，用户确认前不修改正式计划。确认接口会在事务中复核计划版本、候选题、重复题和 paid only 题，并把确认后的补强题追加到当前阶段末尾。
 
 当前复盘页通过 `/api/practice-sessions/{session_id}/review` 读取真实 `session_summary`、`profile_delta` 和下一题推荐；学习仪表盘通过 `/api/practice-dashboard` 展示完成题数、常见卡点、平均/最高提示档位和最近画像摘要。
+
+全库备份恢复属于后端数据库边界。前端只提供下载和上传入口，不直接连接 PostgreSQL；后端容器内通过 PostgreSQL client 工具执行 `pg_dump` 和 `pg_restore`。导出的 custom dump 文件不加密，恢复会覆盖当前全库数据，包括用户、session、API 资产密文、训练记录、Trace、RAG 数据和 Alembic 版本。
 
 最小 Eval runner 位于 `backend.app.evals.coach_eval_runner`，可通过 `make eval` 或 `uv run python -m backend.app.evals.coach_eval_runner` 运行。当前固定样例覆盖 Hint Leakage、Diagnosis、Code Review 和 RAG Grounding；RAG Grounding 使用本地 fixture 验证低提示档过滤完整解法、common bug grounding 和非 AC 反馈 grounding。
 

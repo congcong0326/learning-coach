@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { ApiKeySettingsPage } from '../pages/ApiKeySettingsPage'
+import { BackupRestorePage } from '../pages/BackupRestorePage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { GoalCalibrationPage } from '../pages/GoalCalibrationPage'
 import { ProblemLibraryPage } from '../pages/ProblemLibraryPage'
@@ -16,6 +17,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<AuthRedirect />} />
       <Route path="/settings/api-keys" element={<ApiKeySettingsPage />} />
+      <Route path="/settings/backup-restore" element={<BackupRestorePage />} />
       <Route path="/problems" element={<ProblemLibraryPage />} />
       <Route path="/goal-calibration" element={<GoalCalibrationPage />} />
       <Route path="/study-plan" element={<StudyPlanPage />} />

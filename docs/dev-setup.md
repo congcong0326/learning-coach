@@ -84,6 +84,17 @@ make build
 `make build` 会串行执行后端 lint、mypy、pytest、前端 lint、前端测试和前端生产构建。
 `make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis、Code Review 和 RAG Grounding，成功时 summary 中 `deferred=0`。
 
+## 备份恢复
+
+登录后可从左侧导航进入“备份恢复”。点击“导出备份”会下载 PostgreSQL custom dump 文件；选择该文件并确认恢复后，后端会用 `pg_restore` 覆盖当前全库数据。
+
+注意事项：
+
+- 备份文件不加密，可能包含用户、session、API 资产密文、训练记录、Trace、RAG 数据和 Alembic 版本。
+- 恢复会覆盖当前数据库内容；恢复完成后，当前浏览器 session 可能失效，需要重新登录。
+- 本功能依赖后端镜像内的 `pg_dump` 和 `pg_restore`，本地直接运行后端时也需要系统环境可访问对应 PostgreSQL client 工具。
+- 上传大小上限由 `DATABASE_BACKUP_MAX_BYTES` 控制，默认 256MB。
+
 ## 端口
 
 默认端口：
@@ -139,6 +150,12 @@ RAG_EMBEDDING_DIMENSIONS=1536
 ```
 
 未配置 `RAG_EMBEDDING_API_KEY` 时，`make rag-ingest MANIFEST=...` 仍会导入文档和 chunk metadata，但会跳过 embedding 生成。
+
+备份恢复可选配置：
+
+```bash
+DATABASE_BACKUP_MAX_BYTES=268435456
+```
 
 ## WSL 注意事项
 

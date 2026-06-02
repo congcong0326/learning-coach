@@ -27,6 +27,7 @@ infra/
 
 - 使用 Python 3.12 slim。
 - 使用 uv 安装 Python 依赖。
+- 安装 `postgresql-client`，提供全库备份恢复需要的 `pg_dump` 和 `pg_restore`。
 - 运行 FastAPI 应用。
 - 打包 `scripts/` 和 `data/seed/`，用于私有或本地镜像中的题库 seed 导入。
 
@@ -173,6 +174,7 @@ docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 - `RAG_EMBEDDING_BASE_URL`
 - `RAG_EMBEDDING_MODEL`
 - `RAG_EMBEDDING_DIMENSIONS`
+- `DATABASE_BACKUP_MAX_BYTES`
 - `PROBLEM_SEED_PATH`
 - `SEED_PROBLEMS_ON_STARTUP`
 
@@ -181,6 +183,8 @@ docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 `CREDENTIAL_ENCRYPTION_KEY` 是后端加密用户 OpenAI API key 的 Fernet key。开发和生产 compose 会从宿主机环境或 `.env` 传入该变量；为空时，登录注册可用，但 API 资产创建、覆盖更新和测试连接会失败。测试 compose 使用固定测试 key，避免在临时测试环境中依赖开发者本机密钥。
 
 `RAG_EMBEDDING_*` 变量用于本地 RAG 语料导入时调用 OpenAI-compatible embedding provider。开发、测试和生产 compose 都会透传这些变量；未配置 `RAG_EMBEDDING_API_KEY` 时，RAG CLI 会跳过 embedding 生成，仅导入 manifest、doc 和 chunk metadata。
+
+`DATABASE_BACKUP_MAX_BYTES` 控制 `/api/database-backups/restore` 接受的上传文件大小上限，默认 256MB。备份恢复文件不加密，恢复会覆盖当前全库数据；生产或共享环境应谨慎暴露该页面。
 
 默认推荐使用显式 seed 命令，而不是后端启动时隐式导入：
 

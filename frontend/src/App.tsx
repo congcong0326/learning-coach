@@ -3,6 +3,7 @@ import {
   CheckCircleOutlined,
   CodeOutlined,
   DatabaseOutlined,
+  DownloadOutlined,
   FileSearchOutlined,
   FundProjectionScreenOutlined,
   KeyOutlined,
@@ -28,6 +29,7 @@ const navItems = [
   { to: '/dashboard', label: '仪表盘', icon: <FundProjectionScreenOutlined aria-hidden="true" /> },
   { to: '/workspace', label: '工作台', icon: <CodeOutlined aria-hidden="true" /> },
   { to: '/settings/api-keys', label: 'API 设置', icon: <KeyOutlined aria-hidden="true" /> },
+  { to: '/settings/backup-restore', label: '备份恢复', icon: <DownloadOutlined aria-hidden="true" /> },
   { to: '/review', label: '复盘', icon: <ProfileOutlined aria-hidden="true" /> },
   { to: '/trace', label: 'Trace', icon: <FileSearchOutlined aria-hidden="true" /> },
 ]

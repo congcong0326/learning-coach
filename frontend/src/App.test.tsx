@@ -86,6 +86,7 @@ describe('App shell', () => {
     expect(await screen.findByText('学习计划')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '工作台' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'API 设置' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '备份恢复' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '复盘' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Trace' })).toBeInTheDocument()
     expect(await screen.findByText('API 正常')).toBeInTheDocument()
@@ -150,6 +151,41 @@ describe('App shell', () => {
 
     expect(
       await screen.findByRole('heading', { name: '做题工作台' }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the backup restore route without requiring an API asset', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/auth/me') {
+          return new Response(
+            JSON.stringify({
+              ...currentUser,
+              has_default_llm_credential: false,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        if (url === '/api/health') {
+          return new Response(JSON.stringify(healthResponse), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }),
+    )
+    window.history.pushState({}, '', '/settings/backup-restore')
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: '备份恢复' }),
     ).toBeInTheDocument()
   })
 })
