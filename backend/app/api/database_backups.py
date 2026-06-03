@@ -5,12 +5,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
 from backend.app.api.auth import current_user_dependency
 from backend.app.core.config import settings
+from backend.app.db.session import get_session
 from backend.app.models.auth import AppUser
+from backend.app.services.auth_service import get_current_user_from_token
 from backend.app.services.database_backup_service import (
     BackupRestoreBusyError,
     DatabaseBackupError,
@@ -41,10 +44,27 @@ async def export_database_backup_route(
     )
 
 
+async def _restore_user_id_dependency(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> int:
+    user = await get_current_user_from_token(
+        session,
+        request.cookies.get(settings.session_cookie_name),
+    )
+    if user is None:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+
+    user_id = user.id
+    # 恢复会覆盖全库；认证阶段的连接必须先释放，避免 pg_restore 清理对象时被当前请求占用。
+    await session.close()
+    return user_id
+
+
 @router.post("/restore")
 async def restore_database_backup_route(
     request: Request,
-    user: AppUser = Depends(current_user_dependency),
+    user_id: int = Depends(_restore_user_id_dependency),
 ) -> dict[str, object]:
     body = await request.body()
     if len(body) > settings.database_backup_max_bytes:
@@ -56,7 +76,7 @@ async def restore_database_backup_route(
         try:
             result = await restore_database_backup(
                 backup_path=backup_path,
-                user_id=user.id,
+                user_id=user_id,
             )
         except InvalidBackupFileError as exc:
             raise HTTPException(status_code=400, detail=exc.detail) from exc

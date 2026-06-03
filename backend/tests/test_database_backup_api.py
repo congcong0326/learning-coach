@@ -155,6 +155,59 @@ def test_restore_uploads_dump_file(
     }
 
 
+def test_restore_releases_auth_session_before_pg_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.api.database_backups as database_backups_api
+    from backend.app.core.config import settings
+
+    app = create_app()
+    session_state = {"closed": False}
+
+    class FakeSession:
+        async def close(self) -> None:
+            session_state["closed"] = True
+
+    async def override_session():
+        yield FakeSession()
+
+    async def fake_current_user_from_token(session, token: str | None):
+        assert token == "restore-token"
+        return SimpleNamespace(id=42)
+
+    async def fake_restore_database_backup(*, backup_path: Path, user_id: int):
+        assert user_id == 42
+        assert session_state["closed"] is True
+        return SimpleNamespace(
+            status="ok",
+            restored_at=datetime(2026, 6, 2, 21, 45, 0, tzinfo=UTC),
+            file_size_bytes=backup_path.stat().st_size,
+        )
+
+    app.dependency_overrides[get_session] = override_session
+    monkeypatch.setattr(
+        database_backups_api,
+        "get_current_user_from_token",
+        fake_current_user_from_token,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        database_backups_api,
+        "restore_database_backup",
+        fake_restore_database_backup,
+    )
+
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set(settings.session_cookie_name, "restore-token")
+    response = client.post(
+        "/api/database-backups/restore",
+        content=b"PGDMP restore dump",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 200
+
+
 def test_restore_rejects_file_over_configured_limit(
     backup_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

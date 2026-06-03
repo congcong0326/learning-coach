@@ -27,7 +27,7 @@ infra/
 
 - 使用 Python 3.12 slim。
 - 使用 uv 安装 Python 依赖。
-- 安装 `postgresql-client`，提供全库备份恢复需要的 `pg_dump` 和 `pg_restore`。
+- 安装 PostgreSQL 官方 APT 源中的 `postgresql-client-16`，提供全库备份恢复需要的 `pg_dump` 和 `pg_restore`；客户端版本需要和当前 `pgvector/pgvector:pg16` 数据库主版本匹配，避免新版 client 生成或执行 PG16 不支持的恢复语句。
 - 运行 FastAPI 应用。
 - 打包 `scripts/` 和 `data/seed/`，用于私有或本地镜像中的题库 seed 导入。
 

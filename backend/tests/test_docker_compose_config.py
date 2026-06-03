@@ -11,4 +11,5 @@ def test_frontend_dev_service_installs_dependencies_non_interactively() -> None:
 def test_backend_image_installs_postgresql_client_tools() -> None:
     dockerfile = Path("infra/docker/backend.Dockerfile").read_text(encoding="utf-8")
 
-    assert "postgresql-client" in dockerfile
+    assert "postgresql-client-16" in dockerfile
+    assert "apt.postgresql.org/pub/repos/apt" in dockerfile
