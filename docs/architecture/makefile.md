@@ -1,64 +1,47 @@
 # Makefile 命令契约
 
-本文档说明根目录 [Makefile](../../Makefile) 中每个目标的职责、执行内容和成功标准。
+本文档说明根目录 `Makefile` 中每个目标的职责、执行内容和成功标准。实际命令以 `Makefile` 为准。
 
 ## 总体原则
 
-- 所有命令都从仓库根目录执行。
+- 所有命令从仓库根目录执行。
 - Python 命令通过 `uv run` 执行。
-- 前端命令通过 `corepack pnpm` 执行，避免依赖全局 pnpm。
+- 前端命令通过 `corepack pnpm` 执行。
 - Docker 命令默认使用 `infra/compose/docker-compose.dev.yml`。
-- 如果仓库根目录存在 `.env`，Makefile 中的 Docker Compose 命令会显式追加 `--env-file .env`，确保 `CREDENTIAL_ENCRYPTION_KEY`、端口和数据库变量从根目录环境文件传入容器。
+- 如果仓库根目录存在 `.env`，Docker Compose 命令会追加 `--env-file .env`。
 
 ## 命令列表
 
-### `make help`
+| 目标 | 职责 | 成功标准 |
+| --- | --- | --- |
+| `make help` | 显示可用命令 | 输出包含当前 Makefile 目标 |
+| `make bootstrap` | 检查本地工具 | `uv`、`node`、`corepack pnpm`、`docker`、`docker compose` 可用，并输出 `Bootstrap checks passed` |
+| `make install` | 安装后端和前端依赖 | `uv sync` 和 `corepack pnpm install` 成功 |
+| `make lint` | 静态检查 | Ruff、mypy、ESLint 通过 |
+| `make test` | 后端和前端测试 | pytest、Vitest 通过 |
+| `make eval` | 本地 AI Coach 固定样例评估 | Hint Leakage、Diagnosis、Code Review 样例通过 |
+| `make build` | 完整本地校验和前端生产构建 | 后端 lint/type/test、前端 lint/test/build 全部通过 |
+| `make docker-build` | 构建开发环境 Docker 镜像 | backend、frontend 镜像构建成功 |
+| `make up` | 启动开发 Docker 栈 | postgres healthy，backend 和 frontend 启动 |
+| `make down` | 停止开发 Docker 栈 | 容器和网络移除，数据库 volume 保留 |
+| `make logs` | 跟随开发环境日志 | Docker logs 正常输出 |
+| `make db-migrate` | 在后端容器内执行 Alembic migration | 数据库升级到 Alembic head |
+| `make prepare-problem-seed` | 从本地忽略题库源生成 seed | `data/seed/*.jsonl` 生成成功 |
+| `make db-seed` | 导入题库 seed | `problem` 相关表写入或更新，重复执行不产生重复题 |
+| `make smoke` | 对运行中的开发栈执行 smoke test | 输出 `All smoke checks passed` |
+| `make package` | 构建生产/打包 compose 镜像 | backend 和 frontend runtime 镜像构建成功 |
+| `make clean` | 清理常见本地构建和缓存 | `frontend/dist`、Python 缓存、工具缓存被删除 |
 
-显示可用命令和说明。
+## 关键命令内容
 
-成功标准：
-
-- 输出包含 `bootstrap install lint test eval build docker-build up down logs db-migrate prepare-problem-seed db-seed smoke package clean`。
-
-### `make bootstrap`
-
-检查本地工具。
-
-检查项：
-
-- `uv`
-- `node`
-- `corepack`
-- `corepack pnpm`
-- `docker`
-- `docker compose`
-
-成功标准：
-
-- 输出 `Bootstrap checks passed`。
-
-### `make install`
-
-安装后端和前端依赖。
-
-执行内容：
+### 安装依赖
 
 ```bash
 uv sync
 cd frontend && corepack pnpm install
 ```
 
-成功标准：
-
-- Python 虚拟环境可用。
-- 前端 `node_modules` 可用。
-- 依赖锁文件与配置一致。
-
-### `make lint`
-
-执行静态检查。
-
-执行内容：
+### 静态检查
 
 ```bash
 uv run ruff check .
@@ -66,50 +49,14 @@ uv run mypy backend
 cd frontend && corepack pnpm lint
 ```
 
-成功标准：
-
-- Ruff 无错误。
-- Mypy 无错误。
-- ESLint 无错误。
-
-### `make test`
-
-执行后端和前端测试。
-
-执行内容：
+### 测试
 
 ```bash
 uv run pytest -q
 cd frontend && corepack pnpm test
 ```
 
-成功标准：
-
-- 后端 pytest 通过。
-- 前端 Vitest 通过。
-
-### `make eval`
-
-执行本地 AI Coach 规则化评估样例。
-
-执行内容：
-
-```bash
-uv run python -m backend.app.evals.coach_eval_runner
-```
-
-成功标准：
-
-- Hint Leakage 样例通过。
-- Diagnosis 样例通过。
-- Code Review 样例通过。
-- 命令退出码为 0。
-
-### `make build`
-
-执行完整本地构建校验。
-
-执行内容：
+### 完整构建校验
 
 ```bash
 uv run ruff check .
@@ -120,172 +67,26 @@ cd frontend && corepack pnpm test
 cd frontend && corepack pnpm build
 ```
 
-成功标准：
+当前 Vite 构建可能出现 chunk size warning。这是警告，不代表构建失败。
 
-- 后端 lint、类型检查、测试通过。
-- 前端 lint、测试、生产构建通过。
-- 前端生成 `frontend/dist`。
-
-说明：
-
-- 当前 Vite 构建可能出现 chunk size warning。这是警告，不代表构建失败。
-
-### `make docker-build`
-
-构建开发环境 Docker 镜像。
-
-执行内容：
-
-```bash
-docker compose --env-file .env -f infra/compose/docker-compose.dev.yml build
-```
-
-成功标准：
-
-- backend、frontend 镜像构建成功。
-
-### `make up`
-
-启动开发环境。
-
-执行内容：
-
-```bash
-docker compose --env-file .env -f infra/compose/docker-compose.dev.yml up --build -d
-```
-
-成功标准：
-
-- `postgres` healthy。
-- `backend` started。
-- `frontend` started。
-
-### `make down`
-
-停止开发环境。
-
-执行内容：
-
-```bash
-docker compose --env-file .env -f infra/compose/docker-compose.dev.yml down
-```
-
-成功标准：
-
-- 开发容器和网络被移除。
-- 数据库 volume 保留。
-
-### `make logs`
-
-跟随开发环境日志。
-
-执行内容：
-
-```bash
-docker compose --env-file .env -f infra/compose/docker-compose.dev.yml logs -f
-```
-
-### `make db-migrate`
-
-在后端容器内执行 Alembic migration。
-
-执行内容：
+### 迁移
 
 ```bash
 docker compose --env-file .env -f infra/compose/docker-compose.dev.yml exec backend uv run --no-sync alembic upgrade head
 ```
 
-成功标准：
+如果没有 `.env`，Makefile 会省略 `--env-file .env`。
 
-- Alembic 升级到 head。
-- 当前 head 为 `20260522_0007`。
+当前 Alembic head 是 `20260522_0007`。
 
-### `make prepare-problem-seed`
-
-从本地忽略目录 `data/sources/leetcode-problemset` 读取参考仓库，生成结构化 seed 文件。
-
-执行内容：
+### 题库 seed
 
 ```bash
 uv run python scripts/prepare_problem_seed.py --source data/sources/leetcode-problemset --output data/seed
-```
-
-成功标准：
-
-- 原始参考仓库存在。
-- `data/seed/problems.jsonl` 生成成功。
-- `data/seed/problem_categories.jsonl` 和 `data/seed/problem_category_items.jsonl` 生成成功。
-- 生成的题目 seed 不包含题解内容。
-
-### `make db-seed`
-
-从 `data/seed/` 导入题库基础数据。
-
-执行内容：
-
-```bash
 uv run python -m backend.app.cli.problem_seed
 ```
 
-成功标准：
-
-- 数据库已完成 migration。
-- seed 文件存在。
-- `problem` 表写入题目基础数据。
-- 重复执行不会产生重复题目。
-
-### `make smoke`
-
-对运行中的开发环境执行 smoke test。
-
-执行内容：
-
-```bash
-COMPOSE_FILE=infra/compose/docker-compose.dev.yml ./scripts/smoke_all.sh
-```
-
-检查项：
-
-- 后端 `/health`。
-- 后端 `/api/health`。
-- 后端 `/api/db/health`。
-- PostgreSQL 基本 schema 查询。
-- 前端根页面。
-
-成功标准：
-
-- 输出 `All smoke checks passed`。
-
-### `make package`
-
-构建生产/打包 compose 中定义的镜像。
-
-执行内容：
-
-```bash
-docker compose --env-file .env -f infra/compose/docker-compose.prod.yml build
-```
-
-成功标准：
-
-- `backend` 镜像构建成功。
-- `frontend` runtime 镜像构建成功，并包含 Nginx 静态文件服务配置。
-
-### `make clean`
-
-清理本地构建和缓存产物。
-
-执行内容：
-
-```bash
-rm -rf frontend/dist
-rm -rf .pytest_cache .ruff_cache .mypy_cache
-find backend tests demo -type d -name __pycache__ -prune -exec rm -rf {} +
-```
-
-成功标准：
-
-- 常见本地缓存和前端构建产物被清理。
+生成的题目 seed 不应包含题解内容，也不应默认提交公开仓库。
 
 ## 推荐工作流
 
@@ -299,7 +100,7 @@ make db-migrate
 make smoke
 ```
 
-日常开发前：
+日常开发：
 
 ```bash
 make up
@@ -309,6 +110,7 @@ make up
 
 ```bash
 make build
+docker compose -f infra/compose/docker-compose.dev.yml config
 ```
 
 结束开发：

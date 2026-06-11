@@ -59,17 +59,16 @@ cd frontend && corepack pnpm install
 Browser
   -> Vite dev server / Nginx static frontend
   -> FastAPI backend
-  -> PostgreSQL + pgvector
-  -> isolated code-runner container
+  -> PostgreSQL
 ```
 
 核心边界：
 
-- 前端是 Vite + React + TypeScript SPA，负责题库、做题工作台、复盘和 Trace 等页面壳层。
+- 前端是 Vite + React + TypeScript SPA，负责题库、目标校准、学习计划、做题工作台、复盘和 API 设置页面。
 - 前端通过 HTTP API 与后端交互，不直接连接数据库、不直接调用 LLM、不直接执行用户代码。
-- 后端是业务和 AI 能力边界，负责 API、配置、数据库访问、后续 LangGraph Agent 编排、RAG 检索和工具调用。
-- PostgreSQL + pgvector 同时承担业务数据、训练记录、Agent trace、RAG 文档和向量检索的基础存储。
-- 用户代码执行应通过独立 `code-runner` 容器隔离，不能放进后端主进程直接执行。
+- 后端是业务和 AI 能力边界，负责 API、配置、数据库访问、统一 LLM Run、手写 Agent loop 编排、教练守卫和画像沉淀。
+- PostgreSQL 承担业务数据、训练记录、LLM Run、复盘和画像的基础存储；当前主线不启用 pgvector、RAG 表或 Trace 表。
+- 当前 MVP 不做本地代码执行；如后续恢复，用户代码必须通过独立隔离容器执行，不能放进后端主进程。
 - Docker Compose 是本地开发、测试和打包验证的统一运行入口；根目录 `Makefile` 是常用命令契约。
 
 ## docs 文档作用
@@ -78,13 +77,14 @@ Browser
 
 - `docs/index.md`：项目目录索引，说明仓库主要目录和模块职责。
 - `docs/dev-setup.md`：WSL Ubuntu 本地开发环境说明，包含前置条件、`make` 工作流、端口、环境变量、常见问题和最近一次基座验证记录。
-- `docs/prd/prd.md`：产品需求和目标架构主文档，描述 Agentic Coding Learning Coach 的用户、MVP 范围、AI 教练行为、LangGraph 状态机、RAG、工具层、记忆层、评估与里程碑。
-- `docs/prd/rag-materials.md`：RAG 语料候选清单，说明优先引入的算法、刷题、面试表达材料及入库标注建议。
+- `docs/prd/prd.md`：产品需求主文档，描述 Agentic Coding Learning Coach 的用户、MVP 范围、AI 教练行为、当前不做能力和后续恢复池。
+- `docs/prd/ai-coach-workbench-prd.md`：单题 AI 教练工作台专题 PRD。
+- `docs/prd/ai-coach-user-profile-prd.md`：面向 AI 教练决策的用户画像专题 PRD。
 - `docs/architecture/foundation.md`：当前项目基座架构说明，是理解服务边界、技术选型、模块职责和后续里程碑的首要架构文档。
 - `docs/architecture/docker.md`：Docker 镜像、Compose 服务、端口、volume、环境变量和 smoke test 说明。
 - `docs/architecture/makefile.md`：根目录 `Makefile` 的命令契约，说明每个 `make` 目标的执行内容和成功标准。
-- `docs/superpowers/specs/`：功能或基座实施前的设计规格，用于记录目标、范围、架构决策、验收标准和风险控制。
-- `docs/superpowers/plans/`：按步骤执行的实施计划，用于记录任务拆分、文件范围、验证命令和完成标准。
+- `docs/project-todolist.md`：当前阶段、已完成主线任务、收口任务和后续恢复池。
+- `docs/superpowers/README.md`：后续新增大功能或重要架构决策的设计入口。
 
 文档优先级建议：
 
@@ -92,7 +92,7 @@ Browser
 - 判断当前工程基座和服务边界时，以 `docs/architecture/foundation.md` 和实际代码为准。
 - 判断本地命令怎么运行时，以 `docs/dev-setup.md`、`docs/architecture/makefile.md` 和 `Makefile` 为准。
 - 判断 Docker 行为时，以 `docs/architecture/docker.md` 和 `infra/` 下实际文件为准。
-- `docs/superpowers/` 下的 specs 和 plans 记录设计与执行过程，可能带有历史上下文；如果和当前代码不一致，应先读代码再同步相关文档。
+- `docs/superpowers/` 只保存后续新增设计；旧 specs 和 plans 已删除，不能作为当前代码能力依据。
 
 ## 文档驱动开发规则
 
@@ -106,7 +106,7 @@ Browser
 - 如果变更影响系统边界、技术选型或运行架构，更新 `docs/architecture/foundation.md`。
 - 如果变更影响 Docker、Compose、端口、环境变量或部署方式，更新 `docs/architecture/docker.md`。
 - 如果变更影响 `Makefile` 命令、脚本或验证流程，更新 `docs/architecture/makefile.md` 和必要时更新 `docs/dev-setup.md`。
-- 如果变更影响产品行为、AI Coach 行为、RAG、工具层、记忆层、评估或里程碑，更新 `docs/prd/prd.md` 或 `docs/prd/rag-materials.md`。
+- 如果变更影响产品行为、AI Coach 行为、工具层、画像、评估或里程碑，更新 `docs/prd/prd.md`、对应专题 PRD 或 `docs/project-todolist.md`。
 - 如果只是内部实现细节且不改变对外契约，可以不改文档，但最终回复必须说明“不需要更新文档”的理由。
 
 涉及代码修改的最终回复必须包含：

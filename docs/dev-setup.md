@@ -8,7 +8,7 @@
 - Docker Desktop 或 Docker Engine，使用 Linux containers。
 - `uv`，用于 Python 版本、虚拟环境、依赖和命令管理。
 - Node.js LTS 或当前可用的 Node.js 运行时。
-- Corepack。前端通过 `corepack pnpm` 使用项目声明的 pnpm 版本，不依赖全局 `pnpm`。
+- Corepack。前端通过 `corepack pnpm` 使用项目声明的 pnpm 版本。
 
 ## 首次检查
 
@@ -18,7 +18,7 @@
 make bootstrap
 ```
 
-该命令会检查：
+该命令检查：
 
 - `uv`
 - `node`
@@ -33,7 +33,7 @@ make bootstrap
 make install
 ```
 
-该命令会执行：
+该命令执行：
 
 - `uv sync`
 - `cd frontend && corepack pnpm install`
@@ -70,7 +70,7 @@ make db-migrate
 make db-seed
 ```
 
-执行后，前端题库页会从后端 `GET /api/problems` 读取数据库中的题目静态数据。
+执行后，前端题库页会从后端 `GET /api/problems` 读取数据库题目静态数据。
 
 ## 本地校验
 
@@ -128,6 +128,8 @@ CREDENTIAL_ENCRYPTION_KEY=<上一步输出>
 
 如果该变量为空或格式无效，注册登录仍可使用，但创建或测试 API 资产会失败并返回明确错误。
 
+`OPENAI_API_KEY`、`LLM_API_KEY`、`LLM_MODEL_ID` 和 `LLM_BASE_URL` 是兼容旧流程或本地调试的环境变量。当前主路径是用户在前端 API 设置页保存自己的模型资产。
+
 ## WSL 注意事项
 
 - 建议把仓库放在 WSL Linux 文件系统内，例如 `/root/code/...`，不要放在 `/mnt/c/...` 下。
@@ -172,14 +174,16 @@ make down
 
 该命令不会删除数据库 volume。如果需要清理 volume，应手动确认后使用 Docker 命令处理。
 
-## 当前验证记录
+## 当前建议验证
 
-本轮极简 MVP 重构后，应至少完成以下验证：
+本轮重构后的文档和基座建议至少验证：
 
-- `uv run pytest -q`
-- `cd frontend && corepack pnpm test`
-- `uv run ruff check .`
-- `uv run mypy backend`
-- `cd frontend && corepack pnpm lint`
-- `cd frontend && corepack pnpm build`
-- `docker compose -f infra/compose/docker-compose.dev.yml config`
+```bash
+uv run pytest -q
+cd frontend && corepack pnpm test
+uv run ruff check .
+uv run mypy backend
+cd frontend && corepack pnpm lint
+cd frontend && corepack pnpm build
+docker compose -f infra/compose/docker-compose.dev.yml config
+```
