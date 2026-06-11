@@ -18,8 +18,8 @@ from backend.app.services.llm_credential_service import (
     LlmCredentialError,
     select_llm_credential_for_user,
 )
-from backend.app.services.llm_providers.base import LlmProvider, ProviderChunk
-from backend.app.services.llm_providers.openai_responses import OpenAIResponsesProvider
+from backend.app.services.llm_providers.base import ProviderChunk
+from backend.app.services.llm_providers.factory import create_llm_provider
 from backend.app.services.llm_run_events import LlmRunEvent, event_hub
 from backend.app.services.llm_run_registry import (
     LlmRunContext,
@@ -51,9 +51,6 @@ ERROR_MESSAGES = {
     "practice_session_not_found": "训练会话不存在或无权访问",
     "coach_output_invalid": "教练回复格式无效",
     "coach_state_conflict": "教练状态已变化，请刷新后重试",
-    "profile_plan_enrichment_invalid": "补强题生成结果未通过校验",
-    "profile_plan_enrichment_not_found": "补强题草稿不存在或无权访问",
-    "profile_plan_enrichment_not_confirmable": "补强题草稿当前不能确认",
     "active_study_plan_not_found": "当前学习计划不存在",
     "run_kind_unsupported": "当前生成类型暂未接入",
     "run_status_conflict": "本次生成已结束或已取消",
@@ -276,10 +273,7 @@ async def execute_llm_run(
                     llm_credential_id=credential.id,
                     model_name=credential.model_name,
                 )
-                provider: LlmProvider = OpenAIResponsesProvider(
-                    api_key=api_key,
-                    base_url=credential.base_url,
-                )
+                provider = create_llm_provider(credential, api_key=api_key)
                 model_name = credential.model_name
             else:
                 await event_hub.publish(

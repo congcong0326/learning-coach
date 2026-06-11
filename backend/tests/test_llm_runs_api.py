@@ -49,6 +49,10 @@ def fake_user() -> AppUser:
     )
 
 
+async def fake_current_user_dependency() -> AppUser:
+    return fake_user()
+
+
 async def fake_current_user_from_token(session: Any, token: str | None) -> AppUser:
     return fake_user()
 
@@ -141,7 +145,7 @@ def test_create_llm_run_returns_stream_url(monkeypatch) -> None:
         return type("Run", (), {"id": 9, "kind": kind, "status": "pending", "stage": "queued"})()
 
     monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
-    app.dependency_overrides[current_user_dependency] = fake_user
+    app.dependency_overrides[current_user_dependency] = fake_current_user_dependency
     try:
         client = TestClient(app)
         response = client.post(
@@ -180,7 +184,7 @@ def test_create_llm_run_uses_registry_related_mapping(monkeypatch) -> None:
         return type("Run", (), {"id": 10, "kind": kind, "status": "pending", "stage": "queued"})()
 
     monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
-    app.dependency_overrides[current_user_dependency] = fake_user
+    app.dependency_overrides[current_user_dependency] = fake_current_user_dependency
     try:
         client = TestClient(app)
         response = client.post(
@@ -197,86 +201,6 @@ def test_create_llm_run_uses_registry_related_mapping(monkeypatch) -> None:
         "related_type": "goal_calibration_draft",
         "related_id": 3,
     }
-
-
-def test_create_llm_run_preserves_study_plan_adjustment_related_mapping(monkeypatch) -> None:
-    captured: dict[str, Any] = {}
-
-    async def fake_create(
-        session: Any,
-        user: AppUser,
-        *,
-        kind: str,
-        payload: dict[str, Any] | None = None,
-        related_type: str = "",
-        related_id: int | None = None,
-    ):
-        captured["kind"] = kind
-        captured["payload"] = payload
-        captured["related_type"] = related_type
-        captured["related_id"] = related_id
-        return type("Run", (), {"id": 11, "kind": kind, "status": "pending", "stage": "queued"})()
-
-    monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
-    app.dependency_overrides[current_user_dependency] = fake_user
-    try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/llm-runs",
-            json={"kind": "study_plan_adjustment", "payload": {"plan_id": 9}},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert captured == {
-        "kind": "study_plan_adjustment",
-        "payload": {"plan_id": 9},
-        "related_type": "study_plan",
-        "related_id": 9,
-    }
-
-
-def test_profile_plan_enrichment_run_uses_registry_related_mapping(monkeypatch) -> None:
-    captured: dict[str, Any] = {}
-
-    async def fake_create(
-        session: Any,
-        user: AppUser,
-        *,
-        kind: str,
-        payload: dict[str, Any] | None = None,
-        related_type: str = "",
-        related_id: int | None = None,
-    ):
-        captured["kind"] = kind
-        captured["payload"] = payload
-        captured["related_type"] = related_type
-        captured["related_id"] = related_id
-        return type("Run", (), {"id": 12, "kind": kind, "status": "pending", "stage": "queued"})()
-
-    monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
-    app.dependency_overrides[current_user_dependency] = fake_user
-    try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/llm-runs",
-            json={
-                "kind": "profile_plan_enrichment",
-                "payload": {
-                    "plan_id": 9,
-                    "user_intent_md": "补边界",
-                    "item_count": 3,
-                    "difficulty_preference": "keep_current",
-                },
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert captured["related_type"] == "study_plan"
-    assert captured["related_id"] == 9
 
 
 @pytest.mark.parametrize("kind", ["coach_turn", "coach_summary"])
@@ -299,7 +223,7 @@ def test_create_llm_run_accepts_practice_run_kinds(monkeypatch, kind: str) -> No
         return type("Run", (), {"id": 12, "kind": kind, "status": "pending", "stage": "queued"})()
 
     monkeypatch.setattr("backend.app.api.llm_runs.create_llm_run", fake_create)
-    app.dependency_overrides[current_user_dependency] = fake_user
+    app.dependency_overrides[current_user_dependency] = fake_current_user_dependency
     try:
         client = TestClient(app)
         response = client.post(
@@ -325,7 +249,7 @@ def test_cancel_llm_run_maps_status_conflict(monkeypatch) -> None:
         raise LlmRunError("run_status_conflict")
 
     monkeypatch.setattr("backend.app.api.llm_runs.cancel_llm_run", fake_cancel)
-    app.dependency_overrides[current_user_dependency] = fake_user
+    app.dependency_overrides[current_user_dependency] = fake_current_user_dependency
     try:
         client = TestClient(app)
         response = client.post("/api/llm-runs/7/cancel")
@@ -359,7 +283,7 @@ def test_status_route_allows_retry_for_canceled_run(monkeypatch) -> None:
         )()
 
     monkeypatch.setattr("backend.app.api.llm_runs.get_llm_run_for_user", fake_get)
-    app.dependency_overrides[current_user_dependency] = fake_user
+    app.dependency_overrides[current_user_dependency] = fake_current_user_dependency
     try:
         client = TestClient(app)
         response = client.get("/api/llm-runs/7")
@@ -551,7 +475,14 @@ async def test_orchestrator_goal_plan_success_publishes_result_after_success(mon
     monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fake_select)
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fake_decrypt)
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
-    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "create_llm_provider",
+        lambda selected_credential, *, api_key: FakeProvider(
+            api_key=api_key,
+            base_url=selected_credential.base_url,
+        ),
+    )
     monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
@@ -688,7 +619,14 @@ async def test_orchestrator_model_backed_coach_run_selects_model_asset(
     monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", fake_select)
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", fake_decrypt)
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
-    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "create_llm_provider",
+        lambda selected_credential, *, api_key: FakeProvider(
+            api_key=api_key,
+            base_url=selected_credential.base_url,
+        ),
+    )
     monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
@@ -907,7 +845,14 @@ async def test_orchestrator_goal_followup_success_publishes_result_after_success
     monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, selected_user: _async_value(credential))
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
-    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "create_llm_provider",
+        lambda selected_credential, *, api_key: FakeProvider(
+            api_key=api_key,
+            base_url=selected_credential.base_url,
+        ),
+    )
     monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 
@@ -949,7 +894,7 @@ async def test_orchestrator_unsupported_kind_fails_and_publishes_error(monkeypat
         {
             "id": 10,
             "user_id": 42,
-            "kind": "study_plan_adjustment",
+            "kind": "unsupported_kind",
             "status": "pending",
             "display_text_md": "",
         },
@@ -1004,7 +949,14 @@ async def test_orchestrator_unsupported_kind_fails_and_publishes_error(monkeypat
     monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, user: _async_value(credential))
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
-    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "create_llm_provider",
+        lambda selected_credential, *, api_key: FakeProvider(
+            api_key=api_key,
+            base_url=selected_credential.base_url,
+        ),
+    )
     monkeypatch.setattr(llm_orchestrator, "fail_llm_run", fake_fail)
 
     await llm_orchestrator.execute_llm_run(cast(Any, lambda: FakeSessionContext()), 10, 42)
@@ -1027,7 +979,7 @@ async def test_orchestrator_unsupported_kind_real_session_finishes_stream(
         user, run = await create_orchestrator_user_run(
             session,
             encryption_key=encryption_key,
-            kind="study_plan_adjustment",
+            kind="unsupported_kind",
         )
         user_id = user.id
         run_id = run.id
@@ -1125,7 +1077,14 @@ async def test_orchestrator_status_conflict_rolls_back_without_result(monkeypatc
     monkeypatch.setattr(llm_orchestrator, "select_llm_credential_for_user", lambda session, user: _async_value(credential))
     monkeypatch.setattr(llm_orchestrator, "decrypt_api_key", lambda ciphertext, encryption_key: "plain-key")
     monkeypatch.setattr(llm_orchestrator, "mark_llm_run_running", fake_mark_running)
-    monkeypatch.setattr(llm_orchestrator, "OpenAIResponsesProvider", FakeProvider)
+    monkeypatch.setattr(
+        llm_orchestrator,
+        "create_llm_provider",
+        lambda selected_credential, *, api_key: FakeProvider(
+            api_key=api_key,
+            base_url=selected_credential.base_url,
+        ),
+    )
     monkeypatch.setattr(llm_orchestrator, "handler_for_kind", fake_handler_for_kind)
     monkeypatch.setattr(llm_orchestrator, "succeed_llm_run", fake_succeed)
 

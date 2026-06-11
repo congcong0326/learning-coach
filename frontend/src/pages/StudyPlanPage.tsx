@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Space, Tag, Typography } from 'antd'
-import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import {
@@ -8,7 +7,6 @@ import {
   updatePlanItemStatus,
   type StudyPlanItem,
 } from '../api/learning'
-import { ProfilePlanEnrichmentDrawer } from './ProfilePlanEnrichmentDrawer'
 
 const studyPlanQueryKey = ['study-plan', 'current']
 
@@ -30,7 +28,6 @@ function itemStatusColor(status: string) {
 
 export function StudyPlanPage() {
   const queryClient = useQueryClient()
-  const [enrichmentOpen, setEnrichmentOpen] = useState(false)
   const { data, isError, isLoading } = useQuery({
     queryKey: studyPlanQueryKey,
     queryFn: getCurrentStudyPlan,
@@ -64,101 +61,83 @@ export function StudyPlanPage() {
   }
 
   return (
-    <>
-      <section className="page-section study-plan-page">
-        <div className="page-heading">
-          <Space orientation="vertical" size={2}>
-            <Typography.Title level={2}>{data.title}</Typography.Title>
-            <Space wrap>
-              <Tag color="green">{data.status}</Tag>
-              <Tag>v{data.active_version.version_number}</Tag>
-              <Tag>
-                {String(data.active_version.target_snapshot.preferred_language ?? '')}
-              </Tag>
-            </Space>
+    <section className="page-section study-plan-page">
+      <div className="page-heading">
+        <Space orientation="vertical" size={2}>
+          <Typography.Title level={2}>{data.title}</Typography.Title>
+          <Space wrap>
+            <Tag color="green">{data.status}</Tag>
+            <Tag>v{data.active_version.version_number}</Tag>
+            <Tag>
+              {String(data.active_version.target_snapshot.preferred_language ?? '')}
+            </Tag>
           </Space>
-          <Space>
-            <Button onClick={() => setEnrichmentOpen(true)}>查看画像与补强</Button>
-            <Link to="/study-plans">
-              <Button>计划历史</Button>
-            </Link>
-            <Button disabled>调整计划</Button>
-          </Space>
-        </div>
+        </Space>
+      </div>
 
-        <Typography.Paragraph>
-          {data.active_version.generation_summary_md}
-        </Typography.Paragraph>
+      <Typography.Paragraph>
+        {data.active_version.generation_summary_md}
+      </Typography.Paragraph>
 
-        {data.active_version.stages.map((stage) => (
-          <section key={stage.id} className="plan-stage">
-            <div className="plan-stage-heading">
-              <Typography.Title level={3}>{stage.title}</Typography.Title>
-              <Tag>{stage.status}</Tag>
-            </div>
-            <Typography.Paragraph>{stage.objective_md}</Typography.Paragraph>
-            <div className="plan-items">
-              {stage.items.map((item) => (
-                <div key={item.id} className="plan-item-row">
-                  <div>
-                    <Link to={`/workspace/items/${item.id}`}>
-                      <span>{item.frontend_id}.</span> <span>{item.title}</span>
-                    </Link>
-                    <Typography.Text type="secondary">
-                      {' '}
-                      {item.translated_title}
-                    </Typography.Text>
-                    <div className="plan-item-reason">
-                      {item.recommendation_reason}
-                    </div>
+      {data.active_version.stages.map((stage) => (
+        <section key={stage.id} className="plan-stage">
+          <div className="plan-stage-heading">
+            <Typography.Title level={3}>{stage.title}</Typography.Title>
+            <Tag>{stage.status}</Tag>
+          </div>
+          <Typography.Paragraph>{stage.objective_md}</Typography.Paragraph>
+          <div className="plan-items">
+            {stage.items.map((item) => (
+              <div key={item.id} className="plan-item-row">
+                <div>
+                  <Link to={`/workspace/items/${item.id}`}>
+                    <span>{item.frontend_id}.</span> <span>{item.title}</span>
+                  </Link>
+                  <Typography.Text type="secondary">
+                    {' '}
+                    {item.translated_title}
+                  </Typography.Text>
+                  <div className="plan-item-reason">
+                    {item.recommendation_reason}
                   </div>
-                  <Space wrap>
-                    <Tag>{item.difficulty}</Tag>
-                    <Tag color={itemStatusColor(item.status)}>
-                      {itemStatusLabel(item.status)}
-                    </Tag>
-                    {item.status === 'pending' ? (
-                      <Button
-                        onClick={() =>
-                          itemStatusMutation.mutate({ item, status: 'skipped' })
-                        }
-                        loading={
-                          itemStatusMutation.isPending &&
-                          itemStatusMutation.variables?.item.id === item.id
-                        }
-                      >
-                        跳过
-                      </Button>
-                    ) : null}
-                    {item.status === 'skipped' ? (
-                      <Button
-                        onClick={() =>
-                          itemStatusMutation.mutate({ item, status: 'pending' })
-                        }
-                        loading={
-                          itemStatusMutation.isPending &&
-                          itemStatusMutation.variables?.item.id === item.id
-                        }
-                      >
-                        取消跳过
-                      </Button>
-                    ) : null}
-                  </Space>
                 </div>
-              ))}
-            </div>
-          </section>
-        ))}
-      </section>
-      <ProfilePlanEnrichmentDrawer
-        open={enrichmentOpen}
-        plan={data}
-        onClose={() => setEnrichmentOpen(false)}
-        onPlanUpdated={(updatedPlan) => {
-          queryClient.setQueryData(studyPlanQueryKey, updatedPlan)
-          void queryClient.invalidateQueries({ queryKey: studyPlanQueryKey })
-        }}
-      />
-    </>
+                <Space wrap>
+                  <Tag>{item.difficulty}</Tag>
+                  <Tag color={itemStatusColor(item.status)}>
+                    {itemStatusLabel(item.status)}
+                  </Tag>
+                  {item.status === 'pending' ? (
+                    <Button
+                      onClick={() =>
+                        itemStatusMutation.mutate({ item, status: 'skipped' })
+                      }
+                      loading={
+                        itemStatusMutation.isPending &&
+                        itemStatusMutation.variables?.item.id === item.id
+                      }
+                    >
+                      跳过
+                    </Button>
+                  ) : null}
+                  {item.status === 'skipped' ? (
+                    <Button
+                      onClick={() =>
+                        itemStatusMutation.mutate({ item, status: 'pending' })
+                      }
+                      loading={
+                        itemStatusMutation.isPending &&
+                        itemStatusMutation.variables?.item.id === item.id
+                      }
+                    >
+                      取消跳过
+                    </Button>
+                  ) : null}
+                </Space>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </section>
   )
 }

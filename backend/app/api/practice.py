@@ -13,7 +13,6 @@ from backend.app.schemas.llm_run import LlmRunCreateResponse
 from backend.app.schemas.practice import (
     CodeSnapshotCreate,
     CodeSnapshotResponse,
-    PracticeDashboardResponse,
     PracticeEventResponse,
     PracticeMessageCreate,
     PracticeMessageResponse,
@@ -25,7 +24,6 @@ from backend.app.schemas.practice import (
 from backend.app.services.practice_session_service import (
     PracticeSessionError,
     append_user_message,
-    get_practice_dashboard,
     get_or_create_session_for_plan_item,
     get_session_review,
     get_session_payload,
@@ -74,17 +72,6 @@ async def create_practice_session_from_plan_item_route(
         return await get_session_payload(session, user, practice_session.id)
     except PracticeSessionError as exc:
         raise _http_error(exc) from exc
-
-
-@router.get(
-    "/practice-dashboard",
-    response_model=PracticeDashboardResponse,
-)
-async def practice_dashboard_route(
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> PracticeDashboardResponse:
-    return await get_practice_dashboard(session, user)
 
 
 @router.get(

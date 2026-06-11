@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -125,17 +125,6 @@ function studyPlanPayload() {
   }
 }
 
-function dashboardPayload() {
-  return {
-    completed_problem_count: 3,
-    common_stuck_points: [],
-    average_hint_gear: null,
-    highest_hint_level: null,
-    recent_profile_summary: '最近 AC 但边界用例需要加强。',
-    profile_snapshot_id: 9,
-  }
-}
-
 describe('StudyPlanPage', () => {
   afterEach(() => vi.unstubAllGlobals())
 
@@ -163,33 +152,14 @@ describe('StudyPlanPage', () => {
     expect(screen.getByText('已跳过')).toHaveClass('ant-tag-orange')
   })
 
-  it('opens profile enrichment drawer from the study plan heading', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(okJson(studyPlanPayload()))
-      .mockResolvedValueOnce(okJson(dashboardPayload()))
-    vi.stubGlobal('fetch', fetchMock)
+  it('does not render removed enhancement actions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson(studyPlanPayload())))
 
     renderPage()
 
     expect(await screen.findByText('3 个月 Java 面试冲刺计划')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/study-plan/current', {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-      method: 'GET',
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: '查看画像与补强' }))
-
-    expect(screen.getByText('画像与计划补强')).toBeInTheDocument()
-    expect(screen.getByLabelText('这次你希望怎么补强？')).toBeInTheDocument()
-    expect(await screen.findByText('最近 AC 但边界用例需要加强。')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/practice-dashboard', {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-      method: 'GET',
-    })
+    expect(screen.queryByRole('button', { name: '查看画像与补强' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '计划历史' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '调整计划' })).not.toBeInTheDocument()
   })
 })

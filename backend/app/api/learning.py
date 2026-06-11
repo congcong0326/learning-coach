@@ -13,12 +13,9 @@ from backend.app.schemas.learning import (
     FollowupAnswer,
     GoalCalibrationInput,
     GoalCalibrationStartResponse,
-    PlanAdjustmentRequest,
     PlanDraftResponse,
     PlanItemReorderRequest,
     PlanItemStatusUpdateRequest,
-    ProfilePlanEnrichmentDraftResponse,
-    StudyPlanListResponse,
     StudyPlanResponse,
 )
 from backend.app.services.study_plan_service import StudyPlanError
@@ -29,11 +26,7 @@ router = APIRouter(tags=["learning"])
 
 def _http_error(exc: StudyPlanError) -> HTTPException:
     status = 404 if "not_found" in exc.detail else 400
-    if exc.detail in {
-        "llm_credential_unavailable",
-        "empty_problem_library",
-        "profile_plan_enrichment_not_confirmable",
-    }:
+    if exc.detail in {"llm_credential_unavailable", "empty_problem_library"}:
         status = 409
     return HTTPException(status_code=status, detail=exc.detail)
 
@@ -115,132 +108,6 @@ async def current_plan_route(
         from backend.app.services.study_plan_service import get_current_study_plan_payload
 
         return await get_current_study_plan_payload(session, user)
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.get("/study-plans", response_model=StudyPlanListResponse)
-async def study_plan_list_route(
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    from backend.app.services.study_plan_service import list_study_plan_payloads
-
-    return await list_study_plan_payloads(session, user)
-
-
-@router.post("/study-plans/{plan_id}/activate", response_model=StudyPlanResponse)
-async def activate_plan_route(
-    plan_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.study_plan_service import (
-            activate_plan,
-            study_plan_payload,
-        )
-
-        plan = await activate_plan(session, user, plan_id)
-        return await study_plan_payload(session, user, plan.id)
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.get(
-    "/study-plans/{plan_id}/versions/{version_id}",
-    response_model=StudyPlanResponse,
-)
-async def plan_version_route(
-    plan_id: int,
-    version_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.study_plan_service import study_plan_payload
-
-        return await study_plan_payload(session, user, plan_id, version_id=version_id)
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.get(
-    "/study-plans/{plan_id}/profile-enrichments/{draft_id}",
-    response_model=ProfilePlanEnrichmentDraftResponse,
-)
-async def profile_enrichment_draft_route(
-    plan_id: int,
-    draft_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.profile_plan_enrichment import (
-            get_enrichment_draft_payload,
-        )
-
-        response = await get_enrichment_draft_payload(session, user, plan_id, draft_id)
-        if isinstance(response, ProfilePlanEnrichmentDraftResponse):
-            return response.model_dump()
-        return response
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.post(
-    "/study-plans/{plan_id}/profile-enrichments/{draft_id}/confirm",
-    response_model=StudyPlanResponse,
-)
-async def confirm_profile_enrichment_route(
-    plan_id: int,
-    draft_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.profile_plan_enrichment import (
-            confirm_enrichment_draft,
-        )
-
-        return await confirm_enrichment_draft(session, user, plan_id, draft_id)
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.post("/study-plans/{plan_id}/adjustments", response_model=PlanDraftResponse)
-async def create_adjustment_route(
-    plan_id: int,
-    payload: PlanAdjustmentRequest,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.study_plan_service import create_adjustment_draft
-
-        return await create_adjustment_draft(session, user, plan_id, payload)
-    except StudyPlanError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.post(
-    "/study-plans/{plan_id}/versions/{version_id}/activate",
-    response_model=StudyPlanResponse,
-)
-async def activate_version_route(
-    plan_id: int,
-    version_id: int,
-    user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        from backend.app.services.study_plan_service import (
-            activate_plan_version,
-            study_plan_payload,
-        )
-
-        await activate_plan_version(session, user, plan_id, version_id)
-        return await study_plan_payload(session, user, plan_id)
     except StudyPlanError as exc:
         raise _http_error(exc) from exc
 

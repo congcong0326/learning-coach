@@ -43,7 +43,6 @@ async def coach_decision(
     has_feedback: bool,
     target_code_language: dict[str, str] | None,
     trigger_context: dict[str, str],
-    rag_context: dict[str, Any],
 ) -> dict[str, Any]:
     fallback = fallback_coach_decision(trigger_context)
     if run.kind != "coach_turn" or not model_name:
@@ -66,7 +65,6 @@ async def coach_decision(
                     has_feedback=has_feedback,
                     target_code_language=target_code_language,
                     trigger_context=trigger_context,
-                    rag_context=rag_context,
                 ),
                 ensure_ascii=False,
             ),

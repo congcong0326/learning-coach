@@ -18,7 +18,6 @@ from backend.app.models.auth import AppUser
 from backend.app.models.learning import (
     GoalCalibrationDraft,
     PlanChangeLog,
-    ProfilePlanEnrichmentDraft,
     StudyPlan,
     StudyPlanItem,
     StudyPlanStage,
@@ -29,20 +28,15 @@ from backend.app.models.problem import Base, Problem
 from backend.app.schemas.learning import (
     FollowupAnswer,
     GoalCalibrationInput,
-    PlanAdjustmentRequest,
-    ProfilePlanEnrichmentDraftResponse,
-    ProfilePlanEnrichmentRequest,
     StudyPlanResponse,
 )
 from backend.app.services.learning_plan_llm import PROMPT_VERSION
 from backend.app.services.study_plan_service import (
     StudyPlanError,
-    activate_plan_version,
     activate_plan,
     answer_goal_followup,
     clone_adjusted_version,
     confirm_plan_draft,
-    create_adjustment_draft,
     generate_goal_plan_draft,
     get_active_plan_version,
     get_current_study_plan_payload,
@@ -62,7 +56,6 @@ def test_learning_tables_are_registered_in_metadata() -> None:
         StudyPlanStage.__tablename__,
         StudyPlanItem.__tablename__,
         PlanChangeLog.__tablename__,
-        ProfilePlanEnrichmentDraft.__tablename__,
     }
 
     assert table_names == {
@@ -72,60 +65,7 @@ def test_learning_tables_are_registered_in_metadata() -> None:
         "study_plan_stage",
         "study_plan_item",
         "plan_change_log",
-        "profile_plan_enrichment_draft",
     }
-
-
-def test_profile_plan_enrichment_draft_has_auditable_context_fields() -> None:
-    columns = ProfilePlanEnrichmentDraft.__table__.columns
-
-    assert "user_id" in columns
-    assert "study_plan_id" in columns
-    assert "study_plan_version_id" in columns
-    assert "profile_snapshot_id" in columns
-    assert "llm_run_id" in columns
-    assert "status" in columns
-    assert "user_intent_md" in columns
-    assert "item_count" in columns
-    assert "difficulty_preference" in columns
-    assert "context_summary_json" in columns
-    assert "candidate_problem_ids_json" in columns
-    assert "model_output_json" in columns
-    assert "validation_report_json" in columns
-    assert "confirmed_item_ids_json" in columns
-    assert "error_summary" in columns
-    assert "confirmed_at" in columns
-
-
-def test_profile_plan_enrichment_request_accepts_supported_item_counts() -> None:
-    for item_count in [2, 3, 5]:
-        payload = ProfilePlanEnrichmentRequest(item_count=cast(Any, item_count))
-
-        assert payload.item_count == item_count
-
-
-def test_profile_plan_enrichment_request_rejects_unsupported_item_count() -> None:
-    with pytest.raises(ValidationError):
-        ProfilePlanEnrichmentRequest(item_count=cast(Any, 4))
-
-
-def test_profile_plan_enrichment_response_rejects_unsupported_item_count() -> None:
-    now = datetime.now(UTC)
-
-    with pytest.raises(ValidationError):
-        ProfilePlanEnrichmentDraftResponse(
-            draft_id=1,
-            status="generated",
-            plan_id=1,
-            plan_version_id=1,
-            profile_snapshot_id=None,
-            user_intent_md="",
-            item_count=cast(Any, 4),
-            difficulty_preference="keep_current",
-            items=[],
-            created_at=now,
-            updated_at=now,
-        )
 
 
 def test_confirmed_version_fk_is_named_and_deferred() -> None:
@@ -214,6 +154,7 @@ def test_study_plan_item_stage_fk_includes_version_guard() -> None:
         constraint.name for constraint in stage_table.constraints
     }
     assert "uq_study_plan_stage_id_version" in stage_unique_constraints
+
 
 def test_goal_calibration_accepts_supported_languages() -> None:
     for language in ["c", "go", "python3", "javascript", "java"]:
@@ -774,76 +715,6 @@ async def test_goal_plan_generation_regenerates_stale_ready_draft(
         assert generated["generation_summary_md"] == "按当前目标生成的训练计划"
         assert saved_draft.prompt_version == PROMPT_VERSION
         assert saved_draft.draft_plan_json["title"] == "中文学习计划"
-
-
-@pytest.mark.asyncio
-async def test_create_adjustment_draft_and_activate_version_preserves_active_plan_until_confirmed(
-    learning_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_client_for_user(
-        session: AsyncSession,
-        user: AppUser,
-    ) -> tuple[FakeGoalCalibrationClient, SimpleNamespace]:
-        return FakeGoalCalibrationClient(), SimpleNamespace(id=7, model_name="test-model")
-
-    async def fake_generate_plan_with_repair(
-        session: AsyncSession,
-        client: FakeGoalCalibrationClient,
-        payload: dict[str, Any],
-        history: list[dict[str, Any]],
-        *,
-        max_repairs: int = 2,
-        locked_problem_slugs: set[str] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-        assert locked_problem_slugs == {"two-sum"}
-        return replacement_plan_json(), {"valid": True, "issues": [], "item_count": 1}, []
-
-    monkeypatch.setattr(
-        "backend.app.services.study_plan_service.client_for_user",
-        fake_client_for_user,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "backend.app.services.study_plan_service.generate_plan_with_repair",
-        fake_generate_plan_with_repair,
-        raising=False,
-    )
-
-    async with learning_session_factory() as session:
-        user = await create_learning_user(session)
-        draft = await create_ready_draft(session, user, plan_json=multi_stage_plan_json())
-        plan = await confirm_plan_draft(session, user, draft.id)
-        active_version = await get_active_plan_version(session, user, plan.id)
-        item_by_slug(active_version, "two-sum").status = "completed"
-        await session.commit()
-
-        adjustment = await create_adjustment_draft(
-            session,
-            user,
-            plan.id,
-            PlanAdjustmentRequest(
-                reason="strengthen_topic",
-                notes="补强动态规划",
-                preferred_language=None,
-            ),
-        )
-
-        await session.refresh(plan)
-        draft_version = await session.get(StudyPlanVersion, adjustment["draft_id"])
-        assert draft_version is not None
-        assert draft_version.status == "draft"
-        assert plan.active_version_number == 1
-        assert adjustment["stages"][0]["items"][0]["problem_slug"] == "two-sum"
-
-        await activate_plan_version(session, user, plan.id, draft_version.id)
-
-        await session.refresh(plan)
-        await session.refresh(active_version)
-        await session.refresh(draft_version)
-        assert plan.active_version_number == 2
-        assert active_version.status == "superseded"
-        assert draft_version.status == "active"
 
 
 @pytest.mark.asyncio

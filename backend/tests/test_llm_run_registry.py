@@ -10,7 +10,6 @@ from backend.app.services.llm_run_registry import (
     CoachTurnHandler,
     GoalFollowupHandler,
     GoalPlanGenerateHandler,
-    ProfilePlanEnrichmentHandler,
     handler_for_kind,
     related_from_payload,
     requires_model_for_kind,
@@ -24,7 +23,6 @@ def test_supported_run_kinds_contains_current_streaming_flows() -> None:
         "coach_turn",
         "goal_followup",
         "goal_plan_generate",
-        "profile_plan_enrichment",
     }
 
 
@@ -71,26 +69,6 @@ def test_related_from_payload_rejects_boolean_draft_id() -> None:
     assert related_id is None
 
 
-def test_related_from_payload_maps_study_plan_adjustment_to_plan() -> None:
-    related_type, related_id = related_from_payload(
-        "study_plan_adjustment",
-        {"plan_id": 9},
-    )
-
-    assert related_type == "study_plan"
-    assert related_id == 9
-
-
-def test_related_from_payload_maps_profile_enrichment_to_plan() -> None:
-    related_type, related_id = related_from_payload(
-        "profile_plan_enrichment",
-        {"plan_id": 9},
-    )
-
-    assert related_type == "study_plan"
-    assert related_id == 9
-
-
 def test_related_from_payload_maps_coach_turn_to_practice_session() -> None:
     related_type, related_id = related_from_payload(
         "coach_turn",
@@ -111,26 +89,11 @@ def test_related_from_payload_maps_coach_summary_to_practice_session() -> None:
     assert related_id == 23
 
 
-def test_related_from_payload_rejects_boolean_plan_id() -> None:
-    related_type, related_id = related_from_payload(
-        "study_plan_adjustment",
-        {"plan_id": True},
-    )
-
-    assert related_type == ""
-    assert related_id is None
-
-
 def test_handler_for_kind_returns_registered_handler() -> None:
     assert isinstance(handler_for_kind("goal_followup"), GoalFollowupHandler)
     assert isinstance(handler_for_kind("goal_plan_generate"), GoalPlanGenerateHandler)
     assert isinstance(handler_for_kind("coach_turn"), CoachTurnHandler)
     assert isinstance(handler_for_kind("coach_summary"), CoachSummaryHandler)
-    assert isinstance(
-        handler_for_kind("profile_plan_enrichment"),
-        ProfilePlanEnrichmentHandler,
-    )
-    assert handler_for_kind("study_plan_adjustment") is None
 
 
 def test_current_model_backed_run_kinds_require_model_asset() -> None:
@@ -138,8 +101,6 @@ def test_current_model_backed_run_kinds_require_model_asset() -> None:
     assert requires_model_for_kind("goal_plan_generate") is True
     assert requires_model_for_kind("coach_turn") is True
     assert requires_model_for_kind("coach_summary") is True
-    assert requires_model_for_kind("profile_plan_enrichment") is True
-    assert requires_model_for_kind("study_plan_adjustment") is False
 
 
 @pytest.mark.asyncio
@@ -163,7 +124,7 @@ async def test_goal_followup_handler_delegates_to_existing_flow(monkeypatch) -> 
         return {"draft_id": 15, "status": "asking_followup"}
 
     monkeypatch.setattr(
-        "backend.app.services.llm_run_registry.run_goal_followup",
+        "backend.app.agents.workflows.run_goal_followup",
         fake_flow,
     )
     context = SimpleNamespace(
@@ -202,7 +163,7 @@ async def test_goal_plan_handler_delegates_to_existing_flow(monkeypatch) -> None
         return {"draft_id": 15, "stage_count": 2, "item_count": 8}
 
     monkeypatch.setattr(
-        "backend.app.services.llm_run_registry.run_goal_plan_generate",
+        "backend.app.agents.workflows.run_goal_plan_generate",
         fake_flow,
     )
     context = SimpleNamespace(

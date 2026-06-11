@@ -21,19 +21,6 @@ def test_diagnosis_and_code_review_eval_cases_pass() -> None:
     assert {case.category for case in result.cases} == {"diagnosis", "code_review"}
 
 
-def test_rag_grounding_eval_runs_real_cases() -> None:
-    result = run_eval_suite(["rag_grounding"])
-
-    assert result.failed == 0
-    assert result.deferred == 0
-    assert result.passed == 3
-    assert {case.name for case in result.cases} == {
-        "rag_low_hint_filters_full_solution",
-        "rag_common_bug_card_grounding",
-        "rag_non_ac_feedback_grounding",
-    }
-
-
 def test_eval_runner_module_exits_zero_and_prints_summary() -> None:
     completed = subprocess.run(
         [sys.executable, "-m", "backend.app.evals.coach_eval_runner"],
@@ -44,6 +31,4 @@ def test_eval_runner_module_exits_zero_and_prints_summary() -> None:
 
     assert completed.returncode == 0
     assert "Hint Leakage" in completed.stdout
-    assert "RAG Grounding" in completed.stdout
     assert "deferred=0" in completed.stdout
-    assert "rag_grounding_deferred" not in completed.stdout

@@ -20,14 +20,14 @@ if payload != expected:
     raise SystemExit(f"Unexpected database health payload: {payload!r}")
 PY
 
-extension_count="$(
+schema_count="$(
   docker compose -f "${compose_file}" exec -T postgres \
     psql -U "${postgres_user}" -d "${postgres_db}" -tAc \
-    "select count(*) from pg_extension where extname = 'vector';"
+    "select count(*) from information_schema.tables where table_schema = 'public';"
 )"
 
-if [[ "${extension_count}" != "1" ]]; then
-  echo "pgvector extension was not found" >&2
+if [[ ! "${schema_count}" =~ ^[0-9]+$ ]]; then
+  echo "Database schema check returned an unexpected value: ${schema_count}" >&2
   exit 1
 fi
 

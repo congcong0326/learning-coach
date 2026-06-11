@@ -150,99 +150,9 @@ class StudyPlanResponse(BaseModel):
     active_version: StudyPlanVersionResponse
 
 
-class StudyPlanListItem(BaseModel):
-    id: int
-    title: str
-    status: PlanStatus
-    active_version_number: int
-    created_at: datetime
-    updated_at: datetime
-
-
-class StudyPlanListResponse(BaseModel):
-    items: list[StudyPlanListItem]
-
-
 class PlanItemStatusUpdateRequest(BaseModel):
     status: Literal["pending", "skipped"]
 
 
 class PlanItemReorderRequest(BaseModel):
     item_ids: list[int] = Field(min_length=1)
-
-
-class PlanAdjustmentRequest(BaseModel):
-    reason: Literal[
-        "time_change",
-        "interview_date_change",
-        "too_hard",
-        "too_easy",
-        "strengthen_topic",
-        "reduce_topic",
-        "language_change",
-        "other",
-    ]
-    notes: str = Field(default="", max_length=2000)
-    preferred_language: PreferredLanguage | None = None
-
-
-ProfilePlanEnrichmentStatus = Literal[
-    "generating",
-    "generated",
-    "confirmed",
-    "rejected",
-    "failed",
-]
-ProfilePlanEnrichmentDifficulty = Literal[
-    "foundational",
-    "keep_current",
-    "stretch",
-]
-ProfilePlanEnrichmentItemCount = Literal[2, 3, 5]
-
-
-class ProfilePlanEnrichmentRequest(BaseModel):
-    user_intent_md: str = Field(default="", max_length=2000)
-    item_count: ProfilePlanEnrichmentItemCount = 3
-    difficulty_preference: ProfilePlanEnrichmentDifficulty = "keep_current"
-
-
-class ProfilePlanGapAssessment(BaseModel):
-    gap_level: Literal["low", "medium", "high", "insufficient_evidence"]
-    summary_md: str = Field(default="", max_length=1600)
-
-
-class ProfilePlanEnrichmentItem(BaseModel):
-    problem_id: int
-    problem_slug: str
-    title: str
-    translated_title: str
-    difficulty: str
-    skill_tags: list[str] = Field(default_factory=list)
-    target_stage_id: int
-    target_stage_title: str
-    weakness_targets: list[str] = Field(default_factory=list)
-    recommendation_reason_md: str
-    first_question_hint: str
-    review_focus: str
-    suggested_mode: TrainingMode
-
-
-class ProfilePlanEnrichmentDraftResponse(BaseModel):
-    draft_id: int
-    status: ProfilePlanEnrichmentStatus
-    plan_id: int
-    plan_version_id: int
-    profile_snapshot_id: int | None
-    user_intent_md: str
-    item_count: ProfilePlanEnrichmentItemCount
-    difficulty_preference: ProfilePlanEnrichmentDifficulty
-    enrichment_theme: str = ""
-    plan_gap_assessment: ProfilePlanGapAssessment | None = None
-    overall_reason_md: str = ""
-    not_added_reason_md: str = ""
-    items: list[ProfilePlanEnrichmentItem] = Field(default_factory=list)
-    validation_report: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
-    updated_at: datetime
-    confirmed_at: datetime | None = None

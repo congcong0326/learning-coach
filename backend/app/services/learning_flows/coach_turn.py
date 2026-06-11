@@ -7,10 +7,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.agents.coach_graph import CoachGraph
+from backend.app.agents.coach_loop import CoachLoop
 from backend.app.models.llm_run import LlmRun
 from backend.app.models.practice import CoachTurn, PracticeEvent
-from backend.app.rag.retrieval import RetrievalService
 from backend.app.services.coach_guard import guard_transition
 from backend.app.services.code_attempts import (
     extract_code_from_message,
@@ -19,7 +18,7 @@ from backend.app.services.code_attempts import (
 )
 from backend.app.services.learning_flows.coach_turn_context import (
     chat_feedback_context as _build_chat_feedback_context,
-    coach_graph_state as _build_coach_graph_state,
+    coach_loop_state as _build_coach_loop_state,
     coach_input_context,
     context_snapshot,
     ensure_thread_id,
@@ -30,11 +29,9 @@ from backend.app.services.learning_flows.coach_turn_context import (
     load_user_event,
     payload_for_run,
     problem_tags_context,
-    rag_context_for_prompt,
-    rag_query_summary,
-    selected_rag_chunk_ids,
     submission_feedback_context,
     target_code_language_context,
+    user_query_summary,
 )
 from backend.app.services.learning_flows.coach_turn_model import (
     coach_decision as _generate_coach_decision,
@@ -53,9 +50,6 @@ from backend.app.services.learning_flows.coach_turn_policy import (
     trigger_context as _build_trigger_context,
     user_intent,
 )
-from backend.app.services.learning_flows.coach_turn_trace import (
-    append_coach_turn_traces,
-)
 from backend.app.services.learning_flows.goal_plan import LearningFlowError
 from backend.app.services.llm_providers.base import LlmProvider
 from backend.app.services.llm_run_events import LlmRunEvent
@@ -69,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 # 兼容既有测试和潜在内部导入；实际实现已移动到职责更明确的小模块。
 _chat_feedback_result = chat_feedback_result
-_coach_graph_state = _build_coach_graph_state
+_coach_loop_state = _build_coach_loop_state
 _coach_input_context = coach_input_context
 _context_snapshot = context_snapshot
 _ensure_thread_id = ensure_thread_id
@@ -85,10 +79,7 @@ _max_hint_level = max_hint_level
 _parse_coach_json = parse_coach_json
 _payload_for_run = payload_for_run
 _problem_tags_context = problem_tags_context
-_rag_context_for_prompt = rag_context_for_prompt
-_rag_query_summary = rag_query_summary
 _reply_after_guard = reply_after_guard
-_selected_rag_chunk_ids = selected_rag_chunk_ids
 _should_persist_code_attempt = should_persist_code_attempt
 _strip_json_fence = strip_json_fence
 _submission_feedback_context = submission_feedback_context
@@ -187,7 +178,7 @@ async def run_coach_turn(
         user_id=user_id,
         practice_session=practice_session,
     )
-    # 触发器是本轮教练决策的路由信号；它会影响目标阶段、RAG query 摘要和兜底回复。
+    # 触发器是本轮教练决策的路由信号；它会影响目标阶段和兜底回复。
     trigger = _build_trigger_context(
         payload,
         practice_session,
@@ -201,11 +192,9 @@ async def run_coach_turn(
         session,
         problem_id=practice_session.problem_id,
     )
-    # CoachGraph 负责整理图状态、RAG 检索和节点 trace；RAG 只能增强教练判断，不能绕过状态守卫。
-    graph_state = await CoachGraph(
-        retrieval_service=RetrievalService(session),
-    ).run_turn(
-        _build_coach_graph_state(
+    # 手写教练 loop 负责整理状态和节点摘要；状态迁移仍由后端守卫最终裁决。
+    loop_state = await CoachLoop().run_turn(
+        _build_coach_loop_state(
             practice_session,
             user_id=user_id,
             run=run,
@@ -213,7 +202,7 @@ async def run_coach_turn(
             latest_submission_feedback=latest_submission_feedback,
             chat_feedback_context=chat_feedback,
             problem_tags=problem_tags,
-            user_query_summary=rag_query_summary(
+            user_query_summary=user_query_summary(
                 user_event=user_event,
                 extracted_code=extracted_code,
                 latest_submission_feedback=latest_submission_feedback,
@@ -261,7 +250,6 @@ async def run_coach_turn(
         has_feedback=has_feedback,
         target_code_language=target_code_language,
         trigger_context=trigger,
-        rag_context=graph_state["retrieval_context"],
     )
     await _publish_progress(
         publish,
@@ -349,7 +337,6 @@ async def run_coach_turn(
         context_snapshot_json=context_snapshot(
             practice_session,
             has_feedback=has_feedback,
-            rag_context=graph_state["retrieval_context"],
         ),
         created_at=now,
     )
@@ -407,7 +394,7 @@ async def run_coach_turn(
         decision_accepted=decision.accepted,
         guard_reason=decision.reason,
         code_attempt_snapshot_id=code_attempt_snapshot_id,
-        graph_state=graph_state,
+        loop_state=loop_state,
     )
     logger.info(
         "coach turn flow completed run_id=%s user_id=%s session_id=%s "
@@ -418,18 +405,6 @@ async def run_coach_turn(
         coach_turn.id,
         phase_before,
         decision.phase_after,
-    )
-    await append_coach_turn_traces(
-        session,
-        practice_session=practice_session,
-        run=run,
-        graph_state=graph_state,
-        coach_decision=coach_decision,
-        decision_accepted=decision.accepted,
-        guard_reason=decision.reason,
-        reply_md=reply_md,
-        model_name=model_name,
-        phase_before=phase_before,
     )
     return result
 
@@ -443,7 +418,7 @@ def _result_payload(
     decision_accepted: bool,
     guard_reason: str,
     code_attempt_snapshot_id: int | None,
-    graph_state: Any,
+    loop_state: Any,
 ) -> dict[str, Any]:
     return {
         "session_id": practice_session.id,
@@ -458,9 +433,9 @@ def _result_payload(
             "reason": guard_reason,
         },
         "graph": {
-            "thread_id": graph_state["thread_id"],
-            "retrieval_context": graph_state["retrieval_context"],
-            "node_trace": graph_state["trace"],
+            "thread_id": loop_state["thread_id"],
+            "user_query_summary": loop_state["user_query_summary"],
+            "node_trace": loop_state["trace"],
         },
     }
 

@@ -6,6 +6,8 @@ from typing import Any, cast
 import pytest
 
 from backend.app.services.llm_providers.base import LlmProvider, ProviderChunk
+from backend.app.services.llm_credential_service import LlmCredentialError
+from backend.app.services.llm_providers.factory import create_llm_provider
 from backend.app.services.llm_providers.openai_responses import (
     OpenAIResponsesProvider,
     event_to_text_delta,
@@ -82,3 +84,32 @@ async def test_openai_responses_provider_streams_text_chunks_without_network() -
         "input": "say hello",
         "stream": True,
     }
+
+
+def test_create_llm_provider_returns_openai_responses_provider() -> None:
+    credential = SimpleNamespace(
+        id=1,
+        provider="openai",
+        api_mode="responses",
+        base_url="http://example.test",
+        model_name="gpt-test",
+    )
+
+    provider = create_llm_provider(cast(Any, credential), api_key="test-key")
+
+    assert isinstance(provider, OpenAIResponsesProvider)
+
+
+def test_create_llm_provider_rejects_unsupported_provider() -> None:
+    credential = SimpleNamespace(
+        id=1,
+        provider="anthropic",
+        api_mode="messages",
+        base_url="http://example.test",
+        model_name="claude-test",
+    )
+
+    with pytest.raises(LlmCredentialError) as exc_info:
+        create_llm_provider(cast(Any, credential), api_key="test-key")
+
+    assert exc_info.value.detail == "llm_credential_unavailable"

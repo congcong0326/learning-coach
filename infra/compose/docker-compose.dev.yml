@@ -2,7 +2,7 @@ name: learning-coach-dev
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     container_name: learning-coach-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-learning_coach}
@@ -35,11 +35,6 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL_ID: ${LLM_MODEL_ID:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
-      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
-      RAG_EMBEDDING_API_KEY: ${RAG_EMBEDDING_API_KEY:-}
-      RAG_EMBEDDING_BASE_URL: ${RAG_EMBEDDING_BASE_URL:-}
-      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-3-small}
-      RAG_EMBEDDING_DIMENSIONS: ${RAG_EMBEDDING_DIMENSIONS:-1536}
     command:
       [
         "uv",
@@ -83,22 +78,6 @@ services:
       - frontend_node_modules:/app/frontend/node_modules
     depends_on:
       - backend
-
-  code-runner:
-    build:
-      context: ../..
-      dockerfile: infra/docker/code-runner.Dockerfile
-    container_name: learning-coach-code-runner
-    network_mode: none
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    mem_limit: 256m
-    cpus: 0.5
 
 volumes:
   postgres_data:

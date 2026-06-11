@@ -53,7 +53,7 @@ make down
 
 - `make up`：构建并启动开发 Docker 栈。
 - `make db-migrate`：在后端容器内执行 Alembic migration。
-- `make smoke`：检查后端、数据库、前端和 code-runner。
+- `make smoke`：检查后端、数据库和前端。
 - `make down`：停止并移除开发容器和网络，保留开发数据库 volume。
 
 ## 题库 seed 数据准备
@@ -82,18 +82,8 @@ make build
 ```
 
 `make build` 会串行执行后端 lint、mypy、pytest、前端 lint、前端测试和前端生产构建。
-`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis、Code Review 和 RAG Grounding，成功时 summary 中 `deferred=0`。
 
-## 备份恢复
-
-登录后可从左侧导航进入“备份恢复”。点击“导出备份”会下载 PostgreSQL custom dump 文件；选择该文件并确认恢复后，后端会用 `pg_restore` 覆盖当前全库数据。
-
-注意事项：
-
-- 备份文件不加密，可能包含用户、session、API 资产密文、训练记录、Trace、RAG 数据和 Alembic 版本。
-- 恢复会覆盖当前数据库内容；恢复完成后，当前浏览器 session 可能失效，需要重新登录。
-- 本功能依赖后端镜像内的 `pg_dump` 和 `pg_restore`，本地直接运行后端时也需要系统环境可访问对应 PostgreSQL client 工具。
-- 上传大小上限由 `DATABASE_BACKUP_MAX_BYTES` 控制，默认 256MB。
+`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis 和 Code Review。
 
 ## 端口
 
@@ -123,8 +113,6 @@ cp .env.example .env
 - `CREDENTIAL_ENCRYPTION_KEY`
 - `OPENAI_API_KEY`
 - `LLM_API_KEY`
-- `SERPAPI_API_KEY`
-- `RAG_EMBEDDING_API_KEY`
 
 `CREDENTIAL_ENCRYPTION_KEY` 用于加密用户在 API 设置页保存的 OpenAI API key，必须是 Fernet key。首次本地开发可运行：
 
@@ -139,23 +127,6 @@ CREDENTIAL_ENCRYPTION_KEY=<上一步输出>
 ```
 
 如果该变量为空或格式无效，注册登录仍可使用，但创建或测试 API 资产会失败并返回明确错误。
-
-RAG 本地导入可选配置：
-
-```bash
-RAG_EMBEDDING_API_KEY=<OpenAI-compatible embedding key>
-RAG_EMBEDDING_BASE_URL=<可选 OpenAI-compatible base URL>
-RAG_EMBEDDING_MODEL=text-embedding-3-small
-RAG_EMBEDDING_DIMENSIONS=1536
-```
-
-未配置 `RAG_EMBEDDING_API_KEY` 时，`make rag-ingest MANIFEST=...` 仍会导入文档和 chunk metadata，但会跳过 embedding 生成。
-
-备份恢复可选配置：
-
-```bash
-DATABASE_BACKUP_MAX_BYTES=268435456
-```
 
 ## WSL 注意事项
 
@@ -201,23 +172,14 @@ make down
 
 该命令不会删除数据库 volume。如果需要清理 volume，应手动确认后使用 Docker 命令处理。
 
-## 2026-05-19 验证记录
+## 当前验证记录
 
-本轮在 WSL Ubuntu 环境中完成以下基础流程验证：
+本轮极简 MVP 重构后，应至少完成以下验证：
 
-- `make bootstrap`：通过，基础命令检查完成。
-- `make install`：通过，后端 `uv sync` 和前端 `corepack pnpm install` 完成。
-- `make lint`：通过，后端 ruff/mypy 和前端 ESLint 通过。
-- `make test`：通过，后端 pytest 和前端 Vitest 通过。
-- `make build`：通过，后端 lint/test 和前端生产构建通过；Vite 仅输出 chunk size warning。
-- `make docker-build`：通过，开发镜像构建完成。
-- `make up`：通过，开发 Docker 栈启动完成。
-- `make db-migrate`：通过，Alembic migration 可在后端容器内执行。
-- `make smoke`：通过，后端、数据库、前端、code-runner smoke check 通过。
-- `make package`：通过，生产 compose 镜像构建完成。
-- `make down`：通过，开发容器和网络已停止并移除。
-
-收尾检查：
-
-- `docker ps --format '{{.Names}}' | rg '^learning-coach' || true`：无运行中的 `learning-coach` 容器。
-- `docker compose -f infra/compose/docker-compose.dev.yml ps`：无运行中的 dev compose 服务。
+- `uv run pytest -q`
+- `cd frontend && corepack pnpm test`
+- `uv run ruff check .`
+- `uv run mypy backend`
+- `cd frontend && corepack pnpm lint`
+- `cd frontend && corepack pnpm build`
+- `docker compose -f infra/compose/docker-compose.dev.yml config`

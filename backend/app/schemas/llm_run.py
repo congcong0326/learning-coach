@@ -8,13 +8,11 @@ from pydantic import BaseModel, Field
 LlmRunKind = Literal[
     "goal_followup",
     "goal_plan_generate",
-    "study_plan_adjustment",
     "coach_turn",
     "coach_summary",
     "coach_message",
     "code_review",
     "reflection",
-    "profile_plan_enrichment",
 ]
 LlmRunStatus = Literal["pending", "running", "succeeded", "failed", "canceled"]
 

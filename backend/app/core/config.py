@@ -17,11 +17,6 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     problem_seed_path: Path = Path("data/seed")
     seed_problems_on_startup: bool = False
-    rag_embedding_api_key: str = ""
-    rag_embedding_base_url: str | None = None
-    rag_embedding_model: str = "text-embedding-3-small"
-    rag_embedding_dimensions: int = 1536
-    database_backup_max_bytes: int = 256 * 1024 * 1024
 
     model_config = SettingsConfigDict(
         env_file=".env",
