@@ -2,13 +2,13 @@
 
 ## 项目环境说明
 
-当前项目运行在 WSL Ubuntu 环境中，主要用于 Python / AI Agent 方向的开发与实验。
+当前项目运行在 WSL Ubuntu 环境中，主要用于 Python / React 全栈开发与实验。
 
 本项目使用 `uv` 作为 Python 项目管理工具，负责 Python 版本管理、虚拟环境创建、依赖安装、依赖锁定和命令运行。
 
 请优先使用 `uv` 相关命令，不要默认使用系统级 `pip` 或全局 Python 环境。
 
-当前项目已经从早期 Agent demo 演进为 Agentic Coding Learning Coach 的全栈基座。开发时应同时关注后端、前端、数据库、Docker Compose 和文档之间的契约。
+当前项目已精简为“题库 + 本地用户登录”的全栈基座。开发时应同时关注后端、前端、数据库、Docker Compose 和文档之间的契约。
 
 ## 基础环境
 
@@ -47,13 +47,13 @@ cd frontend && corepack pnpm install
 日志要求：
 
 - 关键流程开始、完成、失败、拒绝执行、状态迁移、外部 API 调用结果和重要 repair / fallback 分支都应记录。
-- 日志内容使用稳定的 `key=value` 字段，便于检索，例如 `user_id=%s draft_id=%s status=%s`。
+- 日志内容使用稳定的 `key=value` 字段，便于检索，例如 `user_id=%s status=%s`。
 - 日志级别保持克制：正常生命周期用 `info`，可恢复异常、校验失败和拒绝执行用 `warning`，未预期异常用 `exception`。
-- 不得记录密码、API key、session token、完整用户输入、完整题解、密钥密文或其他敏感内容；需要定位问题时记录脱敏 ID、数量、状态和错误摘要。
+- 不得记录密码、session token、完整用户输入、密钥密文或其他敏感内容；需要定位问题时记录脱敏 ID、数量、状态和错误摘要。
 
 ## 当前项目架构
 
-当前运行架构是一个本地优先的全栈训练应用基座：
+当前运行架构是一个本地优先的题库应用基座：
 
 ```text
 Browser
@@ -64,26 +64,25 @@ Browser
 
 核心边界：
 
-- 前端是 Vite + React + TypeScript SPA，负责题库、目标校准、学习计划、做题工作台、复盘和 API 设置页面。
-- 前端通过 HTTP API 与后端交互，不直接连接数据库、不直接调用 LLM、不直接执行用户代码。
-- 后端是业务和 AI 能力边界，负责 API、配置、数据库访问、统一 LLM Run、手写 Agent loop 编排、教练守卫和画像沉淀。
-- PostgreSQL 承担业务数据、训练记录、LLM Run、复盘和画像的基础存储；当前主线不启用 pgvector、RAG 表或 Trace 表。
-- 当前 MVP 不做本地代码执行；如后续恢复，用户代码必须通过独立隔离容器执行，不能放进后端主进程。
+- 前端是 Vite + React + TypeScript SPA，负责登录、注册、题库列表和题面详情页面。
+- 前端通过 HTTP API 与后端交互，不直接连接数据库。
+- 后端负责 API、配置、数据库访问、用户注册登录、session 管理和题库查询。
+- PostgreSQL 承担用户、登录 session、题库和题单分类的基础存储。
 - Docker Compose 是本地开发、测试和打包验证的统一运行入口；根目录 `Makefile` 是常用命令契约。
+
+当前项目不包含模型 API 资产、LLM Run、Agent loop、AI 教练、目标校准、学习计划、训练工作台、复盘、用户画像、推荐、RAG、Trace 或本地代码执行。
 
 ## docs 文档作用
 
 `docs/` 是产品、架构和实施过程的知识库。新增或调整功能前，优先检查相关文档，避免和既有设计冲突。
 
 - `docs/index.md`：项目目录索引，说明仓库主要目录和模块职责。
-- `docs/dev-setup.md`：WSL Ubuntu 本地开发环境说明，包含前置条件、`make` 工作流、端口、环境变量、常见问题和最近一次基座验证记录。
-- `docs/prd/prd.md`：产品需求主文档，描述 Agentic Coding Learning Coach 的用户、MVP 范围、AI 教练行为、当前不做能力和后续恢复池。
-- `docs/prd/ai-coach-workbench-prd.md`：单题 AI 教练工作台专题 PRD。
-- `docs/prd/ai-coach-user-profile-prd.md`：面向 AI 教练决策的用户画像专题 PRD。
+- `docs/dev-setup.md`：WSL Ubuntu 本地开发环境说明，包含前置条件、`make` 工作流、端口、环境变量和常见问题。
+- `docs/prd/prd.md`：产品需求主文档，描述题库与本地登录极简版的范围。
 - `docs/architecture/foundation.md`：当前项目基座架构说明，是理解服务边界、技术选型、模块职责和后续里程碑的首要架构文档。
 - `docs/architecture/docker.md`：Docker 镜像、Compose 服务、端口、volume、环境变量和 smoke test 说明。
 - `docs/architecture/makefile.md`：根目录 `Makefile` 的命令契约，说明每个 `make` 目标的执行内容和成功标准。
-- `docs/project-todolist.md`：当前阶段、已完成主线任务、收口任务和后续恢复池。
+- `docs/project-todolist.md`：当前阶段、已完成主线任务和后续恢复池。
 - `docs/superpowers/README.md`：后续新增大功能或重要架构决策的设计入口。
 
 文档优先级建议：
@@ -100,14 +99,7 @@ Browser
 
 如果代码需求与文档不一致，不得静默按猜测修改；应先指出冲突，并让用户确认是修改代码、修改文档，还是同时调整。
 
-修改代码后，必须做文档影响评估，并按 `docs/index.md` 中的“代码变更后的文档维护映射”反向维护文档：
-
-- 如果变更影响目录结构、模块职责或工程入口，更新 `docs/index.md`。
-- 如果变更影响系统边界、技术选型或运行架构，更新 `docs/architecture/foundation.md`。
-- 如果变更影响 Docker、Compose、端口、环境变量或部署方式，更新 `docs/architecture/docker.md`。
-- 如果变更影响 `Makefile` 命令、脚本或验证流程，更新 `docs/architecture/makefile.md` 和必要时更新 `docs/dev-setup.md`。
-- 如果变更影响产品行为、AI Coach 行为、工具层、画像、评估或里程碑，更新 `docs/prd/prd.md`、对应专题 PRD 或 `docs/project-todolist.md`。
-- 如果只是内部实现细节且不改变对外契约，可以不改文档，但最终回复必须说明“不需要更新文档”的理由。
+修改代码后，必须做文档影响评估，并按 `docs/index.md` 中的“代码变更后的文档维护映射”反向维护文档。
 
 涉及代码修改的最终回复必须包含：
 

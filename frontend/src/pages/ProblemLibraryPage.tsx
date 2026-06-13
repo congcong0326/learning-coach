@@ -59,7 +59,7 @@ export function ProblemLibraryPage() {
             title: '标题',
             key: 'title',
             render: (_, row: ProblemListItem) => (
-              <Link to={`/workspace/${row.slug}`}>
+              <Link to={`/problems/${row.slug}`}>
                 <Space direction="vertical" size={0}>
                   <span>{row.title}</span>
                   <Typography.Text type="secondary">

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
-from backend.app.models.auth import AppUser, AuthSession, LlmCredential
+from backend.app.models.auth import AppUser, AuthSession
 
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def session_token_hash(token: str) -> str:
-    # Only the hash is persisted; raw session tokens stay in the HttpOnly cookie
-    # boundary and must never be logged.
+    # 只持久化 token hash，原始 session token 只能留在 HttpOnly Cookie 边界内。
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -183,16 +182,3 @@ async def get_current_user_from_token(
     record.last_seen_at = now
     await db.commit()
     return record.user
-
-
-async def has_default_llm_credential(db: AsyncSession, user: AppUser) -> bool:
-    result = await db.execute(
-        select(LlmCredential.id)
-        .where(
-            LlmCredential.user_id == user.id,
-            LlmCredential.is_preferred.is_(True),
-            LlmCredential.is_enabled.is_(True),
-        )
-        .limit(1)
-    )
-    return result.scalars().first() is not None

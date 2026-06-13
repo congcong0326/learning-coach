@@ -27,8 +27,7 @@ class PrepareStats:
 
 
 def split_statement_markdown(markdown: str) -> SplitMarkdownResult:
-    # Public seed data keeps the problem statement only; solution text stays out
-    # of the app so the coach can guide practice instead of leaking answers.
+    # 题库 seed 只保留题面和基础元数据，避免把题解混入浏览入口。
     index = markdown.find(SOLUTION_HEADING)
     if index < 0:
         return SplitMarkdownResult(markdown.rstrip(), False)

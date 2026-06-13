@@ -12,7 +12,7 @@ export function RegisterPage() {
     mutationFn: registerUser,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: currentUserQueryKey })
-      navigate('/settings/api-keys', { replace: true })
+      navigate('/problems', { replace: true })
     },
   })
 

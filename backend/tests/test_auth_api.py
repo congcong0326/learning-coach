@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -7,9 +5,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.app.db.session import get_session
 from backend.app.main import create_app
-from backend.app.models.auth import AppUser, AuthSession, LlmCredential
+from backend.app.models.auth import AppUser, AuthSession
 from backend.app.services.auth_service import (
-    has_default_llm_credential,
     hash_password,
     verify_password,
 )
@@ -36,28 +33,6 @@ def test_auth_models_expose_required_columns() -> None:
         "created_at",
         "last_seen_at",
     } <= set(AuthSession.__table__.columns.keys())
-    assert {
-        "id",
-        "user_id",
-        "provider",
-        "display_name",
-        "base_url",
-        "api_mode",
-        "model_name",
-        "api_key_ciphertext",
-        "api_key_mask",
-        "is_default",
-        "is_enabled",
-        "is_preferred",
-        "is_active",
-        "failure_count",
-        "status",
-        "last_tested_at",
-        "last_used_at",
-        "last_error",
-        "created_at",
-        "updated_at",
-    } <= set(LlmCredential.__table__.columns.keys())
 
 
 def test_password_hash_uses_argon2id_and_verifies_password() -> None:
@@ -66,70 +41,6 @@ def test_password_hash_uses_argon2id_and_verifies_password() -> None:
     assert password_hash.startswith("$argon2id$")
     assert verify_password("secret123", password_hash) is True
     assert verify_password("wrong-password", password_hash) is False
-
-
-@pytest.mark.asyncio
-async def test_has_default_llm_credential_tolerates_duplicate_enabled_preferred_rows(
-    auth_session_factory,
-) -> None:
-    async with auth_session_factory() as session:
-        now = datetime.now(UTC)
-        user = AppUser(
-            username="alice",
-            email="alice@example.com",
-            password_hash="hash",
-            display_name="alice",
-            status="active",
-            created_at=now,
-            updated_at=now,
-        )
-        session.add(user)
-        await session.flush()
-        session.add_all(
-            [
-                LlmCredential(
-                    user_id=user.id,
-                    provider="openai",
-                    display_name="first",
-                    base_url="https://api.openai.com/v1",
-                    api_mode="responses",
-                    model_name="gpt-4.1-mini",
-                    api_key_ciphertext="cipher-first",
-                    api_key_mask="sk-...test",
-                    is_default=True,
-                    is_enabled=True,
-                    is_preferred=True,
-                    is_active=True,
-                    failure_count=0,
-                    status="valid",
-                    last_error="",
-                    created_at=now,
-                    updated_at=now,
-                ),
-                LlmCredential(
-                    user_id=user.id,
-                    provider="openai",
-                    display_name="second",
-                    base_url="https://api.openai.com/v1",
-                    api_mode="responses",
-                    model_name="gpt-4.1-mini",
-                    api_key_ciphertext="cipher-second",
-                    api_key_mask="sk-...test",
-                    is_default=True,
-                    is_enabled=True,
-                    is_preferred=True,
-                    is_active=False,
-                    failure_count=0,
-                    status="valid",
-                    last_error="",
-                    created_at=now,
-                    updated_at=now,
-                ),
-            ]
-        )
-        await session.commit()
-
-        assert await has_default_llm_credential(session, user) is True
 
 
 @pytest_asyncio.fixture
@@ -199,3 +110,4 @@ def test_login_and_logout_session(auth_client: TestClient) -> None:
     assert login.status_code == 200
     assert me.status_code == 200
     assert me.json()["username"] == "alice"
+    assert "has_default_llm_credential" not in me.json()

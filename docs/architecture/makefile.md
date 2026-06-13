@@ -19,7 +19,6 @@
 | `make install` | 安装后端和前端依赖 | `uv sync` 和 `corepack pnpm install` 成功 |
 | `make lint` | 静态检查 | Ruff、mypy、ESLint 通过 |
 | `make test` | 后端和前端测试 | pytest、Vitest 通过 |
-| `make eval` | 本地 AI Coach 固定样例评估 | Hint Leakage、Diagnosis、Code Review 样例通过 |
 | `make build` | 完整本地校验和前端生产构建 | 后端 lint/type/test、前端 lint/test/build 全部通过 |
 | `make docker-build` | 构建开发环境 Docker 镜像 | backend、frontend 镜像构建成功 |
 | `make up` | 启动开发 Docker 栈 | postgres healthy，backend 和 frontend 启动 |
@@ -77,7 +76,7 @@ docker compose --env-file .env -f infra/compose/docker-compose.dev.yml exec back
 
 如果没有 `.env`，Makefile 会省略 `--env-file .env`。
 
-当前 Alembic head 是 `20260522_0007`。
+当前 Alembic head 是 `20260519_0003`。
 
 ### 题库 seed
 

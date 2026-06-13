@@ -29,11 +29,6 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://learning_coach:learning_coach@postgres:5432/learning_coach}
-      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL_ID: ${LLM_MODEL_ID:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -26,4 +26,4 @@ class AuthUserEnvelope(BaseModel):
 
 
 class CurrentUserResponse(UserResponse):
-    has_default_llm_credential: bool
+    pass

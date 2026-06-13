@@ -11,7 +11,6 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://learning_coach:learning_coach"
         "@localhost:5432/learning_coach"
     )
-    credential_encryption_key: str = ""
     session_cookie_name: str = "learning_coach_session"
     session_ttl_hours: int = 24 * 14
     session_cookie_secure: bool = False

@@ -19,9 +19,5 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location }} />
   }
 
-  if (!user.has_default_llm_credential && location.pathname !== '/settings/api-keys') {
-    return <Navigate to="/settings/api-keys" replace />
-  }
-
   return <>{children}</>
 }

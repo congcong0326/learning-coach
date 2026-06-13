@@ -1,6 +1,6 @@
 # 开发环境设置
 
-本文档说明 Agentic Coding Learning Coach 在 WSL Ubuntu 下的本地开发方式。
+本文档说明题库与本地登录极简版在 WSL Ubuntu 下的本地开发方式。
 
 ## 前置条件
 
@@ -56,6 +56,8 @@ make down
 - `make smoke`：检查后端、数据库和前端。
 - `make down`：停止并移除开发容器和网络，保留开发数据库 volume。
 
+如果本地数据库曾运行旧版 AI 教练迁移，`make db-migrate` 可能因旧 Alembic 版本号找不到而失败。当前极简版只需要题库和登录表；确认开发数据可丢弃后，重建开发数据库 volume 可得到干净 schema。
+
 ## 题库 seed 数据准备
 
 题库原始参考仓库和生成后的题面 seed 文件默认只用于本地或私有环境，不应提交到公开 Git 仓库。
@@ -77,13 +79,10 @@ make db-seed
 ```bash
 make lint
 make test
-make eval
 make build
 ```
 
 `make build` 会串行执行后端 lint、mypy、pytest、前端 lint、前端测试和前端生产构建。
-
-`make eval` 会运行本地 AI Coach 固定评估样例，覆盖 Hint Leakage、Diagnosis 和 Code Review。
 
 ## 端口
 
@@ -108,27 +107,19 @@ BACKEND_PORT=18000 FRONTEND_PORT=15173 POSTGRES_HOST_PORT=15433 make up
 cp .env.example .env
 ```
 
-当前 `.env` 不应提交到 Git。敏感变量包括：
+当前 `.env` 不应提交到 Git。常用变量：
 
-- `CREDENTIAL_ENCRYPTION_KEY`
-- `OPENAI_API_KEY`
-- `LLM_API_KEY`
+- `APP_ENV`
+- `BACKEND_PORT`
+- `FRONTEND_PORT`
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+- `POSTGRES_HOST_PORT`
+- `DATABASE_URL`
+- `DOCKER_DATABASE_URL`
 
-`CREDENTIAL_ENCRYPTION_KEY` 用于加密用户在 API 设置页保存的 OpenAI API key，必须是 Fernet key。首次本地开发可运行：
-
-```bash
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-把输出写入本地 `.env`：
-
-```bash
-CREDENTIAL_ENCRYPTION_KEY=<上一步输出>
-```
-
-如果该变量为空或格式无效，注册登录仍可使用，但创建或测试 API 资产会失败并返回明确错误。
-
-`OPENAI_API_KEY`、`LLM_API_KEY`、`LLM_MODEL_ID` 和 `LLM_BASE_URL` 是兼容旧流程或本地调试的环境变量。当前主路径是用户在前端 API 设置页保存自己的模型资产。
+本机直接运行后端时，数据库地址应指向 `localhost:15432`。容器内后端运行时，数据库地址应指向 `postgres:5432`。
 
 ## WSL 注意事项
 
@@ -176,7 +167,7 @@ make down
 
 ## 当前建议验证
 
-本轮重构后的文档和基座建议至少验证：
+本轮精简后的文档和基座建议至少验证：
 
 ```bash
 uv run pytest -q

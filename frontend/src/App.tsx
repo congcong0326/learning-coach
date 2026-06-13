@@ -1,31 +1,32 @@
 import {
-  CalendarOutlined,
   CheckCircleOutlined,
-  CodeOutlined,
   DatabaseOutlined,
-  KeyOutlined,
-  ProfileOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons'
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { Layout, Space, Tag, Typography } from 'antd'
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import { Button, Layout, Space, Tag, Typography } from 'antd'
 import { type ReactNode, useMemo } from 'react'
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 
+import { logoutUser } from './api/auth'
 import { getBackendHealth } from './api/health'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { AppRoutes } from './routes/AppRoutes'
 import { ProtectedRoute } from './routes/ProtectedRoute'
+import { currentUserQueryKey, useCurrentUserQuery } from './routes/authState'
 import './styles/app.css'
 
 const { Header, Sider, Content } = Layout
 
 const navItems = [
   { to: '/problems', label: '题库', icon: <DatabaseOutlined aria-hidden="true" /> },
-  { to: '/study-plan', label: '学习计划', icon: <CalendarOutlined aria-hidden="true" /> },
-  { to: '/workspace', label: '工作台', icon: <CodeOutlined aria-hidden="true" /> },
-  { to: '/settings/api-keys', label: 'API 设置', icon: <KeyOutlined aria-hidden="true" /> },
-  { to: '/review', label: '复盘', icon: <ProfileOutlined aria-hidden="true" /> },
 ]
 
 function BackendHealthBadge() {
@@ -51,11 +52,22 @@ function BackendHealthBadge() {
 }
 
 function AppShell({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { data: user } = useCurrentUserQuery()
+  const logoutMutation = useMutation({
+    mutationFn: logoutUser,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: currentUserQueryKey })
+      navigate('/login', { replace: true })
+    },
+  })
+
   return (
     <Layout className="app-shell">
       <Sider className="app-sider" width={232}>
         <div className="brand-block">
-          <Typography.Title level={1}>Agentic Coding Learning Coach</Typography.Title>
+          <Typography.Title level={1}>Coding Problem Library</Typography.Title>
           <span className="environment-label">local</span>
         </div>
 
@@ -78,8 +90,18 @@ function AppShell({ children }: { children: ReactNode }) {
       <Layout>
         <Header className="app-header">
           <Space className="header-content">
-            <span className="header-title">训练控制台</span>
-            <BackendHealthBadge />
+            <span className="header-title">题库控制台</span>
+            <Space>
+              <BackendHealthBadge />
+              {user ? <Tag>{user.display_name}</Tag> : null}
+              <Button
+                icon={<LogoutOutlined />}
+                loading={logoutMutation.isPending}
+                onClick={() => logoutMutation.mutate()}
+              >
+                退出
+              </Button>
+            </Space>
           </Space>
         </Header>
         <Content className="app-content">{children}</Content>

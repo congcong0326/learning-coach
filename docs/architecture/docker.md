@@ -26,7 +26,7 @@ infra/
 
 - 使用 Python 3.12 slim。
 - 使用 uv 安装 Python 依赖。
-- 安装基础证书以支持 HTTPS 调用。
+- 安装基础证书以支持 HTTPS 访问题库图片等资源。
 - 运行 FastAPI 应用。
 - 打包 `scripts/` 和 `data/seed/`，用于本地或私有镜像中的题库 seed 导入。
 
@@ -144,15 +144,8 @@ docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 - `POSTGRES_HOST_PORT`
 - `DATABASE_URL`
 - `DOCKER_DATABASE_URL`
-- `CREDENTIAL_ENCRYPTION_KEY`
-- `OPENAI_API_KEY`
-- `LLM_API_KEY`
-- `LLM_MODEL_ID`
-- `LLM_BASE_URL`
 
 本机直接运行后端时，数据库地址应指向 `localhost:15432`。容器内后端运行时，数据库地址应指向 `postgres:5432`。
-
-`CREDENTIAL_ENCRYPTION_KEY` 是后端加密用户 OpenAI API key 的 Fernet key。开发和生产 compose 会从宿主机环境或 `.env` 传入该变量；为空时，登录注册可用，但 API 资产创建、覆盖更新和测试连接会失败。测试 compose 使用固定测试 key。
 
 题库推荐使用显式 seed 命令：
 

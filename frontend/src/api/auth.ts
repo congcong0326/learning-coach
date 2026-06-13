@@ -5,7 +5,6 @@ export type CurrentUser = {
   username: string
   email: string
   display_name: string
-  has_default_llm_credential: boolean
 }
 
 export type AuthUser = {

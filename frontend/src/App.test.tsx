@@ -13,7 +13,6 @@ const currentUser = {
   username: 'alice',
   email: 'alice@example.com',
   display_name: 'alice',
-  has_default_llm_credential: true,
 }
 
 describe('App shell', () => {
@@ -46,7 +45,7 @@ describe('App shell', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/login'))
   })
 
-  it('renders product navigation and backend health status', async () => {
+  it('renders only the problem library navigation for authenticated users', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -60,12 +59,6 @@ describe('App shell', () => {
         if (url === '/api/health') {
           return new Response(JSON.stringify(healthResponse), {
             status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        }
-        if (url === '/api/study-plan/current') {
-          return new Response(JSON.stringify({ detail: 'active_study_plan_not_found' }), {
-            status: 404,
             headers: { 'Content-Type': 'application/json' },
           })
         }
@@ -80,29 +73,23 @@ describe('App shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'Agentic Coding Learning Coach' }),
+      await screen.findByRole('heading', { name: 'Coding Problem Library' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '题库' })).toBeInTheDocument()
-    expect(await screen.findByText('学习计划')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '工作台' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'API 设置' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '复盘' })).toBeInTheDocument()
+    expect(screen.queryByText('学习计划')).not.toBeInTheDocument()
+    expect(screen.queryByText('工作台')).not.toBeInTheDocument()
+    expect(screen.queryByText('API 设置')).not.toBeInTheDocument()
+    expect(screen.queryByText('复盘')).not.toBeInTheDocument()
     expect(await screen.findByText('API 正常')).toBeInTheDocument()
   })
 
-  it('redirects authenticated users without default API asset to settings', async () => {
+  it('redirects authenticated root visits to the problem library', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url === '/api/auth/me') {
-          return new Response(
-            JSON.stringify({ ...currentUser, has_default_llm_credential: false }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } },
-          )
-        }
-        if (url === '/api/me/llm-credentials') {
-          return new Response(JSON.stringify({ items: [] }), {
+          return new Response(JSON.stringify(currentUser), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           })
@@ -117,39 +104,6 @@ describe('App shell', () => {
 
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: 'API 设置' })).toBeInTheDocument()
+    await waitFor(() => expect(window.location.pathname).toBe('/problems'))
   })
-
-  it('renders the workspace route', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url === '/api/auth/me') {
-          return new Response(JSON.stringify(currentUser), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        }
-        if (url === '/api/health') {
-          return new Response(JSON.stringify(healthResponse), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        }
-        return new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }),
-    )
-    window.history.pushState({}, '', '/workspace')
-
-    render(<App />)
-
-    expect(
-      await screen.findByRole('heading', { name: '做题工作台' }),
-    ).toBeInTheDocument()
-  })
-
 })

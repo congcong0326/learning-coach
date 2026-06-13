@@ -15,7 +15,6 @@ from backend.app.schemas.auth import (
 from backend.app.services.auth_service import (
     AuthError,
     get_current_user_from_token,
-    has_default_llm_credential,
     login_user,
     logout_token,
     register_user,
@@ -120,15 +119,10 @@ async def logout(
 @router.get("/me", response_model=CurrentUserResponse)
 async def me(
     user: AppUser = Depends(current_user_dependency),
-    session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {
         "id": user.id,
         "username": user.username,
         "email": user.email,
         "display_name": user.display_name,
-        "has_default_llm_credential": await has_default_llm_credential(
-            session,
-            user,
-        ),
     }

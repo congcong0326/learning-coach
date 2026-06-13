@@ -37,10 +37,6 @@ test: ## Run backend and frontend tests
 	uv run pytest -q
 	cd frontend && $(PNPM) test
 
-.PHONY: eval
-eval: ## Run local AI coach eval samples
-	uv run python -m backend.app.evals.coach_eval_runner
-
 .PHONY: build
 build: ## Run local verification and build frontend assets
 	uv run ruff check .
@@ -90,4 +86,4 @@ package: ## Build packageable Docker images for current foundation stage
 clean: ## Remove local build and cache artifacts
 	rm -rf frontend/dist
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
-	find backend tests demo -type d -name __pycache__ -prune -exec rm -rf {} +
+	find backend -type d -name __pycache__ -prune -exec rm -rf {} +
